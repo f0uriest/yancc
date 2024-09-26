@@ -1,0 +1,36 @@
+# standard install requirements
+-r ./requirements.txt
+
+jax >= 0.3.2, <= 0.5.0
+equinox >= 0.11, < 0.12
+jax >= 0.3.2, < 0.5.0
+numpy >= 1.20.0, < 2.0
+scipy >= 1.7.0, < 2.0.0
+jaxtyping
+interpax
+quadax
+orthax
+
+# building the docs
+sphinx > 3.0.0
+sphinx_copybutton
+sphinx-rtd-theme >= 1.0, < 2.0
+sphinx-github-style >= 1.0, <= 1.1
+
+
+# linting
+black == 22.10.0
+flake8 >= 5.0.0, <=6.0.0
+flake8-docstrings >= 1.0.0, <=2.0.0
+flake8-eradicate >= 1.0.0, <=2.0.0
+flake8-isort >=5.0.0, <= 6.0.0
+pre-commit
+
+# testing and benchmarking
+pytest >= 5.0.0
+pytest-benchmark
+pytest-cov >= 2.6.0
+pytest-monitor
+
+# building
+build
