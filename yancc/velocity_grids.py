@@ -77,6 +77,10 @@ class SpeedGrid(eqx.Module):
         # fq now of shape (xi, theta, zeta, x)
         return jnp.moveaxis(fq, -1, 1)
 
+    def _integral(self, f):
+        # f assumed to be shape(xi, x, theta, zeta)
+        return (f * self.wx[None, :, None, None]).sum(axis=1)
+
 
 class PitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable xi=v||/v.
@@ -99,6 +103,7 @@ class PitchAngleGrid(eqx.Module):
     xivander_inv: jax.Array
     Dxi: jax.Array
     Dxi_pseudospectral: jax.Array
+    L: jax.Array
 
     def __init__(self, nxi):
         self.nxi = nxi
@@ -108,14 +113,12 @@ class PitchAngleGrid(eqx.Module):
         self.xivander_inv = jnp.linalg.pinv(self.xivander)
 
         def _dxifun(c):
+            c = jnp.append(c, jnp.array([0.0]))
             dc = orthax.orthder(c, self.xirec)
-            dc = jnp.append(dc, jnp.array([0.0]))
             return dc
 
         self.Dxi = jax.jacfwd(_dxifun)(self.xi)
         self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
-
-    def _dfdxi(self, f):
-        # this only knows about a single species,
-        # f assumed to be shape(xi, x, theta, zeta)
-        return jnp.einsum("ai,ixtz->axtz", self.Dxi_pseudospectral, f)
+        k = jnp.arange(self.nxi)
+        kk = jnp.diag(k * (k + 1))
+        self.L = self.xivander @ kk @ self.xivander_inv

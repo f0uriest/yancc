@@ -147,6 +147,8 @@ def dke_rhs(
     f : jax.Array
         RHS of linear DKE.
     """
+    if not isinstance(species, (list, tuple)):
+        species = [species]
     vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
     ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
@@ -167,3 +169,61 @@ def dke_rhs(
     )
     gradients = 1 / ns * dns + qs * Er / Ts + (x**2 - 3 / 2) / Ts * dTs
     return vmadotgradpsi * gradients
+
+
+def mdke_rhs(
+    field: monkes.Field,
+    species: list[monkes._species.LocalMaxwellian],
+    x: jax.Array,
+    xigrid: PitchAngleGrid,
+) -> jax.Array:
+    """RHS of monoenergetic DKE.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    species : list[LocalMaxwellian]
+        Species being considered
+    x : jax.Array
+        Values of coordinates in speed.
+    xigrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+
+    Returns
+    -------
+    f : jax.Array
+        RHS of linear monoenergetic DKE.
+    """
+    if not isinstance(species, (list, tuple)):
+        species = [species]
+    vth = jnp.array([s.v_thermal for s in species])
+    x = jnp.atleast_1d(x)
+    v = (
+        vth[
+            :,
+            None,
+            None,
+            None,
+            None,
+        ]
+        * x[None, :, None, None, None]
+    )
+    xi = xigrid.xi[None, None, :, None, None, None]
+    s1 = (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
+    s2 = s1
+    s3 = xi * field.Bmag
+
+    return jnp.array([s1 * v, s2 * v, s3 * v])
+
+
+@jax.jit
+def compute_monoenergetic_coefficients(f, s, field, xigrid):
+    """Compute D_ij coefficients from solution for distribution function f."""
+    # dummy index for x variable
+    f = f.reshape((3, xigrid.nxi, 1, field.ntheta, field.nzeta))
+    s = s.reshape((3, xigrid.nxi, 1, field.ntheta, field.nzeta))
+    sf = s[:, None] * f[None, :]
+    sf = jax.vmap(jax.vmap(xigrid._integral))(sf)
+    Dij = field.flux_surface_average(sf)
+    return Dij.squeeze()

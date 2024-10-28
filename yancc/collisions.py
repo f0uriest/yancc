@@ -2,6 +2,7 @@
 
 import functools
 
+import cola
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -550,8 +551,8 @@ class PitchAngleScattering(eqx.Module):
         Magnetic field information
     species : list[LocalMaxwellian]
         Species being considered
-    xgrid : SpeedGrid
-        Grid of coordinates in speed.
+    x : jax.Array
+        Values of coordinates in speed.
     xigrid : PitchAngleGrid
         Grid of coordinates in pitch angle.
     Er : float
@@ -561,7 +562,7 @@ class PitchAngleScattering(eqx.Module):
 
     field: monkes.Field
     species: list[monkes._species.LocalMaxwellian]
-    xgrid: SpeedGrid
+    x: jax.Array
     xigrid: PitchAngleGrid
     ntheta: int
     nzeta: int
@@ -569,7 +570,7 @@ class PitchAngleScattering(eqx.Module):
     nx: int
     ns: int
 
-    def __init__(self, field, species, xgrid, xigrid):
+    def __init__(self, field, species, x, xigrid):
 
         self.field = field
         if not isinstance(species, (list, tuple)):
@@ -577,11 +578,11 @@ class PitchAngleScattering(eqx.Module):
         self.species = species
         self.ntheta = field.ntheta
         self.nzeta = field.nzeta
-        self.nxi = xigrid.nxi
-        self.nx = xgrid.nx
-        self.ns = len(species)
-        self.xgrid = xgrid
+        self.x = jnp.atleast_1d(x)
         self.xigrid = xigrid
+        self.nxi = xigrid.nxi
+        self.nx = self.x.size
+        self.ns = len(species)
 
     def mv(self, f):
         """Matrix vector product, action of the collision operator on f.
@@ -617,15 +618,68 @@ class PitchAngleScattering(eqx.Module):
         shp = f.shape
         f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
 
-        xi = self.xigrid.xi[:, None, None, None]
-        x = self.xgrid.x[None, :, None, None]
-        out = jnp.zeros((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
+        x = self.x[None, :, None, None]
+
+        fk = jnp.einsum("ki,sixtz->skxtz", self.xigrid.xivander_inv, f)
+        k = jnp.arange(self.xigrid.nxi)[:, None, None, None]
         for i, spa in enumerate(self.species):
-            df = self.xigrid._dfdxi(f[i])
-            df *= 1 - xi**2
-            ddf = self.xigrid._dfdxi(df)
             nu = 0.0
             for j, spb in enumerate(self.species):
                 nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
-            out = out.at[i].add(nu / 2 * ddf)
-        return out.reshape(shp)
+            fk = fk.at[i].multiply(nu / 2 * k * (k + 1))
+        Lf = jnp.einsum("ik,skxtz->sixtz", self.xigrid.xivander, fk)
+        return Lf.reshape(shp)
+
+
+def pitch_angle_collisions(field, speedgrid, pitchgrid, species):
+    """Pitch angle collision operator."""
+    Is = cola.ops.Identity((len(species), len(species)), pitchgrid.xi.dtype)
+    Ix = cola.ops.Dense(speedgrid.xvander)
+    It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+    Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+    x = speedgrid.x
+    L = cola.ops.Dense(pitchgrid.L)
+
+    nus = []
+    for spa in species:
+        nu = 0.0
+        for spb in species:
+            nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
+        nus.append(nu / 2)
+    nus = cola.ops.Diagonal(jnp.array(nus).flatten()) @ cola.ops.Kronecker(Is, Ix)
+    return cola.ops.Kronecker(nus, L, cola.ops.Kronecker(It, Iz))
+
+
+def energy_scattering(field, speedgrid, pitchgrid, species):
+    """Energy scattering part of collision operator."""
+    Ix = cola.ops.Dense(speedgrid.xvander)
+    Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
+    It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+    Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+    Dx = cola.ops.Dense(speedgrid.xvander @ speedgrid.Dx)
+    D2x = cola.ops.Dense(speedgrid.xvander @ speedgrid.Dx @ speedgrid.Dx)
+    x = speedgrid.x
+
+    out = []
+    for spa in species:
+        vta = spa.v_thermal
+        v = x * vta
+        term1 = 0.0
+        term2 = 0.0
+        term3 = 0.0
+        for spb in species:
+            nupar = monkes._species.nupar_ab(spa, spb, v)
+            nuD = monkes._species.nuD_ab(spa, spb, v)
+            gamma = monkes._species.gamma_ab(spa, spb, v)
+            ma, mb = spa.species.mass, spb.species.mass
+            vtb = spb.v_thermal
+            term1 += nupar * x**2 / 2
+            term2 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
+            term3 += 4 * jnp.pi * gamma * ma / mb * spb(v)
+        out.append(
+            cola.ops.Diagonal(term1) @ D2x
+            + cola.ops.Diagonal(term2) @ Dx
+            + cola.ops.Diagonal(term3) @ Ix
+        )
+    out = cola.ops.BlockDiag(*out)
+    return cola.ops.Kronecker(out, Ixi, cola.ops.Kronecker(It, Iz))
