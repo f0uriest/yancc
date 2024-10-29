@@ -631,7 +631,7 @@ class PitchAngleScattering(eqx.Module):
         return Lf.reshape(shp)
 
 
-def pitch_angle_collisions(field, speedgrid, pitchgrid, species):
+def pitch_angle_collisions(field, speedgrid, pitchgrid, species, approx_rdot=False):
     """Pitch angle collision operator."""
     Is = cola.ops.Identity((len(species), len(species)), pitchgrid.xi.dtype)
     Ix = cola.ops.Dense(speedgrid.xvander)
@@ -647,10 +647,12 @@ def pitch_angle_collisions(field, speedgrid, pitchgrid, species):
             nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
         nus.append(nu / 2)
     nus = cola.ops.Diagonal(jnp.array(nus).flatten()) @ cola.ops.Kronecker(Is, Ix)
+    if approx_rdot:
+        return cola.ops.Kronecker(nus, L, It, Iz)
     return cola.ops.Kronecker(nus, L, cola.ops.Kronecker(It, Iz))
 
 
-def energy_scattering(field, speedgrid, pitchgrid, species):
+def energy_scattering(field, speedgrid, pitchgrid, species, approx_rdot=False):
     """Energy scattering part of collision operator."""
     Ix = cola.ops.Dense(speedgrid.xvander)
     Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
@@ -682,4 +684,6 @@ def energy_scattering(field, speedgrid, pitchgrid, species):
             + cola.ops.Diagonal(term3) @ Ix
         )
     out = cola.ops.BlockDiag(*out)
+    if approx_rdot:
+        return cola.ops.Kronecker(out, Ixi, It, Iz)
     return cola.ops.Kronecker(out, Ixi, cola.ops.Kronecker(It, Iz))

@@ -5,19 +5,22 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import optimistix
+import tensorly
+from cola.fns import add, dot
 from cola.linalg import pinv
-from cola.fns import dot, add
 
 
 class LSTSQ(cola.linalg.Algorithm):
-    """
-    Least-squares algorithm for computing the solve of a linear equation
-    """
+    """Least-squares algorithm for solving linear equations."""
+
     def __call__(self, A: cola.ops.LinearOperator):
+        """Do the solve."""
         return LSTSQSolve(A)
 
 
 class LSTSQSolve(cola.ops.LinearOperator):
+    """Operator that calls lstsq."""
+
     def __init__(self, A: cola.ops.LinearOperator):
         super().__init__(A.dtype, (A.shape[-1], A.shape[-2]))
         self.A = A.to_dense()
@@ -26,24 +29,25 @@ class LSTSQSolve(cola.ops.LinearOperator):
         return self.xnp.lstsq(self.A, X)
 
 
-
 @cola.dispatch(precedence=0)
-def pinv(A: cola.ops.LinearOperator, alg: cola.linalg.Auto):
-    """ Auto:
-        - if A is small, use dense algorithms
-        - if A is large, use iterative algorithms
+def pinv(A: cola.ops.LinearOperator, alg: cola.linalg.Auto):  # noqa: F811
+    """Auto:
+    - if A is small, use dense algorithms
+    - if A is large, use iterative algorithms
     """
     alg = LSTSQ()
     return pinv(A, alg)
 
 
 @cola.dispatch
-def pinv(A: cola.ops.LinearOperator, alg: LSTSQ):
+def pinv(A: cola.ops.LinearOperator, alg: LSTSQ):  # noqa: F811
+    """Dense SVD based pseudoinverse."""
     return LSTSQSolve(A)
 
 
 @cola.dispatch(precedence=1)
-def pinv(A: cola.ops.Identity, alg: cola.linalg.Algorithm):
+def pinv(A: cola.ops.Identity, alg: cola.linalg.Algorithm):  # noqa: F811
+    """Pseudoinverse of identity matrix."""
     return A
 
 
@@ -62,11 +66,6 @@ def pinv(A: cola.ops.Kronecker, alg: cola.linalg.Algorithm):  # noqa: F811
     return cola.ops.Kronecker(*[pinv(M, alg) for M in A.Ms])
 
 
-
-
-
-
-
 @cola.dispatch
 def dot(A: cola.ops.Diagonal, B: cola.ops.Diagonal):  # noqa: F811
     """Product of 2 diagonals is diagonal."""
@@ -74,30 +73,26 @@ def dot(A: cola.ops.Diagonal, B: cola.ops.Diagonal):  # noqa: F811
 
 
 @cola.dispatch
-def dot(A: cola.ops.Dense, B: cola.ops.Dense):  # noqa: F811
-    """Product of 2 dense is dense."""
-    return cola.ops.Dense(A.to_dense() @ B.to_dense())
-
-
-@cola.dispatch
 def dot(A: cola.ops.Diagonal, B: cola.ops.Dense):  # noqa: F811
     """Product of diagonal * dense is dense."""
-    return cola.ops.Dense(A.diag[:,None] * B.to_dense())
+    return cola.ops.Dense(A.diag[:, None] * B.to_dense())
 
 
 @cola.dispatch
 def dot(A: cola.ops.Dense, B: cola.ops.Diagonal):  # noqa: F811
     """Product of dense * diagonal is dense."""
-    return cola.ops.Dense(A.to_dense() * B.diag[None,:])
+    return cola.ops.Dense(A.to_dense() * B.diag[None, :])
 
 
 @cola.dispatch(precedence=2)
 def dot(A: cola.ops.LinearOperator, B: cola.ops.Identity):  # noqa: F811
+    """A @ I = A."""
     return A
 
 
 @cola.dispatch(precedence=2)
 def dot(A: cola.ops.Identity, B: cola.ops.LinearOperator):  # noqa: F811
+    """I @ A = A."""
     return B
 
 
@@ -162,7 +157,8 @@ def inv_sum_kron(A, B):
     ViBis = []
 
     for Ak, Bk in zip(As, Bs):
-        Bi = cola.linalg.inv(Bk, alg=cola.linalg.LU())
+        Bi = cola.linalg.pinv(Bk)
+        assert not np.any(np.isnan(Bi.to_dense()))
         e, v = jnp.linalg.eig((Bi @ Ak).to_dense())
         V = cola.ops.Dense(v)
         Vi = cola.linalg.inv(V, alg=cola.linalg.LU())
@@ -171,7 +167,7 @@ def inv_sum_kron(A, B):
         es = jnp.multiply.outer(es, e)
         ViBis.append(ViBi)
     term1 = cola.ops.Kronecker(*Vs)
-    term2 = cola.linalg.inv(cola.ops.Diagonal((es.flatten() + 1)))
+    term2 = cola.linalg.pinv(cola.ops.Diagonal((es.flatten() + 1)))
     term3 = cola.ops.Kronecker(*ViBis)
     return term1 @ term2 @ term3
 
@@ -281,7 +277,7 @@ def kron_densify(A):
     return cola.ops.Kronecker(*Hs)
 
 
-def approx_sum_kron(A, B):
+def approx_sum_kron(A, B, inv=True):
     """Find a Kronecker matrix C such that C ~ A + B where A, B are also Kronecker."""
     assert isinstance(A, cola.ops.Kronecker)
     assert isinstance(A, cola.ops.Kronecker)
@@ -294,15 +290,29 @@ def approx_sum_kron(A, B):
     Vis = []
 
     for Ak, Bk in zip(As, Bs):
-        Bi = cola.linalg.inv(Bk, alg=cola.linalg.LU())
+        Bi = cola.linalg.pinv(Bk)
         e, V = cola.linalg.eig((Bi @ Ak), k=Ak.shape[0], alg=cola.linalg.Eig())
         Vi = cola.linalg.inv(V, alg=cola.linalg.LU())
         Vs.append(V)
         Vis.append(Vi)
-        es.append(cola.ops.Diagonal(e))
+        es.append(e)
     V = cola.ops.Kronecker(*Vs)
-    D = cola.ops.Kronecker(*es)
-    D = approx_kron_plus_eye(D)
+    A = jnp.array(1.0)
+    for e in es:
+        A = jnp.multiply.outer(A, e)
+    A += 1
+    D = approx_kron(A, inv)
     Vi = cola.ops.Kronecker(*Vis)
     out = B @ V @ D @ Vi
     return prodkron2kronprod(out)
+
+
+def approx_kron(A, inv=True):
+    """For ndarray A, find B = kron(diag(...)) st B ~ diag(A.flatten())."""
+    if inv:
+        A = _safeinv(A)
+    w, fs = tensorly.decomposition.parafac(A, 1)
+    if inv:
+        fs = [_safeinv(fi) for fi in fs]
+    fs = [cola.ops.Diagonal(fi.squeeze()) for fi in fs]
+    return cola.ops.Kronecker(*fs)
