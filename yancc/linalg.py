@@ -23,10 +23,27 @@ class LSTSQSolve(cola.ops.LinearOperator):
 
     def __init__(self, A: cola.ops.LinearOperator):
         super().__init__(A.dtype, (A.shape[-1], A.shape[-2]))
-        self.A = A.to_dense()
+        self.U, self.s, self.VT = jnp.linalg.svd(A.to_dense())
 
     def _matmat(self, X):
-        return self.xnp.lstsq(self.A, X)
+        si = _safepinv(self.s)
+        y = si[:, None] * self.U.T @ X
+        return self.VT.T @ y
+
+
+def _min_nonzero(x):
+    large = jnp.abs(x) > 1e-14
+    return jnp.min(jnp.abs(x), where=large, initial=1.0)
+
+
+def _safeinv(x):
+    small = jnp.abs(x) < x.size * jnp.finfo(x.dtype).eps
+    return jnp.where(small, 0.0, 1 / jnp.where(small, 1.0, x))
+
+
+def _safepinv(x):
+    small = jnp.abs(x) < x.size * jnp.finfo(x.dtype).eps
+    return jnp.where(small, _min_nonzero(x), 1 / jnp.where(small, 1.0, x))
 
 
 @cola.dispatch(precedence=0)
@@ -54,10 +71,8 @@ def pinv(A: cola.ops.Identity, alg: cola.linalg.Algorithm):  # noqa: F811
 @cola.dispatch(precedence=1)
 def pinv(A: cola.ops.Diagonal, alg: cola.linalg.Algorithm):  # noqa: F811
     """Pseudoinverse of diagonal matrix."""
-    eps = jnp.finfo(A.dtype).eps * max(A.shape)
-    small = jnp.abs(A.diag) < eps
-    d = jnp.where(small, 0, 1 / jnp.where(small, 1, A.diag))
-    return cola.ops.Diagonal(d)
+    di = _safepinv(A.diag)
+    return cola.ops.Diagonal(di)
 
 
 @cola.dispatch(precedence=1)
@@ -94,6 +109,12 @@ def dot(A: cola.ops.LinearOperator, B: cola.ops.Identity):  # noqa: F811
 def dot(A: cola.ops.Identity, B: cola.ops.LinearOperator):  # noqa: F811
     """I @ A = A."""
     return B
+
+
+@cola.dispatch(precedence=3)
+def dot(A: cola.ops.Identity, B: cola.ops.Identity):  # noqa: F811
+    """I @ I = I."""
+    return A
 
 
 @cola.dispatch
@@ -170,11 +191,6 @@ def inv_sum_kron(A, B):
     term2 = cola.linalg.pinv(cola.ops.Diagonal((es.flatten() + 1)))
     term3 = cola.ops.Kronecker(*ViBis)
     return term1 @ term2 @ term3
-
-
-def _safeinv(x):
-    small = jnp.abs(x) < 10 * jnp.finfo(x.dtype).eps
-    return jnp.where(small, 0.0, 1 / jnp.where(small, 1.0, x))
 
 
 def approx_kron_plus_eye(A):
