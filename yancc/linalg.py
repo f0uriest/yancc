@@ -188,7 +188,7 @@ def inv_sum_kron(A, B):
         es = jnp.multiply.outer(es, e)
         ViBis.append(ViBi)
     term1 = cola.ops.Kronecker(*Vs)
-    term2 = cola.linalg.pinv(cola.ops.Diagonal((es.flatten() + 1)))
+    term2 = cola.linalg.pinv(cola.ops.Diagonal(es.flatten() + 1))
     term3 = cola.ops.Kronecker(*ViBis)
     return term1 @ term2 @ term3
 
@@ -332,3 +332,48 @@ def approx_kron(A, inv=True):
         fs = [_safeinv(fi) for fi in fs]
     fs = [cola.ops.Diagonal(fi.squeeze()) for fi in fs]
     return cola.ops.Kronecker(*fs)
+
+
+class BorderedOperator(cola.ops.LinearOperator):
+    """Operator of the form [[A, B], [C, D]].
+
+    Assumes A is invertible, though D need not be.
+    """
+
+    def __init__(self, A, B, C, D):
+        assert A.shape[0] == B.shape[0]
+        assert A.shape[1] == C.shape[1]
+        assert B.shape[1] == D.shape[1]
+        assert C.shape[0] == D.shape[0]
+        self.A = cola.fns.lazify(A)
+        self.B = cola.fns.lazify(B)
+        self.C = cola.fns.lazify(C)
+        self.D = cola.fns.lazify(D)
+        dtypeAB = self.A.xnp.promote_types(self.A.dtype, self.B.dtype)
+        dtypeCD = self.A.xnp.promote_types(self.C.dtype, self.D.dtype)
+        dtype = self.A.xnp.promote_types(dtypeAB, dtypeCD)
+        shape = (self.A.shape[0] + self.C.shape[0], self.A.shape[1] + self.B.shape[1])
+        super().__init__(dtype, shape)
+
+    def _matmat(self, X):
+        # [A B] [X1] = [AX1 + BX2]
+        # [C D] [X2] = [CX1 + DX2]
+        X1 = X[: self.A.shape[0]]
+        X2 = X[self.A.shape[0] :]
+        Y1 = self.A @ X1 + self.B @ X2
+        Y2 = self.C @ X1 + self.D @ X2
+        return self.A.xnp.concat([Y1, Y2])
+
+
+@cola.dispatch
+def inv(A: BorderedOperator, alg: cola.linalg.Algorithm):
+    """Block inverse assuming A is invertible."""
+    A, B, C, D = A.A, A.B, A.C, A.D
+    Ai = cola.linalg.inv(A, alg)
+    schur = D - C @ Ai @ B
+    schuri = cola.linalg.inv(schur, alg)
+    AA = Ai + Ai @ B @ schuri @ C @ Ai
+    BB = -Ai @ B @ schuri
+    CC = -schuri @ C @ Ai
+    DD = schuri
+    return BorderedOperator(AA, BB, CC, DD)
