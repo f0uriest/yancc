@@ -1,10 +1,8 @@
 """Linear algebra helpers."""
 
 import cola
-import jax
 import jax.numpy as jnp
 import numpy as np
-import optimistix
 import tensorly
 from cola.fns import add, dot
 from cola.linalg import pinv
@@ -193,83 +191,6 @@ def inv_sum_kron(A, B):
     return term1 @ term2 @ term3
 
 
-def approx_kron_plus_eye(A):
-    """For A = kron(diag(...)) Find B = kron(diag(...)) st B ~ A + I"""
-    assert isinstance(A, cola.ops.Kronecker)
-    sizes = [M.shape[0] for M in A.Ms]
-    splits = np.cumsum(sizes)[:-1]
-    ones = jnp.ones(A.shape[0])
-    # A is diagonal so can get diag by dot with ones
-    Adiag = A @ ones
-    Ap1 = cola.ops.Diagonal(Adiag + 1)
-    Ai = cola.linalg.pinv(Ap1)
-
-    @jax.jit
-    def loss(z, *args):
-        zr = z[: len(z) // 2]
-        zi = z[len(z) // 2 :]
-        z = zr + 1j * zi
-        zs = jnp.split(z, splits)
-        Zis = (cola.ops.Diagonal(_safeinv(zk)) for zk in zs)
-        Zi = cola.ops.Kronecker(*Zis)
-        Y = Ai - Zi
-        # Y is diagonal, so we can get the diagonal by dot with ones
-        x = Y @ ones
-        return jnp.sum(jnp.abs(x) ** 2)
-
-    z0 = jnp.concatenate([M.diag for M in A.Ms])
-    z0 = jnp.concatenate([z0.real, z0.imag])
-    z = optimistix.minimise(
-        loss, y0=z0, solver=optimistix.BFGS(rtol=1e-6, atol=1e-6), throw=False
-    ).value
-    zr = z[: len(z) // 2]
-    zi = z[len(z) // 2 :]
-    zc = zr + 1j * zi
-    zs = jnp.split(zc, splits)
-    Zs = (cola.ops.Diagonal(zk) for zk in zs)
-    Z = cola.ops.Kronecker(*Zs)
-    print(jnp.sqrt(loss(z) / loss(z * 0)))
-    print(jnp.sqrt(loss(z0) / loss(z * 0)))
-    return Z
-
-
-def approx_kron_plus_eye1(A):
-    """For A = kron(diag(...)) Find B = kron(diag(...)) st B ~ A + I"""
-    assert isinstance(A, cola.ops.Kronecker)
-    sizes = [M.shape[0] for M in A.Ms]
-    ones = jnp.ones(A.shape[0])
-    # A is diagonal so can get diag by dot with ones
-    Adiag = A @ ones
-    Ap1 = cola.ops.Diagonal(Adiag + 1)
-    Ai = cola.linalg.pinv(Ap1)
-
-    @jax.jit
-    def loss(z, *args):
-        zr = z[: len(z) // 2]
-        zi = z[len(z) // 2 :]
-        z = zr + 1j * zi
-        Bis = (cola.ops.Diagonal(_safeinv(zk + M.diag)) for zk, M in zip(z, A.Ms))
-        Bi = cola.ops.Kronecker(*Bis)
-        Y = Ai - Bi
-        # Y is diagonal, so we can get the diagonal by dot with ones
-        x = Y @ ones
-        return jnp.sum(jnp.abs(x) ** 2)
-
-    z0 = jnp.zeros(len(sizes))
-    z0 = jnp.concatenate([z0.real, z0.imag])
-    z = optimistix.minimise(
-        loss, y0=z0, solver=optimistix.BFGS(rtol=1e-6, atol=1e-6), throw=False
-    ).value
-    zr = z[: len(z) // 2]
-    zi = z[len(z) // 2 :]
-    zc = zr + 1j * zi
-    Bs = (cola.ops.Diagonal(zk + M.diag) for zk, M in zip(zc, A.Ms))
-    B = cola.ops.Kronecker(*Bs)
-    print(jnp.sqrt(loss(z) / loss(z * 0)))
-    print(jnp.sqrt(loss(z0) / loss(z * 0)))
-    return B
-
-
 def prodkron2kronprod(A):
     """Convert a product of Kronecker matrices into a Kronecker matrix of products."""
     assert isinstance(A, cola.ops.Product)
@@ -283,13 +204,6 @@ def prodkron2kronprod(A):
     for j in range(num):
         H = cola.ops.Product(*(Ki.Ms[j] for Ki in Ks))
         Hs.append(H)
-    return cola.ops.Kronecker(*Hs)
-
-
-def kron_densify(A):
-    """Make a Kronecker matrix of dense operators from nested operators."""
-    assert isinstance(A, cola.ops.Kronecker)
-    Hs = [cola.ops.Dense(M.to_dense()) for M in A.Ms]
     return cola.ops.Kronecker(*Hs)
 
 
