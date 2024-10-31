@@ -8,16 +8,16 @@ from cola.fns import add, dot
 from cola.linalg import pinv
 
 
-class LSTSQ(cola.linalg.Algorithm):
-    """Least-squares algorithm for solving linear equations."""
+class FullRank(cola.linalg.Algorithm):
+    """Algorithm for computing full rank pinv using SVD"""
 
     def __call__(self, A: cola.ops.LinearOperator):
         """Do the solve."""
-        return LSTSQSolve(A)
+        return FullRankPinv(A)
 
 
-class LSTSQSolve(cola.ops.LinearOperator):
-    """Operator that calls lstsq."""
+class FullRankPinv(cola.ops.LinearOperator):
+    """SVD based pseudo-inverse."""
 
     def __init__(self, A: cola.ops.LinearOperator):
         super().__init__(A.dtype, (A.shape[-1], A.shape[-2]))
@@ -44,20 +44,10 @@ def _safepinv(x):
     return jnp.where(small, _min_nonzero(x), 1 / jnp.where(small, 1.0, x))
 
 
-@cola.dispatch(precedence=0)
-def pinv(A: cola.ops.LinearOperator, alg: cola.linalg.Auto):  # noqa: F811
-    """Auto:
-    - if A is small, use dense algorithms
-    - if A is large, use iterative algorithms
-    """
-    alg = LSTSQ()
-    return pinv(A, alg)
-
-
-@cola.dispatch
-def pinv(A: cola.ops.LinearOperator, alg: LSTSQ):  # noqa: F811
+@cola.dispatch(precedence=1)
+def pinv(A: cola.ops.LinearOperator, alg: FullRank):  # noqa: F811
     """Dense SVD based pseudoinverse."""
-    return LSTSQSolve(A)
+    return FullRankPinv(A)
 
 
 @cola.dispatch(precedence=1)
@@ -67,7 +57,7 @@ def pinv(A: cola.ops.Identity, alg: cola.linalg.Algorithm):  # noqa: F811
 
 
 @cola.dispatch(precedence=1)
-def pinv(A: cola.ops.Diagonal, alg: cola.linalg.Algorithm):  # noqa: F811
+def pinv(A: cola.ops.Diagonal, alg: FullRank):  # noqa: F811
     """Pseudoinverse of diagonal matrix."""
     di = _safepinv(A.diag)
     return cola.ops.Diagonal(di)
@@ -176,7 +166,7 @@ def inv_sum_kron(A, B):
     ViBis = []
 
     for Ak, Bk in zip(As, Bs):
-        Bi = cola.linalg.pinv(Bk)
+        Bi = cola.linalg.pinv(Bk, FullRank())
         assert not np.any(np.isnan(Bi.to_dense()))
         e, v = jnp.linalg.eig((Bi @ Ak).to_dense())
         V = cola.ops.Dense(v)
@@ -186,7 +176,7 @@ def inv_sum_kron(A, B):
         es = jnp.multiply.outer(es, e)
         ViBis.append(ViBi)
     term1 = cola.ops.Kronecker(*Vs)
-    term2 = cola.linalg.pinv(cola.ops.Diagonal(es.flatten() + 1))
+    term2 = cola.linalg.pinv(cola.ops.Diagonal(es.flatten() + 1), FullRank())
     term3 = cola.ops.Kronecker(*ViBis)
     return term1 @ term2 @ term3
 
@@ -220,7 +210,7 @@ def approx_sum_kron(A, B, inv=True):
     Vis = []
 
     for Ak, Bk in zip(As, Bs):
-        Bi = cola.linalg.pinv(Bk)
+        Bi = cola.linalg.pinv(Bk, FullRank())
         e, V = cola.linalg.eig((Bi @ Ak), k=Ak.shape[0], alg=cola.linalg.Eig())
         Vi = cola.linalg.inv(V, alg=cola.linalg.LU())
         Vs.append(V)
