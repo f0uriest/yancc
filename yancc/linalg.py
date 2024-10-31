@@ -272,3 +272,45 @@ def inv(A: BorderedOperator, alg: cola.linalg.Algorithm):
     CC = -schuri @ C @ Ai
     DD = schuri
     return BorderedOperator(AA, BB, CC, DD)
+
+
+class BlockOperator(cola.ops.LinearOperator):
+    """Block matrix.
+
+    Assumes all blocks have the same size and dtype.
+    """
+
+    def __init__(self, blocks: list[list[cola.ops.LinearOperator]]):
+
+        # first make sure all rows have the same # of blocks
+        nrow = len(blocks)
+        ncol = len(blocks[0])
+        for blockrow in blocks[1:]:
+            assert len(blockrow) == ncol
+
+        blockshape = blocks[0][0].shape
+        blockdtype = blocks[0][0].dtype
+        for i in range(len(blocks)):
+            for j in range(len(blocks[i])):
+                blocks[i][j] = cola.fns.lazify(blocks[i][j])
+                assert blocks[i][j].shape == blockshape
+                assert blocks[i][j].dtype == blockdtype
+
+        shape = (blockshape[0] * nrow, blockshape[1] * ncol)
+        self.blocks = blocks
+        self.blockshape = blockshape
+        self.nrow = nrow
+        self.ncol = ncol
+        super().__init__(blockdtype, shape)
+
+    def _matmat(self, X):
+        Xblocks = jnp.split(X, self.ncol)
+        out = []
+        for i in range(self.nrow):
+            outrow = 0
+            for j in range(self.ncol):
+                Aij = self.blocks[i][j]
+                outrow += Aij @ Xblocks[j]
+            out.append(outrow)
+
+        return jnp.concatenate(out)
