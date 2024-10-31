@@ -34,11 +34,6 @@ def _min_nonzero(x):
     return jnp.min(jnp.abs(x), where=large, initial=1.0)
 
 
-def _safeinv(x):
-    small = jnp.abs(x) < x.size * jnp.finfo(x.dtype).eps
-    return jnp.where(small, 0.0, 1 / jnp.where(small, 1.0, x))
-
-
 def _safepinv(x):
     small = jnp.abs(x) < x.size * jnp.finfo(x.dtype).eps
     return jnp.where(small, _min_nonzero(x), 1 / jnp.where(small, 1.0, x))
@@ -197,7 +192,7 @@ def prodkron2kronprod(A):
     return cola.ops.Kronecker(*Hs)
 
 
-def approx_sum_kron(A, B, inv=True):
+def approx_sum_kron(A, B):
     """Find a Kronecker matrix C such that C ~ A + B where A, B are also Kronecker."""
     assert isinstance(A, cola.ops.Kronecker)
     assert isinstance(A, cola.ops.Kronecker)
@@ -221,19 +216,15 @@ def approx_sum_kron(A, B, inv=True):
     for e in es:
         A = jnp.multiply.outer(A, e)
     A += 1
-    D = approx_kron(A, inv)
+    D = approx_kron(A)
     Vi = cola.ops.Kronecker(*Vis)
     out = B @ V @ D @ Vi
     return prodkron2kronprod(out)
 
 
-def approx_kron(A, inv=True):
+def approx_kron(A):
     """For ndarray A, find B = kron(diag(...)) st B ~ diag(A.flatten())."""
-    if inv:
-        A = _safeinv(A)
     w, fs = tensorly.decomposition.parafac(A, 1)
-    if inv:
-        fs = [_safeinv(fi) for fi in fs]
     fs = [cola.ops.Diagonal(fi.squeeze()) for fi in fs]
     return cola.ops.Kronecker(*fs)
 
