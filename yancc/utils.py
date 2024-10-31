@@ -55,7 +55,10 @@ def lGammainc(s, x):
     """
     sgn, t = _lgammastar(s, x)
     gammasn = jax.scipy.special.gammasgn(s)
-    return gammasn*sgn*jnp.sign(x), jax.scipy.special.gammaln(s) + s * jnp.log(x) + t
+    return (
+        gammasn * sgn * jnp.sign(x),
+        jax.scipy.special.gammaln(s) + s * jnp.log(x) + t,
+    )
 
 
 @jax.jit
@@ -75,16 +78,23 @@ def lGammaincc(s, x):
     """
     gammasn = jax.scipy.special.gammasgn(s)
     sgn, t = _lgammastar(s, x)
-    y = x**s * sgn*jnp.exp(t)
-    ym1 = 1-y
-    log = jnp.where(y>1, jnp.log(jnp.abs(ym1)), jnp.log1p(-y))
-    return gammasn * jnp.sign(ym1), jax.scipy.special.gammaln(s) + log
+    y = x**s * sgn * jnp.exp(t)
+    # log(|y|) = s log(x) + t
+    logy = s * jnp.log(jnp.abs(x)) + t
+    sgny = jnp.sign(y)
+    sgnlogy = jnp.sign(logy)
+    # 1-y>0 when y<1 -> sign(y)<0 or log(|y|) < 0
+    # sign(1-y) = -sign(log(|y|))
+    sgn1my = jnp.where(sgny < 0, 1, -sgnlogy)
+    # when |y| ~ 0 (ie log|y| << 0) we want to use log1p(-y)
+    # otherwise just do regular log(|1-y|)
+    log1my = jnp.where(logy < -3, jnp.log1p(-y), jnp.log(jnp.abs(1 - y)))
+    return gammasn * sgn1my, jax.scipy.special.gammaln(s) + log1my
 
 
 @jax.jit
 @jnp.vectorize
 def Gammaincc(s, x):
     """Upper incomplete gamma function."""
-    sgn, t = _lgammastar(s, x)
-    y = x**s * sgn*jnp.exp(t)
-    return jax.scipy.special.gamma(s) * (1 - y)
+    sgn, gammarg = lGammaincc(s, x)
+    return sgn * jnp.exp(gammarg)
