@@ -37,7 +37,7 @@ class RosenbluthPotentials(eqx.Module):
     Hxlk: jax.Array
     dHxlk: jax.Array
 
-    def __init__(self, xgrid, xigrid, species, quad=False):
+    def __init__(self, xgrid, xigrid, species, quad=True):
         self.xgrid = xgrid
         self.xigrid = xigrid
         self.quad = quad
@@ -152,7 +152,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = Gammaincc(-l/2 + n / 2 + 1, x**2)
+        g = Gammaincc(-l / 2 + n / 2 + 1, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -163,7 +163,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = Gammainc(l/ 2 + n / 2 + 3/2, x**2)
+        g = Gammainc(l / 2 + n / 2 + 3 / 2, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -174,7 +174,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = Gammaincc(-l/2 + n / 2 + 2, x**2)
+        g = Gammaincc(-l / 2 + n / 2 + 2, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -185,7 +185,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = Gammainc(l / 2 + n / 2 + 5/2, x**2)
+        g = Gammainc(l / 2 + n / 2 + 5 / 2, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -466,7 +466,8 @@ class FokkerPlanckLandau(eqx.Module):
                 ma, mb = spa.species.mass, spb.species.mass
                 vtb = spb.v_thermal
                 term1 = nupar * (
-                    x**2 / 2 * d2fdx2 - (x * vta / vtb) ** 2 * (1 - ma / mb) * x * dfdx
+                    x**2 / 2 * d2fdx2
+                    - (x * vta / vtb) ** 2 * (1 - ma / mb) * x * dfdx
                 )
                 term2 = nuD * x * dfdx
                 term3 = 4 * jnp.pi * gamma * ma / mb * spb(v) * f[i]
