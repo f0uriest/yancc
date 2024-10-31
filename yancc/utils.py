@@ -36,25 +36,55 @@ def _slice_to_range(s, N):
     return jnp.arange(start, stop, step)
 
 
-def _gammastar(s, z, kmax=40):
+def _lgammastar(s, z, kmax=60):
     k = jnp.arange(0, kmax)
     gammarg = s + k + 1
     gammasn = jax.scipy.special.gammasgn(gammarg)
     x = k * jnp.log(z) - jax.scipy.special.gammaln(gammarg)
     y, sgn = jax.scipy.special.logsumexp(x, b=gammasn, return_sign=True)
-    t = -z + sgn * y
-    return jnp.exp(t)
+    t = -z + y
+    return sgn, t
 
 
 @jax.jit
 @jnp.vectorize
-def gammainc(s, x):
+def lGammainc(s, x):
+    """Log of lower incomplete gamma function.
+
+    Returns (sign, lGammainc) st Gammainc = sign * exp(lGammainc)
+    """
+    sgn, t = _lgammastar(s, x)
+    gammasn = jax.scipy.special.gammasgn(s)
+    return gammasn*sgn*jnp.sign(x), jax.scipy.special.gammaln(s) + s * jnp.log(x) + t
+
+
+@jax.jit
+@jnp.vectorize
+def Gammainc(s, x):
     """Lower incomplete gamma function."""
-    return x**s * _gammastar(s, x)
+    sgn, gammarg = lGammainc(s, x)
+    return sgn * jnp.exp(gammarg)
 
 
 @jax.jit
 @jnp.vectorize
-def gammaincc(s, x):
+def lGammaincc(s, x):
+    """Log of upper incomplete gamma function.
+
+    Returns (sign, lGammaincc) st Gammaincc = sign * exp(lGammaincc)
+    """
+    gammasn = jax.scipy.special.gammasgn(s)
+    sgn, t = _lgammastar(s, x)
+    y = x**s * sgn*jnp.exp(t)
+    ym1 = 1-y
+    log = jnp.where(y>1, jnp.log(jnp.abs(ym1)), jnp.log1p(-y))
+    return gammasn * jnp.sign(ym1), jax.scipy.special.gammaln(s) + log
+
+
+@jax.jit
+@jnp.vectorize
+def Gammaincc(s, x):
     """Upper incomplete gamma function."""
-    return 1 - gammainc(s, x)
+    sgn, t = _lgammastar(s, x)
+    y = x**s * sgn*jnp.exp(t)
+    return jax.scipy.special.gamma(s) * (1 - y)

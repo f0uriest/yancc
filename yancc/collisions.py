@@ -11,7 +11,7 @@ import numpy as np
 import orthax
 import quadax
 
-from .utils import gammainc, gammaincc
+from .utils import Gammainc, Gammaincc
 from .velocity_grids import PitchAngleGrid, SpeedGrid
 
 
@@ -62,7 +62,7 @@ class RosenbluthPotentials(eqx.Module):
                 self.dHxlk = self.dHxlk.at[a, b].set(dH)
                 self.Hxlk = self.Hxlk.at[a, b].set(H)
 
-    def _rosenbluth_ddG(self, f, a, b):
+    def rosenbluth_ddG(self, f, a, b):
         """Second derivative of G potential for species indices a, b"""
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
@@ -152,9 +152,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = jax.scipy.special.gamma((-l + 1) / 2 + n / 2 + 1) * gammaincc(
-            (-l + 1) / 2 + n / 2 + 1, x**2
-        )
+        g = Gammaincc(-l/2 + n / 2 + 1, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -165,9 +163,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = jax.scipy.special.gamma((l + 2) / 2 + n / 2 + 1) * gammainc(
-            (l + 2) / 2 + n / 2 + 1, x**2
-        )
+        g = Gammainc(l/ 2 + n / 2 + 3/2, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -178,9 +174,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = jax.scipy.special.gamma((-l + 3) / 2 + n / 2 + 1) * gammaincc(
-            (-l + 3) / 2 + n / 2 + 1, x**2
-        )
+        g = Gammaincc(-l/2 + n / 2 + 2, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
@@ -191,9 +185,7 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.xgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.xgrid.xrec)
         n = jnp.arange(self.xgrid.nx)
-        g = jax.scipy.special.gamma((l + 4) / 2 + n / 2 + 1) * gammainc(
-            (l + 4) / 2 + n / 2 + 1, x**2
-        )
+        g = Gammainc(l / 2 + n / 2 + 5/2, x**2)
         return jnp.sum(p * g)
 
     @jax.jit
