@@ -1,131 +1,130 @@
 """Constraints, sources, RHS, etc."""
 
-import equinox as eqx
+import cola
 import jax
 import jax.numpy as jnp
-import monkes
+from monkes import Field, LocalMaxwellian
 
 from .velocity_grids import PitchAngleGrid, SpeedGrid
 
 
-class SFINCSSources(eqx.Module):
-    """Fake sources of particles and momentum to ensure solvability
+class DKESources(cola.ops.Dense):
+    """Fake sources of particles and heat to ensure solvability
 
     Parameters
     ----------
     field : Field
         Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
-    xgrid : SpeedGrid
-        Grid of coordinates in speed.
-    xigrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
 
     """
 
-    field: monkes.Field
-    species: list[monkes._species.LocalMaxwellian]
-    xgrid: SpeedGrid
-    xigrid: PitchAngleGrid
-    s1: jax.Array
-    s2: jax.Array
-    F: jax.Array
-
-    def __init__(self, field, species, xgrid, xigrid):
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+    ):
         self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
         self.species = species
-        self.xgrid = xgrid
-        self.xigrid = xigrid
 
-        x = xgrid.x[None, None, :, None, None] * jnp.ones(
-            (len(species), xigrid.nxi, 1, field.ntheta, field.nzeta)
+        x = speedgrid.x
+        F = jnp.array([sp(x * sp.v_thermal) for sp in species])
+        # these have shape (ns, nx)
+        s1 = (x**2 - 5 / 2) * F
+        s2 = (-2 / 3 * x**2 + 1) * F
+        # now need to make them broadcast against full distribution function
+        # these have shape (ns, nx, nxi, nt, nz)
+        s1 = s1[:, :, None, None, None] * jnp.ones(
+            (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
         )
-        self.s1 = -(x**2) + 5 / 2
-        self.s2 = 2 / 3 * x**2 - 1
-        self.F = jnp.array([sp(x[0] * sp.v_thermal) for sp in species])
-
-    def mv(self, S):
-        """Matrix vector product."""
-        shp = S.shape
-        S = S.reshape((2, len(self.species)))
-        S1 = S[0, :, None, None, None, None]
-        S2 = S[1, :, None, None, None, None]
-        out = (self.s1 * S1 + self.s2 * S2) * self.F
-        if len(shp) == 1:
-            out = out.flatten()
-        return out
+        s2 = s2[:, :, None, None, None] * jnp.ones(
+            (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+        )
+        # flatten by species
+        s1 = s1.reshape((len(species), -1))
+        s2 = s2.reshape((len(species), -1))
+        # split and recombine to keep species together
+        s1a = jnp.split(s1, len(species))
+        s2a = jnp.split(s2, len(species))
+        sa = [jnp.concatenate([s1s, s2s]).T for s1s, s2s in zip(s1a, s2a)]
+        super().__init__(jax.scipy.linalg.block_diag(*sa))
 
 
-class SFINCSConstraint(eqx.Module):
-    """Constraints to fix gauge freedom in density and momentum.
+class DKEConstraint(cola.ops.Dense):
+    """Constraints to fix gauge freedom in density and energy.
 
     Parameters
     ----------
     field : Field
         Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
-    xgrid : SpeedGrid
-        Grid of coordinates in speed.
-    xigrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
+    normalize : bool
+        Whether to ignore factors of v_thermal in the
+        integrals. If True, integrals will be dimensionless.
 
     """
 
-    field: monkes.Field
-    species: list[monkes._species.LocalMaxwellian]
-    xgrid: SpeedGrid
-    xigrid: PitchAngleGrid
-    ntheta: int
-    nzeta: int
-    nxi: int
-    nx: int
-    ns: int
-    vth: jax.Array
-
-    def __init__(self, field, species, xgrid, xigrid):
-
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        normalize=True,
+    ):
         self.field = field
-        if not isinstance(species, (list, tuple)):
-            species = [species]
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
         self.species = species
-        self.ntheta = field.ntheta
-        self.nzeta = field.nzeta
-        self.nxi = xigrid.nxi
-        self.nx = xgrid.nx
-        self.ns = len(species)
-        self.xgrid = xgrid
-        self.xigrid = xigrid
-        self.vth = jnp.array([sp.v_thermal for sp in species])
 
-    def mv(self, f):
-        """Matrix vector product."""
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-        wx = self.xgrid.wx[None, None, :, None, None]
-        wxi = self.xigrid.wxi[None, :, None, None, None]
-        x = self.xgrid.x[None, None, :, None, None]
-        vth = self.vth[:, None, None, None, None]
-        intf = jnp.sum(f * wx * wxi, axis=(1, 2))
-        intv2f = jnp.sum(f * x**2 * vth**2 * wx * wxi, axis=(1, 2))
-        out = jnp.array(
-            [
-                self.field.flux_surface_average(intf),
-                self.field.flux_surface_average(intv2f),
-            ]
-        )
-        if len(shp) == 1:
-            out = out.flatten()
-        return out
+        if normalize:
+            vth = jnp.ones((len(species), 1, 1))
+        else:
+            vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
+        # xvander goes from modal -> nodal
+        dx = ((speedgrid.x**2 * speedgrid.wx) @ speedgrid.xvander)[None, :, None]
+        x2dx = ((speedgrid.x**4 * speedgrid.wx) @ speedgrid.xvander)[None, :, None]
+        dxi = pitchgrid.wxi[None, None, :]
+        # int f d3v, for particle conservation, shape(ns, nx, nxi)
+        d3v = vth**3 * dx * dxi
+        # int v^2 f d3v, for energy conservation, shape(ns, nx, nxi)
+        v2d3v = vth**5 * x2dx * dxi
+
+        # flux surface average operator
+        dt = field.wtheta[:, None]
+        dz = field.wzeta[None, :]
+        dr = (field.sqrtg * dt * dz) / (field.sqrtg * dt * dz).sum()
+        dr = dr.flatten()[None, None, None, :]
+
+        Ip = 2 * jnp.pi * (d3v[..., None] * dr).reshape((len(species), -1))
+        Ie = 2 * jnp.pi * (v2d3v[..., None] * dr).reshape((len(species), -1))
+        Ipa = jnp.split(Ip, len(species))
+        Iea = jnp.split(Ie, len(species))
+        Ia = [jnp.concatenate([Ips, Ies]) for Ips, Ies in zip(Ipa, Iea)]
+        super().__init__(jax.scipy.linalg.block_diag(*Ia))
 
 
 def dke_rhs(
-    field: monkes.Field,
-    species: list[monkes._species.LocalMaxwellian],
-    xgrid: SpeedGrid,
-    xigrid: PitchAngleGrid,
-    Er: float,
+    field: Field,
+    speedgrid: SpeedGrid,
+    pitchgrid: PitchAngleGrid,
+    species: list[LocalMaxwellian],
+    E_psi: float,
+    include_constraints: bool = True,
 ) -> jax.Array:
     """RHS of DKE as solved in SFINCS.
 
@@ -133,14 +132,16 @@ def dke_rhs(
     ----------
     field : Field
         Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
-    xgrid : SpeedGrid
-        Grid of coordinates in speed.
-    xigrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
-    Er : float
+    E_psi : float
         Radial electric field.
+    include_constraints : bool
+        Whether to append zeros to the rhs for constraint equations.
 
     Returns
     -------
@@ -156,8 +157,10 @@ def dke_rhs(
     dns = jnp.array([sp.dndr for sp in species])[:, None, None, None, None]
     Ts = jnp.array([sp.temperature for sp in species])[:, None, None, None, None]
     dTs = jnp.array([sp.dTdr for sp in species])[:, None, None, None, None]
-    xi = xigrid.xi[None, :, None, None, None]
-    x = xgrid.x[None, None, :, None, None]
+    Ln = dns / ns
+    LT = dTs / Ts
+    xi = pitchgrid.xi[None, None, :, None, None]
+    x = speedgrid.x[None, :, None, None, None]
     vmadotgradpsi = (
         x**2
         * vth**2
@@ -165,17 +168,22 @@ def dke_rhs(
         * ms
         / qs
         / field.Bmag**2
-        * field.Bxgradpsidotgrad(field.Bmag)
+        * field.BxgradpsidotgradB
     )
-    gradients = 1 / ns * dns + qs * Er / Ts + (x**2 - 3 / 2) / Ts * dTs
-    return vmadotgradpsi * gradients
+    gradients = Ln + qs * E_psi / Ts + (x**2 - 3 / 2) * LT
+    rhs = (vmadotgradpsi * gradients).flatten()
+    if include_constraints:
+        rhs = jnp.concatenate([rhs, jnp.zeros(2 * len(species))])
+    return rhs
 
 
 def mdke_rhs(
-    field: monkes.Field,
-    species: list[monkes._species.LocalMaxwellian],
-    x: jax.Array,
-    xigrid: PitchAngleGrid,
+    field: Field,
+    speedgrid: SpeedGrid,
+    pitchgrid: PitchAngleGrid,
+    species: list[LocalMaxwellian],
+    E_psi: float,
+    include_constraints: bool = True,
 ) -> jax.Array:
     """RHS of monoenergetic DKE.
 
@@ -183,38 +191,35 @@ def mdke_rhs(
     ----------
     field : Field
         Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
-    x : jax.Array
-        Values of coordinates in speed.
-    xigrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
+    E_psi : float
+        Radial electric field.
+    include_constraints : bool
+        Whether to append zeros to the rhs for constraint equations.
 
     Returns
     -------
-    f : jax.Array
+    f : jax.Array, shape(N,3)
         RHS of linear monoenergetic DKE.
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
-    vth = jnp.array([s.v_thermal for s in species])
-    x = jnp.atleast_1d(x)
-    v = (
-        vth[
-            :,
-            None,
-            None,
-            None,
-            None,
-        ]
-        * x[None, :, None, None, None]
-    )
-    xi = xigrid.xi[None, None, :, None, None, None]
+    vth = jnp.array([s.v_thermal for s in species])[:, None, None, None, None]
+    x = speedgrid.x[None, :, None, None, None]
+    v = vth * x
+    xi = pitchgrid.xi[None, None, :, None, None]
     s1 = (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
     s2 = s1
     s3 = xi * field.Bmag
-
-    return jnp.array([s1 * v, s2 * v, s3 * v])
+    rhs = jnp.array([s1 * v, s2 * v, s3 * v]).reshape((3, -1)).T
+    if include_constraints:
+        rhs = jnp.concatenate([rhs, jnp.zeros((len(species), 3))])
+    return rhs
 
 
 @jax.jit
