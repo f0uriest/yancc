@@ -118,6 +118,90 @@ class DKEConstraint(cola.ops.Dense):
         super().__init__(jax.scipy.linalg.block_diag(*Ia))
 
 
+class MDKESources(cola.ops.Dense):
+    """Fake sources of particles to ensure solvability of monoenergetic DKE.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+        N = pitchgrid.nxi * field.ntheta * field.nzeta
+        sa = [
+            jax.scipy.linalg.block_diag(*[jnp.ones(N) for _ in speedgrid.x])
+            for _ in species
+        ]
+        super().__init__(jax.scipy.linalg.block_diag(*sa))
+
+
+class MDKEConstraint(cola.ops.Dense):
+    """Constraints to fix gauge freedom in density for monoenergetic DKE.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+
+        # independent constraints for each x, each species
+        vth = jnp.ones((len(species), 1, 1))
+        dx = jnp.ones((1, speedgrid.nx, 1))
+        dxi = pitchgrid.wxi[None, None, :]
+        # int f d3v, for particle conservation, shape(ns, nx, nxi)
+        d3v = vth**3 * dx * dxi
+
+        # flux surface average operator
+        dt = field.wtheta[:, None]
+        dz = field.wzeta[None, :]
+        dr = (field.sqrtg * dt * dz) / (field.sqrtg * dt * dz).sum()
+        dr = dr.flatten()[None, None, None, :]
+
+        Ip = (
+            2 * jnp.pi * (d3v[..., None] * dr).reshape((len(species), speedgrid.nx, -1))
+        )
+        Ipa = jnp.split(Ip, len(species))
+        Ia = [jax.scipy.linalg.block_diag(*Ipxa[0]) for Ipxa in Ipa]
+        super().__init__(jax.scipy.linalg.block_diag(*Ia))
+
+
 def dke_rhs(
     field: Field,
     speedgrid: SpeedGrid,
