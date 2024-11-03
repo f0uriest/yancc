@@ -460,8 +460,7 @@ class FokkerPlanckLandau(eqx.Module):
                 ma, mb = spa.species.mass, spb.species.mass
                 vtb = spb.v_thermal
                 term1 = nupar * (
-                    x**2 / 2 * d2fdx2
-                    - (x * vta / vtb) ** 2 * (1 - ma / mb) * x * dfdx
+                    x**2 / 2 * d2fdx2 - (x * vta / vtb) ** 2 * (1 - ma / mb) * x * dfdx
                 )
                 term2 = nuD * x * dfdx
                 term3 = 4 * jnp.pi * gamma * ma / mb * spb(v) * f[i]
