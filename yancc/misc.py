@@ -307,12 +307,105 @@ def mdke_rhs(
 
 
 @jax.jit
-def compute_monoenergetic_coefficients(f, s, field, xigrid):
-    """Compute D_ij coefficients from solution for distribution function f."""
-    # dummy index for x variable
-    f = f.reshape((3, xigrid.nxi, 1, field.ntheta, field.nzeta))
-    s = s.reshape((3, xigrid.nxi, 1, field.ntheta, field.nzeta))
-    sf = s[:, None] * f[None, :]
-    sf = jax.vmap(jax.vmap(xigrid._integral))(sf)
-    Dij = field.flux_surface_average(sf)
-    return Dij.squeeze()
+def compute_monoenergetic_coefficients(
+    f: jax.Array,
+    s: jax.Array,
+    field: Field,
+    speedgrid: SpeedGrid,
+    pitchgrid: PitchAngleGrid,
+    species: list[LocalMaxwellian],
+) -> jax.Array:
+    """Compute D_ij coefficients from solution for distribution function f.
+
+    Parameters
+    ----------
+    f : jax.Array, shape(N,3)
+        Solution to monoenergetic drift kinetic equation.
+    s : jax.Array, shape(N,3)
+        RHS for monoenergetic drift kinetic equation, eg from `mdke_rhs`.
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+
+    Returns
+    -------
+    Dij : jax.Array, shape(nspecies, nx, 3, 3)
+        Monoenergetic transport coefficient for each species and each speed.
+    """
+    f = f.reshape((-1, 3))
+    s = s.reshape((-1, 3))
+    ns, nx, nxi, nt, nz = (
+        len(species),
+        speedgrid.nx,
+        pitchgrid.nxi,
+        field.ntheta,
+        field.nzeta,
+    )
+    N = ns * nx * nxi * nt * nz
+    # slice out source/constraint terms if present
+    f = f[:N]
+    s = s[:N]
+    # convert f from k to x in speed
+    f = f.reshape((ns, nx, nxi, nt, nz, 3))
+    f = jnp.einsum("xk, skitzj->sxitzj", speedgrid.xvander, f)
+    f = f.reshape((N, 3))
+    # form monoenergetic coefficients
+    sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
+    Dij_sxitz = sf.reshape((3, 3, ns, nx, nxi, nt, nz))
+    Dij_sxi = field.flux_surface_average(Dij_sxitz)
+    Dij_sx = jnp.sum(Dij_sxi * pitchgrid.wxi, axis=-1)
+    Dsx_ij = jnp.moveaxis(Dij_sx, (0, 1), (2, 3))
+
+    return Dsx_ij
+
+
+def compute_transport_matrix(
+    Dij: jax.Array,
+    speedgrid: SpeedGrid,
+    species: list[LocalMaxwellian],
+):
+    """Compute the transport matrix for each species from monoenergetic coefficients.
+
+    Parameters
+    ----------
+    Dij : jax.Array, shape(nspecies, nx, 3, 3)
+        Monoenergetic transport coefficient for each species and each speed.
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    species : list[LocalMaxwellian]
+        Species being considered
+
+    Returns
+    -------
+    Lij : jax.Array, shape(nspecies, 3, 3)
+        Transport marix for each species.
+    """
+    # TODO: check this, it seems to disagree with the formulas in monkes and beidler
+    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None]
+    x = speedgrid.x[None, :, None, None]
+    fM = jnp.concatenate([sp(x * sp.v_thermal) for sp in species], axis=0)
+    wx = speedgrid.wx[None, :, None, None]
+
+    wij = jnp.concatenate(
+        [
+            jnp.concatenate([x**0, x**2, x**1], axis=3),
+            jnp.concatenate([x**2, x**4, x**3], axis=3),
+            jnp.concatenate([x**1, x**3, x**2], axis=3),
+        ],
+        axis=2,
+    )
+    vscale = jnp.concatenate(
+        [
+            jnp.concatenate([vth**3, vth**3, vth**4], axis=3),
+            jnp.concatenate([vth**3, vth**3, vth**4], axis=3),
+            jnp.concatenate([vth**4, vth**4, vth**5], axis=3),
+        ],
+        axis=2,
+    )
+    integrand = vscale * x**2 * fM * wij * Dij * wx
+    return integrand.sum(axis=1)
