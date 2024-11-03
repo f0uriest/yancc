@@ -66,10 +66,8 @@ class RosenbluthPotentials(eqx.Module):
         """Second derivative of G potential for species indices a, b"""
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
-        # transform from nodal->modal for x, xi
-        f = jnp.einsum(
-            "kx,li,ixtz->lktz", self.xgrid.xvander_inv, self.xigrid.xivander_inv, f
-        )
+        # transform from nodal->modal for xi (x already modal)
+        f = jnp.einsum("li,ixtz->lktz", self.xigrid.xivander_inv, f)
         # project onto greens fn of poisson eqn
         ddGl = jnp.einsum("lktz,xlk->lxtz", f, self.ddGxlk[a, b])
         # convert back to real space
@@ -80,10 +78,8 @@ class RosenbluthPotentials(eqx.Module):
         """H potential for species indices a, b"""
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
-        # transform from nodal->modal for x, xi
-        f = jnp.einsum(
-            "kx,li,ixtz->lktz", self.xgrid.xvander_inv, self.xigrid.xivander_inv, f
-        )
+        # transform from nodal->modal for xi (x already modal)
+        f = jnp.einsum("li,ixtz->lktz", self.xigrid.xivander_inv, f)
         # project onto greens fn of poisson eqn
         Hl = jnp.einsum("lktz,xlk->lxtz", f, self.Hxlk[a, b])
         # convert back to real space
@@ -94,10 +90,8 @@ class RosenbluthPotentials(eqx.Module):
         """Derivative of H potential for species indices a, b"""
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
-        # transform from nodal->modal for x, xi
-        f = jnp.einsum(
-            "kx,li,ixtz->lktz", self.xgrid.xvander_inv, self.xigrid.xivander_inv, f
-        )
+        # transform from nodal->modal for xi (x already modal)
+        f = jnp.einsum("li,ixtz->lktz", self.xigrid.xivander_inv, f)
         # project onto greens fn of poisson eqn
         dHl = jnp.einsum("lktz,xlk->lxtz", f, self.dHxlk[a, b])
         # convert back to real space
