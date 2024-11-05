@@ -130,7 +130,7 @@ class FullTrajectoriesSpeed(cola.ops.Kronecker):
         )
         if approx_rdot:
             A = field.BxgradpsidotgradB / (2 * field.Bmag**3)
-            Ak = approx_kron(A, False)
+            Ak = approx_kron(A)
             Ms = (cola.ops.Kronecker(E_psi * Is, xDx), pxi2, *Ak.Ms)
         else:
             BxgradpsidotgradB_over_2B3 = cola.ops.Diagonal(
@@ -184,7 +184,7 @@ class FullTrajectoriesPitch1(cola.ops.Kronecker):
         v = cola.ops.Kronecker(vth, xa)
         if approx_rdot:
             A = field.bdotgradB / (2 * field.Bmag)
-            Ak = approx_kron(A, False)
+            Ak = approx_kron(A)
             Ms = (-v, mxi2 @ Dxi, *Ak.Ms)
         else:
             bdotgradB_over_2B = cola.ops.Diagonal(
@@ -239,7 +239,7 @@ class FullTrajectoriesPitch2(cola.ops.Kronecker):
         Dxi = cola.ops.Dense(pitchgrid.Dxi_pseudospectral)
         if approx_rdot:
             A = field.BxgradpsidotgradB / (2 * field.Bmag**3)
-            Ak = approx_kron(A, False)
+            Ak = approx_kron(A)
             Ms = (E_I, xi @ mxi2 @ Dxi, *Ak.Ms)
         else:
             BxgradpsidotgradB_over_2B3 = cola.ops.Diagonal(
@@ -297,11 +297,11 @@ class FullTrajectoriesSurface1(cola.ops.Kronecker):
         if approx_rdot:
             A1 = field.B_sup_t / field.Bmag
             A2 = field.B_sup_z / field.Bmag
-            Ak1 = approx_kron(A1, False)
-            Ak2 = approx_kron(A2, False)
+            Ak1 = approx_kron(A1)
+            Ak2 = approx_kron(A2)
             B1 = prodkron2kronprod(Ak1 @ cola.ops.Kronecker(Dt, Iz))
             B2 = prodkron2kronprod(Ak2 @ cola.ops.Kronecker(It, Dz))
-            C = approx_sum_kron(B1, B2, False)
+            C = approx_sum_kron(B1, B2)
             Ms = (v, xi, *C.Ms)
         else:
             B_sup_t_over_B = cola.ops.Diagonal((field.B_sup_t / field.Bmag).flatten())
@@ -364,11 +364,11 @@ class FullTrajectoriesSurface2(cola.ops.Kronecker):
         if approx_rdot:
             A1 = field.B_sub_t / (field.Bmag**2 * field.sqrtg)
             A2 = field.B_sub_z / (field.Bmag**2 * field.sqrtg)
-            Ak1 = approx_kron(A1, False)
-            Ak2 = approx_kron(A2, False)
+            Ak1 = approx_kron(A1)
+            Ak2 = approx_kron(A2)
             B1 = prodkron2kronprod(Ak1 @ cola.ops.Kronecker(Dt, Iz))
             B2 = prodkron2kronprod(Ak2 @ cola.ops.Kronecker(It, Dz))
-            C = approx_sum_kron(B1, B2, False)
+            C = approx_sum_kron(B1, B2)
             Ms = (E_I, Ixi, *C.Ms)
         else:
             B_sub_t_over_B2 = cola.ops.Diagonal(
@@ -477,11 +477,11 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         if approx_rdot:
             A1 = field.B_sub_t / (field.Bmag_fsa**2 * field.sqrtg)
             A2 = field.B_sub_z / (field.Bmag_fsa**2 * field.sqrtg)
-            Ak1 = approx_kron(A1, False)
-            Ak2 = approx_kron(A2, False)
+            Ak1 = approx_kron(A1)
+            Ak2 = approx_kron(A2)
             B1 = prodkron2kronprod(Ak1 @ cola.ops.Kronecker(Dt, Iz))
             B2 = prodkron2kronprod(Ak2 @ cola.ops.Kronecker(It, Dz))
-            C = approx_sum_kron(B1, B2, False)
+            C = approx_sum_kron(B1, B2)
             Ms = (E_I, Ixi, *C.Ms)
         else:
             B_sub_t_over_B2f = cola.ops.Diagonal(
