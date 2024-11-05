@@ -20,9 +20,9 @@ class RosenbluthPotentials(eqx.Module):
 
     Parameters
     ----------
-    xgrid : SpeedGrid
+    speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    xigrid : PitchAngleGrid
+    pitchgrid : PitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -30,25 +30,31 @@ class RosenbluthPotentials(eqx.Module):
         Whether to compute potentials using quadrature or incomplete gamma functions
     """
 
-    xgrid: SpeedGrid
-    xigrid: PitchAngleGrid
+    speedgrid: SpeedGrid
+    pitchgrid: PitchAngleGrid
     quad: bool = eqx.field(static=True)
     ddGxlk: jax.Array
     Hxlk: jax.Array
     dHxlk: jax.Array
 
-    def __init__(self, xgrid, xigrid, species, quad=True):
-        self.xgrid = xgrid
-        self.xigrid = xigrid
+    def __init__(self, speedgrid, pitchgrid, species, quad=True):
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
         self.quad = quad
 
         ns = len(species)
-        x = self.xgrid.x[:, None, None]
-        l = jnp.arange(self.xigrid.nxi)[None, :, None]
-        k = jnp.arange(self.xgrid.nx)[None, None, :]
-        self.ddGxlk = jnp.zeros((ns, ns, self.xgrid.nx, self.xigrid.nxi, self.xgrid.nx))
-        self.dHxlk = jnp.zeros((ns, ns, self.xgrid.nx, self.xigrid.nxi, self.xgrid.nx))
-        self.Hxlk = jnp.zeros((ns, ns, self.xgrid.nx, self.xigrid.nxi, self.xgrid.nx))
+        x = self.speedgrid.x[:, None, None]
+        l = jnp.arange(self.pitchgrid.nxi)[None, :, None]
+        k = jnp.arange(self.speedgrid.nx)[None, None, :]
+        self.ddGxlk = jnp.zeros(
+            (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
+        )
+        self.dHxlk = jnp.zeros(
+            (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
+        )
+        self.Hxlk = jnp.zeros(
+            (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
+        )
         # arr[a,b] is potential operator from species b to species a
         for a, spa in enumerate(species):
             for b, spb in enumerate(species):
@@ -67,11 +73,11 @@ class RosenbluthPotentials(eqx.Module):
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
         # transform from nodal->modal for xi (x already modal)
-        f = jnp.einsum("li,ixtz->lktz", self.xigrid.xivander_inv, f)
+        f = jnp.einsum("li,iktz->lktz", self.pitchgrid.xivander_inv, f)
         # project onto greens fn of poisson eqn
         ddGl = jnp.einsum("lktz,xlk->lxtz", f, self.ddGxlk[a, b])
         # convert back to real space
-        ddG = jnp.einsum("il,lxtz->ixtz", self.xigrid.xivander, ddGl)
+        ddG = jnp.einsum("il,lxtz->ixtz", self.pitchgrid.xivander, ddGl)
         return ddG
 
     def rosenbluth_H(self, f, a, b):
@@ -79,11 +85,11 @@ class RosenbluthPotentials(eqx.Module):
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
         # transform from nodal->modal for xi (x already modal)
-        f = jnp.einsum("li,ixtz->lktz", self.xigrid.xivander_inv, f)
+        f = jnp.einsum("li,iktz->lktz", self.pitchgrid.xivander_inv, f)
         # project onto greens fn of poisson eqn
         Hl = jnp.einsum("lktz,xlk->lxtz", f, self.Hxlk[a, b])
         # convert back to real space
-        H = jnp.einsum("il,lxtz->ixtz", self.xigrid.xivander, Hl)
+        H = jnp.einsum("il,lxtz->ixtz", self.pitchgrid.xivander, Hl)
         return H
 
     def rosenbluth_dH(self, f, a, b):
@@ -91,51 +97,51 @@ class RosenbluthPotentials(eqx.Module):
         # this only knows about a single species,
         # f assumed to be shape(xi, x, theta, zeta)
         # transform from nodal->modal for xi (x already modal)
-        f = jnp.einsum("li,ixtz->lktz", self.xigrid.xivander_inv, f)
+        f = jnp.einsum("li,iktz->lktz", self.pitchgrid.xivander_inv, f)
         # project onto greens fn of poisson eqn
         dHl = jnp.einsum("lktz,xlk->lxtz", f, self.dHxlk[a, b])
         # convert back to real space
-        dH = jnp.einsum("il,lxtz->ixtz", self.xigrid.xivander, dHl)
+        dH = jnp.einsum("il,lxtz->ixtz", self.pitchgrid.xivander, dHl)
         return dH
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand1(self, z, l, k):
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         return (
             z ** (-l + 1)
-            * orthax.orthval(z, c, self.xgrid.xrec)
-            * self.xgrid.xrec.weight(z)
+            * orthax.orthval(z, c, self.speedgrid.xrec)
+            * self.speedgrid.xrec.weight(z)
         )
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand2(self, z, l, k):
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         return (
             z ** (l + 2)
-            * orthax.orthval(z, c, self.xgrid.xrec)
-            * self.xgrid.xrec.weight(z)
+            * orthax.orthval(z, c, self.speedgrid.xrec)
+            * self.speedgrid.xrec.weight(z)
         )
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand3(self, z, l, k):
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         return (
             z ** (-l + 3)
-            * orthax.orthval(z, c, self.xgrid.xrec)
-            * self.xgrid.xrec.weight(z)
+            * orthax.orthval(z, c, self.speedgrid.xrec)
+            * self.speedgrid.xrec.weight(z)
         )
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand4(self, z, l, k):
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         return (
             z ** (l + 4)
-            * orthax.orthval(z, c, self.xgrid.xrec)
-            * self.xgrid.xrec.weight(z)
+            * orthax.orthval(z, c, self.speedgrid.xrec)
+            * self.speedgrid.xrec.weight(z)
         )
 
     @jax.jit
@@ -143,9 +149,9 @@ class RosenbluthPotentials(eqx.Module):
     def _I_1(self, x, l, k):
         if self.quad:
             return quadax.quadgk(self._integrand1, (x, np.inf), (l, k))[0]
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
-        p = orthax.orth2poly(c, self.xgrid.xrec)
-        n = jnp.arange(self.xgrid.nx)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        p = orthax.orth2poly(c, self.speedgrid.xrec)
+        n = jnp.arange(self.speedgrid.nx)
         g = Gammaincc(-l / 2 + n / 2 + 1, x**2)
         return jnp.sum(p * g)
 
@@ -154,9 +160,9 @@ class RosenbluthPotentials(eqx.Module):
     def _I_2(self, x, l, k):
         if self.quad:
             return quadax.quadgk(self._integrand2, (0, x), (l, k))[0]
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
-        p = orthax.orth2poly(c, self.xgrid.xrec)
-        n = jnp.arange(self.xgrid.nx)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        p = orthax.orth2poly(c, self.speedgrid.xrec)
+        n = jnp.arange(self.speedgrid.nx)
         g = Gammainc(l / 2 + n / 2 + 3 / 2, x**2)
         return jnp.sum(p * g)
 
@@ -165,9 +171,9 @@ class RosenbluthPotentials(eqx.Module):
     def _I_3(self, x, l, k):
         if self.quad:
             return quadax.quadgk(self._integrand3, (x, np.inf), (l, k))[0]
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
-        p = orthax.orth2poly(c, self.xgrid.xrec)
-        n = jnp.arange(self.xgrid.nx)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        p = orthax.orth2poly(c, self.speedgrid.xrec)
+        n = jnp.arange(self.speedgrid.nx)
         g = Gammaincc(-l / 2 + n / 2 + 2, x**2)
         return jnp.sum(p * g)
 
@@ -176,9 +182,9 @@ class RosenbluthPotentials(eqx.Module):
     def _I_4(self, x, l, k):
         if self.quad:
             return quadax.quadgk(self._integrand4, (0, x), (l, k))[0]
-        c = jnp.zeros(self.xgrid.nx).at[k].set(1)
-        p = orthax.orth2poly(c, self.xgrid.xrec)
-        n = jnp.arange(self.xgrid.nx)
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        p = orthax.orth2poly(c, self.speedgrid.xrec)
+        n = jnp.arange(self.speedgrid.nx)
         g = Gammainc(l / 2 + n / 2 + 5 / 2, x**2)
         return jnp.sum(p * g)
 
