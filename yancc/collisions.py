@@ -10,7 +10,9 @@ import monkes
 import numpy as np
 import orthax
 import quadax
+from monkes import Field, LocalMaxwellian
 
+from .linalg import BlockOperator
 from .utils import Gammainc, Gammaincc
 from .velocity_grids import PitchAngleGrid, SpeedGrid
 
@@ -339,343 +341,442 @@ class RosenbluthPotentials(eqx.Module):
         )
 
 
-class FokkerPlanckLandau(eqx.Module):
+class FokkerPlanckLandau(cola.ops.Sum):
     """Fokker-Planck Landau collision operator.
 
     Parameters
     ----------
     field : Field
         Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
-    xgrid : SpeedGrid
-        Grid of coordinates in speed.
-    xigrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
-    Er : float
-        Radial electric field.
-
     """
 
-    field: monkes.Field
-    species: list[monkes._species.LocalMaxwellian]
-    xgrid: SpeedGrid
-    xigrid: PitchAngleGrid
-    potentials: RosenbluthPotentials
-    Er: float
-    ntheta: int
-    nzeta: int
-    nxi: int
-    nx: int
-    ns: int
-
-    def __init__(self, field, species, xgrid, xigrid, potentials, Er):
-
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        potentials: RosenbluthPotentials,
+    ):
         self.field = field
-        if not isinstance(species, (list, tuple)):
-            species = [species]
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
         self.species = species
-        self.Er = Er
-        self.ntheta = field.ntheta
-        self.nzeta = field.nzeta
-        self.nxi = xigrid.nxi
-        self.nx = xgrid.nx
-        self.ns = len(species)
-        self.xgrid = xgrid
-        self.xigrid = xigrid
         self.potentials = potentials
 
-    def mv(self, f):
-        """Matrix vector product, action of the collision operator on f.
-
-        Parameters
-        ----------
-        f : jax.Array
-            Perturbed distribution function(s)
-
-        Returns
-        -------
-        Cf : jax.Array
-            Linearized Fokker-Planck-Landau collision operator acting on f.
-        """
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-        out = self._pitch_angle(f)
-        out += self._energy_scattering(f)
-        out += self._field_part(f)
-        return out.reshape(shp)
-
-    def _pitch_angle(self, f):
-        """Pitch angle scattering part of the collision operator.
-
-        Parameters
-        ----------
-        f : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Perturbed distribution function(s)
-
-        Returns
-        -------
-        Cf : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Pitch angle scattering part of the collision operator acting on f.
-        """
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-
-        xi = self.xigrid.xi[:, None, None, None]
-        x = self.xgrid.x[None, :, None, None]
-        out = jnp.zeros((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-        for i, spa in enumerate(self.species):
-            df = self.xigrid._dfdxi(f[i])
-            df *= 1 - xi**2
-            ddf = self.xigrid._dfdxi(df)
-            nu = 0.0
-            for j, spb in enumerate(self.species):
-                nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
-            out = out.at[i].add(nu / 2 * ddf)
-        return out.reshape(shp)
-
-    def _energy_scattering(self, f):
-        """Energy scattering part of the collision operator.
-
-        Parameters
-        ----------
-        f : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Perturbed distribution function(s)
-
-        Returns
-        -------
-        Cf : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Energy scattering part of the collision operator acting on f.
-        """
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-
-        x = self.xgrid.x[None, :, None, None]
-        out = jnp.zeros((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-        for i, spa in enumerate(self.species):
-            vta = spa.v_thermal
-            v = x * vta
-            dfdx = self.xgrid._dfdx(f[i])
-            d2fdx2 = self.xgrid._dfdx(dfdx)
-            for j, spb in enumerate(self.species):
-                nupar = monkes._species.nupar_ab(spa, spb, v)
-                nuD = monkes._species.nuD_ab(spa, spb, v)
-                gamma = monkes._species.gamma_ab(spa, spb, v)
-                ma, mb = spa.species.mass, spb.species.mass
-                vtb = spb.v_thermal
-                term1 = nupar * (
-                    x**2 / 2 * d2fdx2 - (x * vta / vtb) ** 2 * (1 - ma / mb) * x * dfdx
-                )
-                term2 = nuD * x * dfdx
-                term3 = 4 * jnp.pi * gamma * ma / mb * spb(v) * f[i]
-                out = out.at[i].add(term1 + term2 + term3)
-        return out.reshape(shp)
-
-    def _field_part(self, f):
-        """Field part of the collision operator.
-
-        (ie, the part with the rosenbluth potentials)
-
-        Parameters
-        ----------
-        f : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Perturbed distribution function(s)
-
-        Returns
-        -------
-        Cf : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Field part of the collision operator acting on f.
-        """
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-
-        x = self.xgrid.x[None, :, None, None]
-        out = jnp.zeros((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-        for a, spa in enumerate(self.species):
-            v = x * spa.v_thermal
-            Fa = spa(v)
-            for b, spb in enumerate(self.species):
-                gamma = monkes._species.gamma_ab(spa, spb, v)
-                fb1 = f[b]
-                CG = self._CG(a, b, fb1)
-                CH = self._CH(a, b, fb1)
-                CD = self._CD(a, b, fb1)
-
-                out = out.at[a].add(gamma * Fa * (CG + CH + CD))
-        return out.reshape(shp)
-
-    def _CG(self, a, b, fb1):
-        x = self.xgrid.x[None, :, None, None]
-        va, vb = self.species[a].v_thermal, self.species[b].v_thermal
-        v = x * va
-        ddG = vb**4 * self.potentials._rosenbluth_ddG(fb1, a, b)
-        CG = 2 * v**2 / va**4 * ddG / vb**2
-        return CG
-
-    def _CH(self, a, b, fb1):
-        x = self.xgrid.x[None, :, None, None]
-        va, vb = self.species[a].v_thermal, self.species[b].v_thermal
-        ma, mb = self.species[a].species.mass, self.species[b].species.mass
-        v = x * va
-        H = vb**2 * self.potentials._rosenbluth_H(fb1, a, b)
-        dH = vb**2 * self.potentials._rosenbluth_dH(fb1, a, b)
-        CH = -2 * v / va**2 * (1 - ma / mb) * dH / vb - 2 / va**2 * H
-        return CH
-
-    def _CD(self, a, b, fb1):
-        va, vb = self.species[a].v_thermal, self.species[b].v_thermal
-        ma, mb = self.species[a].species.mass, self.species[b].species.mass
-        xa = self.xgrid.x * va / vb
-        xb = self.xgrid.x
-        fb1 = self.xgrid._interp(xb, fb1, xa)
-        CD = 4 * jnp.pi * ma / mb * fb1
-        return CD
+        CL = PitchAngleScattering(field, speedgrid, pitchgrid, species)
+        CE = EnergyScattering(field, speedgrid, pitchgrid, species)
+        CF = FieldParticleScattering(field, speedgrid, pitchgrid, species, potentials)
+        super().__init__(CL, CE, CF)
 
 
-class PitchAngleScattering(eqx.Module):
+class FieldParticleScattering(cola.ops.Sum):
+    """Field-particle part of Fokker-Planck Landau collision operator.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+    potentials : RosenbluthPotentials
+        Thing for calculating Rosenbluth potentials.
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        potentials: RosenbluthPotentials,
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+        self.potentials = potentials
+
+        CG = _CG(field, speedgrid, pitchgrid, species, potentials)
+        CH = _CH(field, speedgrid, pitchgrid, species, potentials)
+        CD = _CD(field, speedgrid, pitchgrid, species, potentials)
+        super().__init__(CG, CH, CD)
+
+
+class PitchAngleScattering(cola.ops.Kronecker):
     """Pitch angle scattering collision operator.
 
     Parameters
     ----------
     field : Field
         Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
-    x : jax.Array
-        Values of coordinates in speed.
-    xigrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
-    Er : float
-        Radial electric field.
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
 
     """
 
-    field: monkes.Field
-    species: list[monkes._species.LocalMaxwellian]
-    x: jax.Array
-    xigrid: PitchAngleGrid
-    ntheta: int
-    nzeta: int
-    nxi: int
-    nx: int
-    ns: int
-
-    def __init__(self, field, species, x, xigrid):
-
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        approx_rdot: bool = False,
+    ):
         self.field = field
-        if not isinstance(species, (list, tuple)):
-            species = [species]
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
         self.species = species
-        self.ntheta = field.ntheta
-        self.nzeta = field.nzeta
-        self.x = jnp.atleast_1d(x)
-        self.xigrid = xigrid
-        self.nxi = xigrid.nxi
-        self.nx = self.x.size
-        self.ns = len(species)
 
-    def mv(self, f):
-        """Matrix vector product, action of the collision operator on f.
+        Is = cola.ops.Identity((len(species), len(species)), pitchgrid.xi.dtype)
+        Ix = cola.ops.Dense(speedgrid.xvander)
+        It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+        Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+        x = speedgrid.x
+        L = cola.ops.Dense(pitchgrid.L)
 
-        Parameters
-        ----------
-        f : jax.Array
-            Perturbed distribution function(s)
-
-        Returns
-        -------
-        Cf : jax.Array
-            Linearized Fokker-Planck-Landau collision operator acting on f.
-        """
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-        out = self._pitch_angle(f)
-        return out.reshape(shp)
-
-    def _pitch_angle(self, f):
-        """Pitch angle scattering part of the collision operator.
-
-        Parameters
-        ----------
-        f : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Perturbed distribution function(s)
-
-        Returns
-        -------
-        Cf : jax.Array, shape(ns, nxi, nx, ntheta, nzeta)
-            Pitch angle scattering part of the collision operator acting on f.
-        """
-        shp = f.shape
-        f = f.reshape((self.ns, self.nxi, self.nx, self.ntheta, self.nzeta))
-
-        x = self.x[None, :, None, None]
-
-        fk = jnp.einsum("ki,sixtz->skxtz", self.xigrid.xivander_inv, f)
-        k = jnp.arange(self.xigrid.nxi)[:, None, None, None]
-        for i, spa in enumerate(self.species):
+        nus = []
+        for spa in species:
             nu = 0.0
-            for j, spb in enumerate(self.species):
+            for spb in species:
                 nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
-            fk = fk.at[i].multiply(nu / 2 * k * (k + 1))
-        Lf = jnp.einsum("ik,skxtz->sixtz", self.xigrid.xivander, fk)
-        return Lf.reshape(shp)
+            nus.append(nu / 2)
+        nus = cola.ops.Diagonal(jnp.array(nus).flatten()) @ cola.ops.Kronecker(Is, Ix)
+        if approx_rdot:
+            Ms = (nus, L, It, Iz)
+        else:
+            Ms = (nus, L, cola.ops.Kronecker(It, Iz))
+        super().__init__(*Ms)
 
 
-def pitch_angle_collisions(field, speedgrid, pitchgrid, species, approx_rdot=False):
-    """Pitch angle collision operator."""
-    Is = cola.ops.Identity((len(species), len(species)), pitchgrid.xi.dtype)
-    Ix = cola.ops.Dense(speedgrid.xvander)
-    It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
-    Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
-    x = speedgrid.x
-    L = cola.ops.Dense(pitchgrid.L)
+class EnergyScattering(cola.ops.Kronecker):
+    """Energy scattering collision operator.
 
-    nus = []
-    for spa in species:
-        nu = 0.0
-        for spb in species:
-            nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
-        nus.append(nu / 2)
-    nus = cola.ops.Diagonal(jnp.array(nus).flatten()) @ cola.ops.Kronecker(Is, Ix)
-    if approx_rdot:
-        return cola.ops.Kronecker(nus, L, It, Iz)
-    return cola.ops.Kronecker(nus, L, cola.ops.Kronecker(It, Iz))
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        approx_rdot: bool = False,
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+
+        Ix = cola.ops.Dense(speedgrid.xvander)
+        Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
+        It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+        Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+        Dx = cola.ops.Dense(speedgrid.xvander @ speedgrid.Dx)
+        D2x = cola.ops.Dense(speedgrid.xvander @ speedgrid.Dx @ speedgrid.Dx)
+        x = speedgrid.x
+
+        out = []
+        for spa in species:
+            vta = spa.v_thermal
+            v = x * vta
+            term1 = 0.0
+            term2 = 0.0
+            term3 = 0.0
+            for spb in species:
+                nupar = monkes._species.nupar_ab(spa, spb, v)
+                nuD = monkes._species.nuD_ab(spa, spb, v)
+                gamma = monkes._species.gamma_ab(spa, spb, v)
+                ma, mb = spa.species.mass, spb.species.mass
+                vtb = spb.v_thermal
+                term1 += nupar * x**2 / 2
+                term2 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
+                term3 += 4 * jnp.pi * gamma * ma / mb * spb(v)
+            out.append(
+                cola.ops.Diagonal(term1) @ D2x
+                + cola.ops.Diagonal(term2) @ Dx
+                + cola.ops.Diagonal(term3) @ Ix
+            )
+        out = cola.ops.BlockDiag(*out)
+        if approx_rdot:
+            Ms = (out, Ixi, It, Iz)
+        else:
+            Ms = (out, Ixi, cola.ops.Kronecker(It, Iz))
+        super().__init__(*Ms)
 
 
-def energy_scattering(field, speedgrid, pitchgrid, species, approx_rdot=False):
-    """Energy scattering part of collision operator."""
-    Ix = cola.ops.Dense(speedgrid.xvander)
-    Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
-    It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
-    Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
-    Dx = cola.ops.Dense(speedgrid.xvander @ speedgrid.Dx)
-    D2x = cola.ops.Dense(speedgrid.xvander @ speedgrid.Dx @ speedgrid.Dx)
-    x = speedgrid.x
+class _CD(cola.ops.Kronecker):
+    """Diagonal part of the field particle collision operator.
 
-    out = []
-    for spa in species:
-        vta = spa.v_thermal
-        v = x * vta
-        term1 = 0.0
-        term2 = 0.0
-        term3 = 0.0
-        for spb in species:
-            nupar = monkes._species.nupar_ab(spa, spb, v)
-            nuD = monkes._species.nuD_ab(spa, spb, v)
-            gamma = monkes._species.gamma_ab(spa, spb, v)
-            ma, mb = spa.species.mass, spb.species.mass
-            vtb = spb.v_thermal
-            term1 += nupar * x**2 / 2
-            term2 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
-            term3 += 4 * jnp.pi * gamma * ma / mb * spb(v)
-        out.append(
-            cola.ops.Diagonal(term1) @ D2x
-            + cola.ops.Diagonal(term2) @ Dx
-            + cola.ops.Diagonal(term3) @ Ix
-        )
-    out = cola.ops.BlockDiag(*out)
-    if approx_rdot:
-        return cola.ops.Kronecker(out, Ixi, It, Iz)
-    return cola.ops.Kronecker(out, Ixi, cola.ops.Kronecker(It, Iz))
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+    potentials : RosenbluthPotentials
+        Thing for calculating Rosenbluth potentials.
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        potentials: RosenbluthPotentials,
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+        self.potentials = potentials
+
+        # field particle collision operator has block structure
+        # | C_aa  C_ab | | f_a | = | R_a |
+        # | C_ba  C_bb | | f_b |   | R_b |
+        x = speedgrid.x
+        Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
+        It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+        Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+
+        C = []
+        Ca = []
+        for a, spa in enumerate(species):
+            va = spa.v_thermal
+            ma = spa.species.mass
+            v = x * va
+            Fa = spa(v)
+            for b, spb in enumerate(species):
+                gamma = monkes._species.gamma_ab(spa, spb, v)
+                vb = spb.v_thermal
+                mb = spb.species.mass
+                # need to evaluate fb on the speed grid for fa
+                # if va >> vb, then fa is "wider" in speed, and we're evaluating in
+                # the tail of fb, ie xq >> 1, so xq = va/vb x
+                xq = va / vb * x
+                # matrix to evaluate fb at xq
+                Dab = cola.ops.Dense(
+                    orthax.orthvander(xq, speedgrid.nx - 1, speedgrid.xrec)
+                    * speedgrid.xrec.weight(xq[:, None])
+                )
+                prefactor = cola.ops.Diagonal(gamma * Fa * 4 * jnp.pi * ma / mb)
+                CDab = prefactor @ Dab
+                Ca.append(CDab)
+            C.append(Ca)
+            Ca = []
+        C = BlockOperator(C)
+        super().__init__(C, Ixi, It, Iz)
+
+
+class _CG(cola.ops.Kronecker):
+    """Rosenbluth G part of the field particle collision operator.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+    potentials : RosenbluthPotentials
+        Thing for calculating Rosenbluth potentials.
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        potentials: RosenbluthPotentials,
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+        self.potentials = potentials
+
+        # field particle collision operator has block structure
+        # | C_aa  C_ab | | f_a | = | R_a |
+        # | C_ba  C_bb | | f_b |   | R_b |
+
+        x = speedgrid.x
+        Ix = cola.ops.Identity((x.size, x.size), x.dtype)
+        Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
+        It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+        Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+        # G is in modal basis in xi
+        # these go from nodal xi to modal l, and back
+        # G is effectively block diagonal in l
+        Txi_inv = cola.ops.Kronecker(Ix, cola.ops.Dense(pitchgrid.xivander_inv))
+        Txi = cola.ops.Kronecker(Ix, cola.ops.Dense(pitchgrid.xivander))
+
+        C = []
+        Ca = []
+        for a, spa in enumerate(species):
+            va = spa.v_thermal
+            v = x * va
+            Fa = spa(v)
+            for b, spb in enumerate(species):
+                gamma = monkes._species.gamma_ab(spa, spb, v)
+                vb = spb.v_thermal
+                ddGxlk = potentials.ddGxlk[a, b]
+                # its diagonal in legendre index (axis position 1)
+                ddGxkli = jax.vmap(jax.vmap(jnp.diag, in_axes=0), in_axes=2)(ddGxlk)
+                ddGxilk = jnp.swapaxes(ddGxkli, 3, 1)
+                ddGxikl = jnp.swapaxes(ddGxilk, 2, 3)
+                ddG = ddGxikl.reshape(
+                    (speedgrid.nx * pitchgrid.nxi, speedgrid.nx * pitchgrid.nxi)
+                ).T
+                ddG = cola.ops.Dense(ddG)
+                ddGab = (
+                    Txi @ ddG @ Txi_inv
+                )  # project onto legendre, apply potentials, and transform back
+                prefactor = cola.ops.Diagonal(gamma * Fa * 2 * v**2 * vb**2 / va**4)
+                CGab = cola.ops.Kronecker(prefactor, Ixi) @ ddGab
+                Ca.append(CGab)
+            C.append(Ca)
+            Ca = []
+        C = BlockOperator(C)
+        super().__init__(C, It, Iz)
+
+
+class _CH(cola.ops.Kronecker):
+    """Rosenbluth H part of the field particle collision operator.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+    potentials : RosenbluthPotentials
+        Thing for calculating Rosenbluth potentials.
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        speedgrid: SpeedGrid,
+        pitchgrid: PitchAngleGrid,
+        species: list[LocalMaxwellian],
+        potentials: RosenbluthPotentials,
+    ):
+        self.field = field
+        self.speedgrid = speedgrid
+        self.pitchgrid = pitchgrid
+        self.species = species
+        self.potentials = potentials
+
+        # field particle collision operator has block structure
+        # | C_aa  C_ab | | f_a | = | R_a |
+        # | C_ba  C_bb | | f_b |   | R_b |
+
+        x = speedgrid.x
+        Ix = cola.ops.Identity((x.size, x.size), x.dtype)
+        Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
+        It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+        Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+        # H is in modal basis in xi
+        # these go from nodal xi to modal l, and back
+        # H is effectively block diagonal in l
+        Txi_inv = cola.ops.Kronecker(Ix, cola.ops.Dense(pitchgrid.xivander_inv))
+        Txi = cola.ops.Kronecker(Ix, cola.ops.Dense(pitchgrid.xivander))
+
+        C = []
+        Ca = []
+        for a, spa in enumerate(species):
+            va = spa.v_thermal
+            ma = spa.species.mass
+            v = x * va
+            Fa = spa(v)
+            for b, spb in enumerate(species):
+                gamma = monkes._species.gamma_ab(spa, spb, v)
+                vb = spb.v_thermal
+                mb = spb.species.mass
+                Hxlk = potentials.Hxlk[a, b]
+                # its diagonal in legendre index (axis position 1)
+                Hxkli = jax.vmap(jax.vmap(jnp.diag, in_axes=0), in_axes=2)(Hxlk)
+                Hxilk = jnp.swapaxes(Hxkli, 3, 1)
+                Hxikl = jnp.swapaxes(Hxilk, 2, 3)
+                H = Hxikl.reshape(
+                    (speedgrid.nx * pitchgrid.nxi, speedgrid.nx * pitchgrid.nxi)
+                ).T
+                H = cola.ops.Dense(H)
+                Hab = (
+                    Txi @ H @ Txi_inv
+                )  # project onto legendre, apply potentials, and transform back
+                dHxlk = potentials.dHxlk[a, b]
+                # its diagonal in legendre index (axis position 1)
+                dHxkli = jax.vmap(jax.vmap(jnp.diag, in_axes=0), in_axes=2)(dHxlk)
+                dHxilk = jnp.swapaxes(dHxkli, 3, 1)
+                dHxikl = jnp.swapaxes(dHxilk, 2, 3)
+                dH = dHxikl.reshape(
+                    (speedgrid.nx * pitchgrid.nxi, speedgrid.nx * pitchgrid.nxi)
+                ).T
+                dH = cola.ops.Dense(dH)
+                dHab = (
+                    Txi @ dH @ Txi_inv
+                )  # project onto legendre, apply potentials, and transform back
+                H_prefactor = cola.ops.Diagonal(-2 * vb**2 / va**2 * gamma * Fa)
+                dH_prefactor = cola.ops.Diagonal(
+                    -2 * v / va**2 * vb**2 * (1 - ma / mb) * gamma * Fa
+                )
+                CHab = (
+                    cola.ops.Kronecker(H_prefactor, Ixi) @ Hab
+                    + cola.ops.Kronecker(dH_prefactor, Ixi) @ dHab
+                )
+                Ca.append(CHab)
+            C.append(Ca)
+            Ca = []
+        C = BlockOperator(C)
+        super().__init__(C, It, Iz)
