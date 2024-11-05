@@ -28,6 +28,8 @@ class RosenbluthPotentials(eqx.Module):
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
+    nL : int
+        Number of Legendre modes to use for potentials.
     quad : bool
         Whether to compute potentials using quadrature or incomplete gamma functions
     """
@@ -39,14 +41,14 @@ class RosenbluthPotentials(eqx.Module):
     Hxlk: jax.Array
     dHxlk: jax.Array
 
-    def __init__(self, speedgrid, pitchgrid, species, quad=True):
+    def __init__(self, speedgrid, pitchgrid, species, nL=4, quad=True):
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.quad = quad
 
         ns = len(species)
         x = self.speedgrid.x[:, None, None]
-        l = jnp.arange(self.pitchgrid.nxi)[None, :, None]
+        l = jnp.arange(nL)[None, :, None]
         k = jnp.arange(self.speedgrid.nx)[None, None, :]
         self.ddGxlk = jnp.zeros(
             (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
@@ -63,12 +65,12 @@ class RosenbluthPotentials(eqx.Module):
                 va, vb = spa.v_thermal, spb.v_thermal
                 v = x * va  # speed on a grid
                 xb = v / vb  # on b grid
-                ddG = jax.jit(jnp.vectorize(self._ddGlk))(xb, l, k)
-                dH = jax.jit(jnp.vectorize(self._dHlk))(xb, l, k)
-                H = jax.jit(jnp.vectorize(self._Hlk))(xb, l, k)
-                self.ddGxlk = self.ddGxlk.at[a, b].set(ddG)
-                self.dHxlk = self.dHxlk.at[a, b].set(dH)
-                self.Hxlk = self.Hxlk.at[a, b].set(H)
+                ddG = self._ddGlk(xb, l, k)
+                dH = self._dHlk(xb, l, k)
+                H = self._Hlk(xb, l, k)
+                self.ddGxlk = self.ddGxlk.at[a, b, :, :nL, :].set(ddG)
+                self.dHxlk = self.dHxlk.at[a, b, :, :nL, :].set(dH)
+                self.Hxlk = self.Hxlk.at[a, b, :, :nL, :].set(H)
 
     def rosenbluth_ddG(self, f, a, b):
         """Second derivative of G potential for species indices a, b"""
