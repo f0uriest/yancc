@@ -152,7 +152,11 @@ class RosenbluthPotentials(eqx.Module):
     @functools.partial(jnp.vectorize, excluded=[0])
     def _I_1(self, x, l, k):
         if self.quad:
-            return quadax.quadgk(self._integrand1, (x, np.inf), (l, k))[0]
+            f, info = quadax.quadcc(
+                self._integrand1, (x, np.inf), (l, k), order=256, max_ninter=10
+            )
+            f = eqx.error_if(f, info.status, "I_1 did not converge")
+            return f
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
@@ -163,7 +167,11 @@ class RosenbluthPotentials(eqx.Module):
     @functools.partial(jnp.vectorize, excluded=[0])
     def _I_2(self, x, l, k):
         if self.quad:
-            return quadax.quadgk(self._integrand2, (0, x), (l, k))[0]
+            f, info = quadax.quadcc(
+                self._integrand2, (0, x), (l, k), order=256, max_ninter=10
+            )
+            f = eqx.error_if(f, info.status, "I_2 did not converge")
+            return f
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
@@ -174,7 +182,11 @@ class RosenbluthPotentials(eqx.Module):
     @functools.partial(jnp.vectorize, excluded=[0])
     def _I_3(self, x, l, k):
         if self.quad:
-            return quadax.quadgk(self._integrand3, (x, np.inf), (l, k))[0]
+            f, info = quadax.quadcc(
+                self._integrand3, (x, np.inf), (l, k), order=256, max_ninter=10
+            )
+            f = eqx.error_if(f, info.status, "I_3 did not converge")
+            return f
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
@@ -185,7 +197,11 @@ class RosenbluthPotentials(eqx.Module):
     @functools.partial(jnp.vectorize, excluded=[0])
     def _I_4(self, x, l, k):
         if self.quad:
-            return quadax.quadgk(self._integrand4, (0, x), (l, k))[0]
+            f, info = quadax.quadcc(
+                self._integrand4, (0, x), (l, k), order=256, max_ninter=10
+            )
+            f = eqx.error_if(f, info.status, "I_4 did not converge")
+            return f
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
