@@ -13,7 +13,7 @@ import quadax
 from monkes import Field, LocalMaxwellian
 
 from .linalg import BlockOperator
-from .utils import Gammainc, Gammaincc
+from .utils import lGammainc, lGammaincc
 from .velocity_grids import PitchAngleGrid, SpeedGrid
 
 
@@ -160,8 +160,9 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
-        g = Gammaincc(-l / 2 + n / 2 + 1, x**2)
-        return jnp.sum(p * g)
+        sgn, lg = lGammaincc(-l / 2 + n / 2 + 1, x**2)
+        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
+        return sgn * jnp.exp(li) / 2
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -175,8 +176,9 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
-        g = Gammainc(l / 2 + n / 2 + 3 / 2, x**2)
-        return jnp.sum(p * g)
+        sgn, lg = lGammainc(l / 2 + n / 2 + 3 / 2, x**2)
+        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
+        return sgn * jnp.exp(li) / 2
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -190,8 +192,9 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
-        g = Gammaincc(-l / 2 + n / 2 + 2, x**2)
-        return jnp.sum(p * g)
+        sgn, lg = lGammaincc(-l / 2 + n / 2 + 2, x**2)
+        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
+        return sgn * jnp.exp(li) / 2
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -205,8 +208,9 @@ class RosenbluthPotentials(eqx.Module):
         c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
-        g = Gammainc(l / 2 + n / 2 + 5 / 2, x**2)
-        return jnp.sum(p * g)
+        sgn, lg = lGammainc(l / 2 + n / 2 + 5 / 2, x**2)
+        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
+        return sgn * jnp.exp(li) / 2
 
     @jax.jit
     @functools.partial(jnp.vectorize, excluded=[0])
