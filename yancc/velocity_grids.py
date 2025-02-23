@@ -43,7 +43,9 @@ class SpeedGrid(eqx.Module):
             domain=(0, self.xmax),
             n=nx + 1,
         )
-        self.x, self.wx = orthax.orthgauss(nx, self.xrec)
+        x, wx = orthax.orthgauss(nx, self.xrec)
+        self.x = x
+        self.wx = wx / self.xrec.weight(x)
         self.xvander = orthax.orthvander(
             self.x, self.nx - 1, self.xrec
         ) * self.xrec.weight(self.x[:, None])
@@ -120,5 +122,5 @@ class PitchAngleGrid(eqx.Module):
         self.Dxi = jax.jacfwd(_dxifun)(self.xi)
         self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
         k = jnp.arange(self.nxi)
-        kk = jnp.diag(k * (k + 1))
+        kk = -jnp.diag(k * (k + 1))
         self.L = self.xivander @ kk @ self.xivander_inv

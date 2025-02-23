@@ -411,6 +411,11 @@ class FieldParticleScattering(cola.ops.Sum):
         Species being considered
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
+
     """
 
     def __init__(
@@ -420,6 +425,7 @@ class FieldParticleScattering(cola.ops.Sum):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
+        approx_rdot=False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -427,9 +433,9 @@ class FieldParticleScattering(cola.ops.Sum):
         self.species = species
         self.potentials = potentials
 
-        CG = _CG(field, speedgrid, pitchgrid, species, potentials)
-        CH = _CH(field, speedgrid, pitchgrid, species, potentials)
-        CD = _CD(field, speedgrid, pitchgrid, species, potentials)
+        CG = _CG(field, speedgrid, pitchgrid, species, potentials, approx_rdot)
+        CH = _CH(field, speedgrid, pitchgrid, species, potentials, approx_rdot)
+        CD = _CD(field, speedgrid, pitchgrid, species, potentials, approx_rdot)
         super().__init__(CG, CH, CD)
 
 
@@ -572,6 +578,10 @@ class _CD(cola.ops.Kronecker):
         Species being considered
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
 
     """
 
@@ -582,6 +592,7 @@ class _CD(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
+        approx_rdot=False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -622,8 +633,12 @@ class _CD(cola.ops.Kronecker):
                 Ca.append(CDab)
             C.append(Ca)
             Ca = []
-        C = BlockOperator(C)
-        super().__init__(C, Ixi, It, Iz)
+        C = -BlockOperator(C)
+        if approx_rdot:
+            Ms = (C, Ixi, It, Iz)
+        else:
+            Ms = (C, Ixi, cola.ops.Kronecker(It, Iz))
+        super().__init__(*Ms)
 
 
 class _CG(cola.ops.Kronecker):
@@ -641,6 +656,10 @@ class _CG(cola.ops.Kronecker):
         Species being considered
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
 
     """
 
@@ -651,6 +670,7 @@ class _CG(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
+        approx_rdot=False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -699,7 +719,7 @@ class _CG(cola.ops.Kronecker):
                 Ca.append(CGab)
             C.append(Ca)
             Ca = []
-        C = BlockOperator(C)
+        C = -BlockOperator(C)
         super().__init__(C, It, Iz)
 
 
@@ -718,6 +738,10 @@ class _CH(cola.ops.Kronecker):
         Species being considered
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
 
     """
 
@@ -728,6 +752,7 @@ class _CH(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
+        approx_rdot=False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -796,5 +821,5 @@ class _CH(cola.ops.Kronecker):
                 Ca.append(CHab)
             C.append(Ca)
             Ca = []
-        C = BlockOperator(C)
+        C = -BlockOperator(C)
         super().__init__(C, It, Iz)
