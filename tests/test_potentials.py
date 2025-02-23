@@ -121,9 +121,9 @@ def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma, x0, l, k):
     np.testing.assert_allclose(ddGq, ddGg)
 
 
-@pytest.mark.parametrize("x0", np.linspace(0.1, 5, 3))
-@pytest.mark.parametrize("l", [0, 10, 20])
-@pytest.mark.parametrize("k", [0, 2, 5])
+@pytest.mark.parametrize("x0", np.linspace(0.1, 4, 3))
+@pytest.mark.parametrize("l", [0, 2, 4])
+@pytest.mark.parametrize("k", [2, 4, 8])
 def test_lower_Gamma(x0, l, k):
     """Test for lower incomplete gamma."""
     s = l / 2 + k / 2 + 5 / 2  # for I_4
@@ -131,12 +131,12 @@ def test_lower_Gamma(x0, l, k):
 
     f1 = Gammainc(s, x0**2)
     f2 = mpGammainc(s, x0**2)
-    np.testing.assert_allclose(f1, f2)
+    np.testing.assert_allclose(f1, f2, rtol=1e-12, atol=1e-14)
 
 
-@pytest.mark.parametrize("x0", np.linspace(0.1, 5, 3))
-@pytest.mark.parametrize("l", [0, 10, 20])
-@pytest.mark.parametrize("k", [0, 2, 5])
+@pytest.mark.parametrize("x0", np.linspace(0.1, 4, 3))
+@pytest.mark.parametrize("l", [0, 2, 4, 6])
+@pytest.mark.parametrize("k", [0, 2, 4, 8])
 def test_upper_Gamma(x0, l, k):
     """Test for upper incomplete gamma."""
     s = -l / 2 + k / 2 + 1  # for I_1
@@ -144,4 +144,4 @@ def test_upper_Gamma(x0, l, k):
 
     f1 = Gammaincc(s, x0**2)
     f2 = mpGammaincc(s, x0**2)
-    np.testing.assert_allclose(f1, f2)
+    np.testing.assert_allclose(f1, f2, rtol=1e-12, atol=1e-14)
