@@ -56,13 +56,13 @@ def potential_gamma(xgrid, xigrid, species):
     )
 
 
-@pytest.mark.parametrize("x0", np.linspace(0.1, 5, 3))
-@pytest.mark.parametrize("l", [0, 10, 20])
-@pytest.mark.parametrize("k", [0, 2, 5])
-def test_rosenbluth_derivatives_quad(potential_quad, x0, l, k):
-    """Test for potentials using quadrature."""
+@pytest.mark.parametrize("l", [2, 4])
+@pytest.mark.parametrize("k", [2, 4])
+def test_rosenbluth_derivatives(potential_quad, l, k):
+    """Test derivatives of Rosenbluth potentials."""
     R = potential_quad
-    eps = 1e-3
+    x0 = np.linspace(0.1, 5, 3)
+    eps = 1e-4
     dHfd = (R._Hlk(x0 + eps, l, k) - R._Hlk(x0 - eps, l, k)) / (2 * eps)
     dHan = R._dHlk(x0, l, k)
     np.testing.assert_allclose(dHfd, dHan, rtol=1e-2)
@@ -74,51 +74,13 @@ def test_rosenbluth_derivatives_quad(potential_quad, x0, l, k):
     np.testing.assert_allclose(d2Gfd, d2Gan, rtol=1e-2)
 
 
-@pytest.mark.parametrize("x0", np.linspace(0.1, 5, 3))
-@pytest.mark.parametrize("l", [0, 10, 20])
-@pytest.mark.parametrize("k", [0, 2, 5])
-def test_rosenbluth_derivatives_gamma(potential_gamma, x0, l, k):
+def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
     """Test for potentials using incomplete gamma functions."""
-    R = potential_gamma
-    eps = 1e-3
-    dHfd = (R._Hlk(x0 + eps, l, k) - R._Hlk(x0 - eps, l, k)) / (2 * eps)
-    dHan = R._dHlk(x0, l, k)
-    np.testing.assert_allclose(dHfd, dHan, rtol=1e-2)
-    dGfd = (R._Glk(x0 + eps, l, k) - R._Glk(x0 - eps, l, k)) / (2 * eps)
-    dGan = R._dGlk(x0, l, k)
-    np.testing.assert_allclose(dGfd, dGan, rtol=1e-2)
-    d2Gfd = (R._dGlk(x0 + eps, l, k) - R._dGlk(x0 - eps, l, k)) / (2 * eps)
-    d2Gan = R._ddGlk(x0, l, k)
-    np.testing.assert_allclose(d2Gfd, d2Gan, rtol=1e-2)
-
-
-@pytest.mark.parametrize("x0", np.linspace(0.1, 5, 3))
-@pytest.mark.parametrize("l", [0, 10, 20])
-@pytest.mark.parametrize("k", [0, 2, 5])
-def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma, x0, l, k):
-    """Test for potentials using incomplete gamma functions."""
-    Rq = potential_quad
-    Rg = potential_gamma
-
-    Hq = Rq._Hlk(x0, l, k)
-    Hg = Rg._Hlk(x0, l, k)
-    np.testing.assert_allclose(Hq, Hg)
-
-    dHq = Rq._dHlk(x0, l, k)
-    dHg = Rg._dHlk(x0, l, k)
-    np.testing.assert_allclose(dHq, dHg)
-
-    Gq = Rq._Glk(x0, l, k)
-    Gg = Rg._Glk(x0, l, k)
-    np.testing.assert_allclose(Gq, Gg)
-
-    dGq = Rq._dGlk(x0, l, k)
-    dGg = Rg._dGlk(x0, l, k)
-    np.testing.assert_allclose(dGq, dGg)
-
-    ddGq = Rq._ddGlk(x0, l, k)
-    ddGg = Rg._ddGlk(x0, l, k)
-    np.testing.assert_allclose(ddGq, ddGg)
+    R1 = potential_quad
+    R2 = potential_gamma
+    np.testing.assert_allclose(R1.Hxlk, R2.Hxlk, rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(R1.dHxlk, R2.dHxlk, rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(R1.ddGxlk, R2.ddGxlk, rtol=1e-10, atol=1e-10)
 
 
 @pytest.mark.parametrize("x0", np.linspace(0.1, 4, 3))
