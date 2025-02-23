@@ -31,7 +31,8 @@ class RosenbluthPotentials(eqx.Module):
     nL : int
         Number of Legendre modes to use for potentials.
     quad : bool
-        Whether to compute potentials using quadrature or incomplete gamma functions
+        Whether to compute potentials using quadrature (slow) or incomplete gamma
+        functions (fast)
     """
 
     speedgrid: SpeedGrid
@@ -41,7 +42,7 @@ class RosenbluthPotentials(eqx.Module):
     Hxlk: jax.Array
     dHxlk: jax.Array
 
-    def __init__(self, speedgrid, pitchgrid, species, nL=4, quad=True):
+    def __init__(self, speedgrid, pitchgrid, species, nL=4, quad=False):
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.quad = quad
