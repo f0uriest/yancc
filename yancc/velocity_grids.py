@@ -123,4 +123,5 @@ class PitchAngleGrid(eqx.Module):
         self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
         k = jnp.arange(self.nxi)
         kk = -jnp.diag(k * (k + 1))
+        # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv

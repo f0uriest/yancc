@@ -491,10 +491,12 @@ class PitchAngleScattering(cola.ops.Kronecker):
                 nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
             nus.append(nu / 2)
         nus = cola.ops.Diagonal(jnp.array(nus).flatten()) @ cola.ops.Kronecker(Is, Ix)
+        # LHS of DKE is like F - C, so we put the minus sign here so that we can just
+        # sum the different operators
         if approx_rdot:
-            Ms = (nus, L, It, Iz)
+            Ms = (nus, -L, It, Iz)
         else:
-            Ms = (nus, L, cola.ops.Kronecker(It, Iz))
+            Ms = (nus, -L, cola.ops.Kronecker(It, Iz))
         super().__init__(*Ms)
 
 
@@ -561,10 +563,12 @@ class EnergyScattering(cola.ops.Kronecker):
                 + cola.ops.Diagonal(term3) @ Ix
             )
         out = cola.ops.BlockDiag(*out)
+        # LHS of DKE is like F - C, so we put the minus sign here so that we can just
+        # sum the different operators
         if approx_rdot:
-            Ms = (out, Ixi, It, Iz)
+            Ms = (-out, Ixi, It, Iz)
         else:
-            Ms = (out, Ixi, cola.ops.Kronecker(It, Iz))
+            Ms = (-out, Ixi, cola.ops.Kronecker(It, Iz))
         super().__init__(*Ms)
 
 
@@ -638,11 +642,13 @@ class _CD(cola.ops.Kronecker):
                 Ca.append(CDab)
             C.append(Ca)
             Ca = []
-        C = -BlockOperator(C)
+        C = BlockOperator(C)
+        # LHS of DKE is like F - C, so we put the minus sign here so that we can just
+        # sum the different operators
         if approx_rdot:
-            Ms = (C, Ixi, It, Iz)
+            Ms = (-C, Ixi, It, Iz)
         else:
-            Ms = (C, Ixi, cola.ops.Kronecker(It, Iz))
+            Ms = (-C, Ixi, cola.ops.Kronecker(It, Iz))
         super().__init__(*Ms)
 
 
@@ -724,8 +730,10 @@ class _CG(cola.ops.Kronecker):
                 Ca.append(CGab)
             C.append(Ca)
             Ca = []
-        C = -BlockOperator(C)
-        super().__init__(C, It, Iz)
+        C = BlockOperator(C)
+        # LHS of DKE is like F - C, so we put the minus sign here so that we can just
+        # sum the different operators
+        super().__init__(-C, It, Iz)
 
 
 class _CH(cola.ops.Kronecker):
@@ -826,5 +834,7 @@ class _CH(cola.ops.Kronecker):
                 Ca.append(CHab)
             C.append(Ca)
             Ca = []
-        C = -BlockOperator(C)
-        super().__init__(C, It, Iz)
+        C = BlockOperator(C)
+        # LHS of DKE is like F - C, so we put the minus sign here so that we can just
+        # sum the different operators
+        super().__init__(-C, It, Iz)
