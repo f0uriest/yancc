@@ -838,3 +838,50 @@ class _CH(cola.ops.Kronecker):
         # LHS of DKE is like F - C, so we put the minus sign here so that we can just
         # sum the different operators
         super().__init__(-C, It, Iz)
+
+
+class MonoenergeticPitchAngleScattering(cola.ops.Kronecker):
+    """Pitch angle scattering collision operator.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : LocalMaxwellian
+        Species being considered
+    v : float
+        Speed being considered.
+    approx_rdot : bool
+        Whether to approximate the surface terms by decoupling theta and zeta. Should
+        be False for the main operator, but setting to True for the preconditioner can
+        improve performance.
+
+    """
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: PitchAngleGrid,
+        species: LocalMaxwellian,
+        v: float,
+        approx_rdot: bool = False,
+    ):
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.species = species
+        self.v = v
+
+        It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
+        Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
+        L = cola.ops.Dense(pitchgrid.L)
+
+        nu = monkes._species.nuD_ab(species, species, v) / 2
+        # LHS of DKE is like F - C, so we put the minus sign here so that we can just
+        # sum the different operators
+        if approx_rdot:
+            Ms = (-nu * L, It, Iz)
+        else:
+            Ms = (-nu * L, cola.ops.Kronecker(It, Iz))
+        super().__init__(*Ms)
