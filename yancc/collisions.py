@@ -379,6 +379,8 @@ class FokkerPlanckLandau(cola.ops.Sum):
         Species being considered
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -388,16 +390,22 @@ class FokkerPlanckLandau(cola.ops.Sum):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
         self.potentials = potentials
+        self.normalize = normalize
 
-        CL = PitchAngleScattering(field, speedgrid, pitchgrid, species)
-        CE = EnergyScattering(field, speedgrid, pitchgrid, species)
-        CF = FieldParticleScattering(field, speedgrid, pitchgrid, species, potentials)
+        CL = PitchAngleScattering(
+            field, speedgrid, pitchgrid, species, normalize=normalize
+        )
+        CE = EnergyScattering(field, speedgrid, pitchgrid, species, normalize=normalize)
+        CF = FieldParticleScattering(
+            field, speedgrid, pitchgrid, species, potentials, normalize=normalize
+        )
         super().__init__(CL, CE, CF)
 
 
@@ -420,6 +428,8 @@ class FieldParticleScattering(cola.ops.Sum):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     """
 
@@ -430,17 +440,43 @@ class FieldParticleScattering(cola.ops.Sum):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
-        approx_rdot=False,
+        approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
         self.potentials = potentials
+        self.normalize = normalize
 
-        CG = _CG(field, speedgrid, pitchgrid, species, potentials, approx_rdot)
-        CH = _CH(field, speedgrid, pitchgrid, species, potentials, approx_rdot)
-        CD = _CD(field, speedgrid, pitchgrid, species, potentials, approx_rdot)
+        CG = _CG(
+            field,
+            speedgrid,
+            pitchgrid,
+            species,
+            potentials,
+            approx_rdot,
+            normalize=normalize,
+        )
+        CH = _CH(
+            field,
+            speedgrid,
+            pitchgrid,
+            species,
+            potentials,
+            approx_rdot,
+            normalize=normalize,
+        )
+        CD = _CD(
+            field,
+            speedgrid,
+            pitchgrid,
+            species,
+            potentials,
+            approx_rdot,
+            normalize=normalize,
+        )
         super().__init__(CG, CH, CD)
 
 
@@ -461,6 +497,8 @@ class PitchAngleScattering(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     """
 
@@ -471,11 +509,13 @@ class PitchAngleScattering(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
+        self.normalize = normalize
 
         Is = cola.ops.Identity((len(species), len(species)), pitchgrid.xi.dtype)
         Ix = cola.ops.Dense(speedgrid.xvander)
@@ -489,7 +529,10 @@ class PitchAngleScattering(cola.ops.Kronecker):
             nu = 0.0
             for spb in species:
                 nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
-            nus.append(nu / 2)
+            if normalize:
+                nus.append(nu / 2 / spa.v_thermal)
+            else:
+                nus.append(nu / 2)
         nus = cola.ops.Diagonal(jnp.array(nus).flatten()) @ cola.ops.Kronecker(Is, Ix)
         # LHS of DKE is like F - C, so we put the minus sign here so that we can just
         # sum the different operators
@@ -517,6 +560,8 @@ class EnergyScattering(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     """
 
@@ -527,11 +572,13 @@ class EnergyScattering(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
+        self.normalize = normalize
 
         Ix = cola.ops.Dense(speedgrid.xvander)
         Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
@@ -557,6 +604,10 @@ class EnergyScattering(cola.ops.Kronecker):
                 term1 += nupar * x**2 / 2
                 term2 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
                 term3 += 4 * jnp.pi * gamma * ma / mb * spb(v)
+            if normalize:
+                term1 /= spa.v_thermal
+                term2 /= spa.v_thermal
+                term3 /= spa.v_thermal
             out.append(
                 cola.ops.Diagonal(term1) @ D2x
                 + cola.ops.Diagonal(term2) @ Dx
@@ -591,6 +642,8 @@ class _CD(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     """
 
@@ -601,13 +654,15 @@ class _CD(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
-        approx_rdot=False,
+        approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
         self.potentials = potentials
+        self.normalize = normalize
 
         # field particle collision operator has block structure
         # | C_aa  C_ab | | f_a | = | R_a |
@@ -638,6 +693,8 @@ class _CD(cola.ops.Kronecker):
                     * speedgrid.xrec.weight(xq[:, None])
                 )
                 prefactor = cola.ops.Diagonal(gamma * Fa * 4 * jnp.pi * ma / mb)
+                if normalize:
+                    prefactor /= spa.v_thermal
                 CDab = prefactor @ Dab
                 Ca.append(CDab)
             C.append(Ca)
@@ -671,6 +728,8 @@ class _CG(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     """
 
@@ -681,13 +740,15 @@ class _CG(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
-        approx_rdot=False,
+        approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
         self.potentials = potentials
+        self.normalize = normalize
 
         # field particle collision operator has block structure
         # | C_aa  C_ab | | f_a | = | R_a |
@@ -726,6 +787,8 @@ class _CG(cola.ops.Kronecker):
                     Txi @ ddG @ Txi_inv
                 )  # project onto legendre, apply potentials, and transform back
                 prefactor = cola.ops.Diagonal(gamma * Fa * 2 * v**2 * vb**2 / va**4)
+                if normalize:
+                    prefactor /= spa.v_thermal
                 CGab = cola.ops.Kronecker(prefactor, Ixi) @ ddGab
                 Ca.append(CGab)
             C.append(Ca)
@@ -755,6 +818,8 @@ class _CH(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     """
 
@@ -765,13 +830,15 @@ class _CH(cola.ops.Kronecker):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
-        approx_rdot=False,
+        approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
         self.potentials = potentials
+        self.normalize = normalize
 
         # field particle collision operator has block structure
         # | C_aa  C_ab | | f_a | = | R_a |
@@ -808,9 +875,8 @@ class _CH(cola.ops.Kronecker):
                     (speedgrid.nx * pitchgrid.nxi, speedgrid.nx * pitchgrid.nxi)
                 ).T
                 H = cola.ops.Dense(H)
-                Hab = (
-                    Txi @ H @ Txi_inv
-                )  # project onto legendre, apply potentials, and transform back
+                # project onto legendre, apply potentials, and transform back
+                Hab = Txi @ H @ Txi_inv
                 dHxlk = potentials.dHxlk[a, b]
                 # its diagonal in legendre index (axis position 1)
                 dHxkli = jax.vmap(jax.vmap(jnp.diag, in_axes=0), in_axes=2)(dHxlk)
@@ -820,16 +886,16 @@ class _CH(cola.ops.Kronecker):
                     (speedgrid.nx * pitchgrid.nxi, speedgrid.nx * pitchgrid.nxi)
                 ).T
                 dH = cola.ops.Dense(dH)
-                dHab = (
-                    Txi @ dH @ Txi_inv
-                )  # project onto legendre, apply potentials, and transform back
-                H_prefactor = cola.ops.Diagonal(-2 * vb**2 / va**2 * gamma * Fa)
-                dH_prefactor = cola.ops.Diagonal(
-                    -2 * v / va**2 * vb**2 * (1 - ma / mb) * gamma * Fa
-                )
+                # project onto legendre, apply potentials, and transform back
+                dHab = Txi @ dH @ Txi_inv
+                H_prefactor = -2 * vb**2 / va**2 * gamma * Fa
+                dH_prefactor = -2 * v / va**2 * vb**2 * (1 - ma / mb) * gamma * Fa
+                if normalize:
+                    H_prefactor /= spa.v_thermal
+                    dH_prefactor /= spa.v_thermal
                 CHab = (
-                    cola.ops.Kronecker(H_prefactor, Ixi) @ Hab
-                    + cola.ops.Kronecker(dH_prefactor, Ixi) @ dHab
+                    cola.ops.Kronecker(cola.ops.Diagonal(H_prefactor), Ixi) @ Hab
+                    + cola.ops.Kronecker(cola.ops.Diagonal(dH_prefactor), Ixi) @ dHab
                 )
                 Ca.append(CHab)
             C.append(Ca)
@@ -857,6 +923,8 @@ class MonoenergeticPitchAngleScattering(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by speed to non-dimensionalize
 
     """
 
@@ -867,21 +935,26 @@ class MonoenergeticPitchAngleScattering(cola.ops.Kronecker):
         species: LocalMaxwellian,
         v: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
         self.species = species
         self.v = v
+        self.normalize = normalize
 
         It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
         Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
         L = cola.ops.Dense(pitchgrid.L)
 
         nu = monkes._species.nuD_ab(species, species, v) / 2
+        if normalize:
+            nu /= v
+        nu = cola.ops.Dense(jnp.atleast_2d(nu))
         # LHS of DKE is like F - C, so we put the minus sign here so that we can just
         # sum the different operators
         if approx_rdot:
-            Ms = (-nu * L, It, Iz)
+            Ms = (-nu, L, It, Iz)
         else:
-            Ms = (-nu * L, cola.ops.Kronecker(It, Iz))
+            Ms = (-nu, L, cola.ops.Kronecker(It, Iz))
         super().__init__(*Ms)

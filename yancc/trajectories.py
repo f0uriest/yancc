@@ -25,6 +25,8 @@ class FullTrajectories(cola.ops.Sum):
         Species being considered
     E_psi : float
         Radial electric field.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -34,18 +36,30 @@ class FullTrajectories(cola.ops.Sum):
         pitchgrid: PitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
         self.E_psi = E_psi
+        self.normalize = normalize
 
-        rdot1 = FullTrajectoriesSurface1(field, speedgrid, pitchgrid, species, E_psi)
-        rdot2 = FullTrajectoriesSurface2(field, speedgrid, pitchgrid, species, E_psi)
-        xidot1 = FullTrajectoriesPitch1(field, speedgrid, pitchgrid, species, E_psi)
-        xidot2 = FullTrajectoriesPitch2(field, speedgrid, pitchgrid, species, E_psi)
-        xdot = FullTrajectoriesSpeed(field, speedgrid, pitchgrid, species, E_psi)
+        rdot1 = FullTrajectoriesSurface1(
+            field, speedgrid, pitchgrid, species, E_psi, normalize=normalize
+        )
+        rdot2 = FullTrajectoriesSurface2(
+            field, speedgrid, pitchgrid, species, E_psi, normalize=normalize
+        )
+        xidot1 = FullTrajectoriesPitch1(
+            field, speedgrid, pitchgrid, species, E_psi, normalize=normalize
+        )
+        xidot2 = FullTrajectoriesPitch2(
+            field, speedgrid, pitchgrid, species, E_psi, normalize=normalize
+        )
+        xdot = FullTrajectoriesSpeed(
+            field, speedgrid, pitchgrid, species, E_psi, normalize=normalize
+        )
         super().__init__(rdot1, rdot2, xidot1, xidot2, xdot)
 
 
@@ -64,6 +78,8 @@ class DKESTrajectories(cola.ops.Sum):
         Speed being considered.
     E_psi : float
         Radial electric field.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -73,16 +89,24 @@ class DKESTrajectories(cola.ops.Sum):
         species: LocalMaxwellian,
         v: float,
         E_psi: float,
+        normalize: bool = False,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
         self.species = species
         self.v = v
         self.E_psi = E_psi
+        self.normalize = normalize
 
-        rdot1 = DKESTrajectoriesSurface1(field, pitchgrid, species, v, E_psi)
-        rdot2 = DKESTrajectoriesSurface2(field, pitchgrid, species, v, E_psi)
-        xidot = DKESTrajectoriesPitch(field, pitchgrid, species, v, E_psi)
+        rdot1 = DKESTrajectoriesSurface1(
+            field, pitchgrid, species, v, E_psi, normalize=normalize
+        )
+        rdot2 = DKESTrajectoriesSurface2(
+            field, pitchgrid, species, v, E_psi, normalize=normalize
+        )
+        xidot = DKESTrajectoriesPitch(
+            field, pitchgrid, species, v, E_psi, normalize=normalize
+        )
         super().__init__(rdot1, rdot2, xidot)
 
 
@@ -105,6 +129,8 @@ class FullTrajectoriesSpeed(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -115,6 +141,7 @@ class FullTrajectoriesSpeed(cola.ops.Kronecker):
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -122,8 +149,13 @@ class FullTrajectoriesSpeed(cola.ops.Kronecker):
         self.species = species
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
-        Is = cola.ops.Identity((len(species), len(species)), speedgrid.x.dtype)
+        if normalize:
+            vth = jnp.array([sp.v_thermal for sp in species])
+        else:
+            vth = jnp.ones(len(species))
+        Is = cola.ops.Diagonal(E_psi / vth)
         pxi2 = cola.ops.Diagonal(1 + pitchgrid.xi**2)
         xDx = cola.ops.Diagonal(speedgrid.x) @ cola.ops.Dense(
             speedgrid.xvander @ speedgrid.Dx
@@ -136,7 +168,7 @@ class FullTrajectoriesSpeed(cola.ops.Kronecker):
             BxgradpsidotgradB_over_2B3 = cola.ops.Diagonal(
                 (field.BxgradpsidotgradB / (2 * field.Bmag**3)).flatten()
             )
-            Ms = (cola.ops.Kronecker(E_psi * Is, xDx), pxi2, BxgradpsidotgradB_over_2B3)
+            Ms = (cola.ops.Kronecker(Is, xDx), pxi2, BxgradpsidotgradB_over_2B3)
         super().__init__(*Ms)
 
 
@@ -159,6 +191,8 @@ class FullTrajectoriesPitch1(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -169,6 +203,7 @@ class FullTrajectoriesPitch1(cola.ops.Kronecker):
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -176,11 +211,15 @@ class FullTrajectoriesPitch1(cola.ops.Kronecker):
         self.species = species
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
         mxi2 = cola.ops.Diagonal(1 - pitchgrid.xi**2)
         Dxi = cola.ops.Dense(pitchgrid.Dxi_pseudospectral)
         xa = cola.ops.Diagonal(speedgrid.x) @ cola.ops.Dense(speedgrid.xvander)
-        vth = cola.ops.Diagonal(jnp.array([s.v_thermal for s in species]))
+        if normalize:
+            vth = cola.ops.Identity((len(species), len(species)), speedgrid.x.dtype)
+        else:
+            vth = cola.ops.Diagonal(jnp.array([s.v_thermal for s in species]))
         v = cola.ops.Kronecker(vth, xa)
         if approx_rdot:
             A = field.bdotgradB / (2 * field.Bmag)
@@ -213,6 +252,8 @@ class FullTrajectoriesPitch2(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -223,6 +264,7 @@ class FullTrajectoriesPitch2(cola.ops.Kronecker):
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -230,10 +272,15 @@ class FullTrajectoriesPitch2(cola.ops.Kronecker):
         self.species = species
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
-        Is = cola.ops.Identity((len(species), len(species)), speedgrid.x.dtype)
+        if normalize:
+            vth = jnp.array([sp.v_thermal for sp in species])
+        else:
+            vth = jnp.ones(len(species))
+        Is = cola.ops.Diagonal(E_psi / vth)
         Ix = cola.ops.Dense(speedgrid.xvander)
-        E_I = E_psi * cola.ops.Kronecker(Is, Ix)
+        E_I = cola.ops.Kronecker(Is, Ix)
         xi = cola.ops.Diagonal(pitchgrid.xi)
         mxi2 = cola.ops.Diagonal(1 - pitchgrid.xi**2)
         Dxi = cola.ops.Dense(pitchgrid.Dxi_pseudospectral)
@@ -268,6 +315,8 @@ class FullTrajectoriesSurface1(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -278,6 +327,7 @@ class FullTrajectoriesSurface1(cola.ops.Kronecker):
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -285,9 +335,13 @@ class FullTrajectoriesSurface1(cola.ops.Kronecker):
         self.species = species
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
         xa = cola.ops.Diagonal(speedgrid.x) @ cola.ops.Dense(speedgrid.xvander)
-        vth = cola.ops.Diagonal(jnp.array([s.v_thermal for s in species]))
+        if normalize:
+            vth = cola.ops.Identity((len(species), len(species)), speedgrid.x.dtype)
+        else:
+            vth = cola.ops.Diagonal(jnp.array([s.v_thermal for s in species]))
         v = cola.ops.Kronecker(vth, xa)
         xi = cola.ops.Diagonal(pitchgrid.xi)
         It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
@@ -334,6 +388,8 @@ class FullTrajectoriesSurface2(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
     """
 
     def __init__(
@@ -344,6 +400,7 @@ class FullTrajectoriesSurface2(cola.ops.Kronecker):
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -351,15 +408,20 @@ class FullTrajectoriesSurface2(cola.ops.Kronecker):
         self.species = species
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
-        Is = cola.ops.Identity((len(species), len(species)), speedgrid.x.dtype)
+        if normalize:
+            vth = jnp.array([sp.v_thermal for sp in species])
+        else:
+            vth = jnp.ones(len(species))
+        Is = cola.ops.Diagonal(E_psi / vth)
         Ix = cola.ops.Dense(speedgrid.xvander)
         Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
         It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
         Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
         Dt = cola.ops.Dense(field.Dt)
         Dz = cola.ops.Dense(field.Dz)
-        E_I = E_psi * cola.ops.Kronecker(Is, Ix)
+        E_I = cola.ops.Kronecker(Is, Ix)
 
         if approx_rdot:
             A1 = field.B_sub_t / (field.Bmag**2 * field.sqrtg)
@@ -404,6 +466,8 @@ class DKESTrajectoriesPitch(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by speed to non-dimensionalize
     """
 
     def __init__(
@@ -414,6 +478,7 @@ class DKESTrajectoriesPitch(cola.ops.Kronecker):
         v: float,
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -421,18 +486,23 @@ class DKESTrajectoriesPitch(cola.ops.Kronecker):
         self.v = v
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
+        if normalize:
+            V = cola.ops.Dense(-jnp.atleast_2d(jnp.ones_like(v)))
+        else:
+            V = cola.ops.Dense(-jnp.atleast_2d(v))
         mxi2 = cola.ops.Diagonal(1 - pitchgrid.xi**2)
         Dxi = cola.ops.Dense(pitchgrid.Dxi_pseudospectral)
         if approx_rdot:
             A = field.bdotgradB / (2 * field.Bmag)
             Ak = approx_kron_diag2d(A.flatten(), *A.shape)
-            Ms = (-v * mxi2 @ Dxi, *Ak.Ms)
+            Ms = (V, mxi2 @ Dxi, *Ak.Ms)
         else:
             bdotgradB_over_2B = cola.ops.Diagonal(
                 (field.bdotgradB / (2 * field.Bmag)).flatten()
             )
-            Ms = (-v * mxi2 @ Dxi, bdotgradB_over_2B)
+            Ms = (V, mxi2 @ Dxi, bdotgradB_over_2B)
         super().__init__(*Ms)
 
 
@@ -455,6 +525,8 @@ class DKESTrajectoriesSurface1(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by speed to non-dimensionalize
     """
 
     def __init__(
@@ -465,6 +537,7 @@ class DKESTrajectoriesSurface1(cola.ops.Kronecker):
         v: float,
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -472,8 +545,13 @@ class DKESTrajectoriesSurface1(cola.ops.Kronecker):
         self.v = v
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
-        xi = v * cola.ops.Diagonal(pitchgrid.xi)
+        if normalize:
+            V = cola.ops.Dense(jnp.atleast_2d(jnp.ones_like(v)))
+        else:
+            V = cola.ops.Dense(jnp.atleast_2d(v))
+        xi = cola.ops.Diagonal(pitchgrid.xi)
         It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
         Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
         Dt = cola.ops.Dense(field.Dt)
@@ -486,7 +564,7 @@ class DKESTrajectoriesSurface1(cola.ops.Kronecker):
             B1 = prodkron2kronprod(Ak1 @ cola.ops.Kronecker(Dt, Iz))
             B2 = prodkron2kronprod(Ak2 @ cola.ops.Kronecker(It, Dz))
             C = approx_sum_kron((B1, B2))
-            Ms = (v, xi, *C.Ms)
+            Ms = (V, xi, *C.Ms)
         else:
             B_sup_t_over_B = cola.ops.Diagonal((field.B_sup_t / field.Bmag).flatten())
             B_sup_z_over_B = cola.ops.Diagonal((field.B_sup_z / field.Bmag).flatten())
@@ -495,7 +573,7 @@ class DKESTrajectoriesSurface1(cola.ops.Kronecker):
                 Dt, Iz
             ) + B_sup_z_over_B @ cola.ops.Kronecker(It, Dz)
 
-            Ms = (xi, rdot1_tz)
+            Ms = (V, xi, rdot1_tz)
         super().__init__(*Ms)
 
 
@@ -518,6 +596,8 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         Whether to approximate the surface terms by decoupling theta and zeta. Should
         be False for the main operator, but setting to True for the preconditioner can
         improve performance.
+    normalize : bool
+        Whether to divide equations by speed to non-dimensionalize
     """
 
     def __init__(
@@ -528,6 +608,7 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         v: float,
         E_psi: float,
         approx_rdot: bool = False,
+        normalize: bool = False,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -535,10 +616,13 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         self.v = v
         self.E_psi = E_psi
         self.approx_rdot = approx_rdot
+        self.normalize = normalize
 
-        Exi = E_psi * cola.ops.Identity(
-            (pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype
-        )
+        if normalize:
+            E = cola.ops.Dense(-E_psi / jnp.atleast_2d(jnp.ones_like(v)))
+        else:
+            E = cola.ops.Dense(-E_psi / jnp.atleast_2d(v))
+        Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
         It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
         Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
         Dt = cola.ops.Dense(field.Dt)
@@ -551,7 +635,7 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
             B1 = prodkron2kronprod(Ak1 @ cola.ops.Kronecker(Dt, Iz))
             B2 = prodkron2kronprod(Ak2 @ cola.ops.Kronecker(It, Dz))
             C = approx_sum_kron((B1, B2))
-            Ms = (Exi, *C.Ms)
+            Ms = (E, Ixi, *C.Ms)
         else:
             B_sub_t_over_B2f = cola.ops.Diagonal(
                 (field.B_sub_t / (field.B2mag_fsa * field.sqrtg)).flatten()
@@ -563,5 +647,5 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
                 Dt, Iz
             ) - B_sub_t_over_B2f @ cola.ops.Kronecker(It, Dz)
 
-            Ms = (Exi, rdot2_tz)
+            Ms = (E, Ixi, rdot2_tz)
         super().__init__(*Ms)

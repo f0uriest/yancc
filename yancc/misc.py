@@ -194,6 +194,49 @@ class MDKEConstraint(cola.ops.Dense):
         super().__init__(Ip)
 
 
+def radial_magnetic_drift(
+    field: Field,
+    speedgrid: SpeedGrid,
+    pitchgrid: PitchAngleGrid,
+    species: list[LocalMaxwellian],
+) -> jax.Array:
+    """Radial magnetic drift 𝐯ₘ ⋅ ∇ ψ
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+
+    Returns
+    -------
+    f : jax.Array, shape(ns, nx, nxi, nt, nz)
+        Radial magnetic drift.
+    """
+    if not isinstance(species, (list, tuple)):
+        species = [species]
+    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
+    ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
+    qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
+    xi = pitchgrid.xi[None, None, :, None, None]
+    x = speedgrid.x[None, :, None, None, None]
+    vmadotgradpsi = -(
+        x**2
+        * vth**2
+        * (1 / 2 + xi**2 / 2)
+        * ms
+        / qs
+        / field.Bmag**2
+        * field.BxgradpsidotgradB
+    )
+    return vmadotgradpsi
+
+
 def dke_rhs(
     field: Field,
     speedgrid: SpeedGrid,
@@ -201,6 +244,7 @@ def dke_rhs(
     species: list[LocalMaxwellian],
     E_psi: float,
     include_constraints: bool = True,
+    normalize: bool = False,
 ) -> jax.Array:
     """RHS of DKE as solved in SFINCS.
 
@@ -218,6 +262,8 @@ def dke_rhs(
         Radial electric field.
     include_constraints : bool
         Whether to append zeros to the rhs for constraint equations.
+    normalize : bool
+        Whether to divide equations by thermal speed to non-dimensionalize
 
     Returns
     -------
@@ -226,8 +272,6 @@ def dke_rhs(
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
-    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
-    ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
     ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
     dns = jnp.array([sp.dndr for sp in species])[:, None, None, None, None]
@@ -235,19 +279,14 @@ def dke_rhs(
     dTs = jnp.array([sp.dTdr for sp in species])[:, None, None, None, None]
     Ln = dns / ns
     LT = dTs / Ts
-    xi = pitchgrid.xi[None, None, :, None, None]
     x = speedgrid.x[None, :, None, None, None]
-    vmadotgradpsi = (
-        x**2
-        * vth**2
-        * (1 / 2 + xi**2 / 2)
-        * ms
-        / qs
-        / field.Bmag**2
-        * field.BxgradpsidotgradB
-    )
+    vmadotgradpsi = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
     gradients = Ln + qs * E_psi / Ts + (x**2 - 3 / 2) * LT
-    rhs = (vmadotgradpsi * gradients).flatten()
+    rhs = -vmadotgradpsi * gradients
+    if normalize:
+        vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
+        rhs /= vth
+    rhs = rhs.flatten()
     if include_constraints:
         rhs = jnp.concatenate([rhs, jnp.zeros(2 * len(species))])
     return rhs
@@ -258,6 +297,7 @@ def mdke_rhs(
     pitchgrid: PitchAngleGrid,
     v: float,
     include_constraints: bool = True,
+    normalize: bool = False,
 ) -> jax.Array:
     """RHS of monoenergetic DKE.
 
@@ -271,6 +311,8 @@ def mdke_rhs(
         Speed being considered.
     include_constraints : bool
         Whether to append zeros to the rhs for constraint equations.
+    normalize : bool
+        Whether to divide equations by speed to non-dimensionalize
 
     Returns
     -------
@@ -282,6 +324,8 @@ def mdke_rhs(
     s2 = s1
     s3 = xi * field.Bmag
     rhs = jnp.array([s1 * v, s2 * v, s3 * v]).reshape((3, -1)).T
+    if normalize:
+        rhs /= v
     if include_constraints:
         rhs = jnp.concatenate([rhs, jnp.zeros((1, 3))])
     return rhs
@@ -301,8 +345,6 @@ def compute_monoenergetic_coefficients(
     ----------
     f : jax.Array, shape(N,3)
         Solution to monoenergetic drift kinetic equation.
-    s : jax.Array, shape(N,3)
-        RHS for monoenergetic drift kinetic equation, eg from `mdke_rhs`.
     field : Field
         Magnetic field information
     pitchgrid : PitchAngleGrid
@@ -316,7 +358,6 @@ def compute_monoenergetic_coefficients(
         Monoenergetic transport coefficients.
     """
     f = f.reshape((-1, 3))
-    s = s.reshape((-1, 3))
     nxi, nt, nz = (
         pitchgrid.nxi,
         field.ntheta,
@@ -325,7 +366,10 @@ def compute_monoenergetic_coefficients(
     N = nxi * nt * nz
     # slice out source/constraint terms if present
     f = f[:N]
-    s = s[:N]
+
+    s = mdke_rhs(field, pitchgrid, v, False, False)
+    s = s.reshape((-1, 3))
+
     # form monoenergetic coefficients
     sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
     Dij_itz = sf.reshape((3, 3, nxi, nt, nz))
