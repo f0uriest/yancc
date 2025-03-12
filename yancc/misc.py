@@ -430,3 +430,85 @@ def compute_transport_matrix(
     )
     integrand = vscale * x**2 * fM * wij * Dij * wx
     return integrand.sum(axis=1)
+
+
+def compute_fluxes(f, field, speedgrid, pitchgrid, species):
+    """Compute output fluxes from solution of DKE.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field information
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    pitchgrid : PitchAngleGrid
+        Grid of coordinates in pitch angle.
+    species : list[LocalMaxwellian]
+        Species being considered
+
+    Returns
+    -------
+    Γₐ : jax.Array, shape(ns)
+        Particle flux for each species.
+    Qₐ : jax.Array, shape(ns)
+        Heat flux for each species.
+    V|| : jax.Array, shape(ns, nt, nz)
+        Parallel velocity for each species
+    〈BV||〉: jax.Array, shape(ns)
+        Flux surface average field*parallel velocity for each species
+    〈J||B〉: float
+        Bootstrap current.
+    Jr : float
+        Radial current.
+    J|| : jax.Array, shape(nt, nz)
+        Parallel current density.
+    """
+    if not isinstance(species, (list, tuple)):
+        species = [species]
+    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
+    ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
+    qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
+    ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
+    xi = pitchgrid.xi[None, None, :, None, None]
+    x = speedgrid.x[None, :, None, None, None]
+
+    dx = ((speedgrid.x**2 * speedgrid.wx) @ speedgrid.xvander_inv)[
+        None, :, None, None, None
+    ]
+    dxi = pitchgrid.wxi[None, None, :, None, None]
+    # int f d3v
+    d3v = vth**3 * dx * dxi
+
+    # flux surface average operator
+    dt = field.wtheta[None, None, None, :, None]
+    dz = field.wzeta[None, None, None, None, :]
+    dr = field.sqrtg[None, None, None, :, :] * dt * dz
+    dr = dr / dr.sum()
+    radial_drift = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
+    vpar = x * vth * xi
+
+    particle_flux = f * radial_drift * d3v * dr
+    heat_flux = f * ms * vth**2 * x**2 * radial_drift * d3v * dr
+    Vpar = 1 / ns * vpar * f * d3v
+    BVpar = field.Bmag[None, None, None, :, :] * Vpar * dr
+    bootstrap_current = ns * qs * BVpar
+    radial_current = particle_flux * qs
+    Jpar = qs * ns * Vpar
+
+    particle_flux = particle_flux.sum(axis=(1, 2, 3, 4))
+    heat_flux = heat_flux.sum(axis=(1, 2, 3, 4))
+    Vpar = Vpar.sum(axis=(1, 2))
+    BVpar = BVpar.sum(axis=(1, 2, 3, 4))
+    bootstrap_current = bootstrap_current.sum(axis=(0, 1, 2, 3, 4))
+    radial_current = radial_current.sum(axis=(0, 1, 2, 3, 4))
+    Jpar = Jpar.sum(axis=(0, 1, 2))
+
+    return (
+        particle_flux,
+        heat_flux,
+        Vpar,
+        BVpar,
+        bootstrap_current,
+        radial_current,
+        Jpar,
+    )
