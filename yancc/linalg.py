@@ -53,10 +53,16 @@ class LSTSQSolve(cola.ops.LinearOperator):
 
     def __init__(self, A: cola.ops.LinearOperator):
         super().__init__(A.dtype, (A.shape[-1], A.shape[-2]))
-        self.A = A.to_dense()
+        self.U, self.s, self.VT = jnp.linalg.svd(A.to_dense())
 
     def _matmat(self, X):
-        return self.xnp.lstsq(self.A, X)
+        small = (
+            jnp.abs(self.s)
+            < self.s.size * jnp.finfo(self.s.dtype).eps * jnp.abs(self.s).max()
+        )
+        si = jnp.where(small, self.s, 1 / self.s)
+        y = si[:, None] * self.U.T @ X
+        return self.VT.T @ y
 
 
 def full_rank(A):
@@ -101,7 +107,7 @@ def pinv(A: cola.ops.Diagonal, alg: FullRank):  # noqa: F811
 def pinv(A: cola.ops.Diagonal, alg: LSTSQ):  # noqa: F811
     """Pseudoinverse of diagonal matrix."""
     d = A.diag
-    small = jnp.abs(d) < d.size * jnp.finfo(d.dtype).eps
+    small = jnp.abs(d) < d.size * jnp.finfo(d.dtype).eps * jnp.abs(d).max()
     di = jnp.where(small, 0.0, 1 / jnp.where(small, 1.0, d))
     return cola.ops.Diagonal(di)
 
