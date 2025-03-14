@@ -619,17 +619,17 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         self.normalize = normalize
 
         if normalize:
-            E = cola.ops.Dense(-E_psi / jnp.atleast_2d(jnp.ones_like(v)))
-        else:
             E = cola.ops.Dense(-E_psi / jnp.atleast_2d(v))
+        else:
+            E = cola.ops.Dense(-E_psi / jnp.atleast_2d(jnp.ones_like(v)))
         Ixi = cola.ops.Identity((pitchgrid.nxi, pitchgrid.nxi), pitchgrid.xi.dtype)
         It = cola.ops.Identity((field.ntheta, field.ntheta), field.theta.dtype)
         Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
         Dt = cola.ops.Dense(field.Dt)
         Dz = cola.ops.Dense(field.Dz)
         if approx_rdot:
-            A1 = field.B_sub_t / (field.Bmag_fsa**2 * field.sqrtg)
-            A2 = field.B_sub_z / (field.Bmag_fsa**2 * field.sqrtg)
+            A1 = field.B_sub_t / (field.B2mag_fsa * field.sqrtg)
+            A2 = field.B_sub_z / (field.B2mag_fsa * field.sqrtg)
             Ak1 = approx_kron_diag2d(A1.flatten(), *A1.shape)
             Ak2 = approx_kron_diag2d(A2.flatten(), *A2.shape)
             B1 = prodkron2kronprod(Ak1 @ cola.ops.Kronecker(Dt, Iz))
