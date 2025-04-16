@@ -1,9 +1,15 @@
 """Drift Kinetic Operators without collisions."""
 
-import cola
-import jax.numpy as jnp
-from monkes import Field, LocalMaxwellian
+import functools
 
+import cola
+import jax
+import jax.numpy as jnp
+import numpy as np
+from monkes import LocalMaxwellian
+
+from .field import Field
+from .finite_diff import bwd_coeffs, ctr_coeffs, fdbwd, fdctr, fdfwd, fwd_coeffs
 from .linalg import approx_kron_diag2d, approx_sum_kron, prodkron2kronprod
 from .velocity_grids import PitchAngleGrid, SpeedGrid
 
@@ -649,3 +655,337 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
 
             Ms = (E, Ixi, rdot2_tz)
         super().__init__(*Ms)
+
+
+def _parse_axorder_shape(nt, nz, na, axorder):
+    shape = np.arange(3)
+    shape[axorder.index("a")] = na
+    shape[axorder.index("t")] = nt
+    shape[axorder.index("z")] = nz
+    caxorder = (axorder.index("a"), axorder.index("t"), axorder.index("z"))
+    return tuple(shape), caxorder
+
+
+def w_theta(field, pitchgrid, E_psi):
+    """Wind in theta direction for MDKE."""
+    w = (
+        field.B_sup_t / field.Bmag * pitchgrid.xi[:, None, None]
+        + field.B_sub_z / field.B2mag_fsa / field.sqrtg * E_psi
+    )
+    return w
+
+
+def w_zeta(field, pitchgrid, E_psi):
+    """Wind in zeta direction for MDKE."""
+    w = (
+        field.B_sup_z / field.Bmag * pitchgrid.xi[:, None, None]
+        - field.B_sub_t / field.B2mag_fsa / field.sqrtg * E_psi
+    )
+    return w
+
+
+def w_pitch(field, pitchgrid, nu):
+    """Wind in xi/pitch direction for MDKE, including first order scattering term."""
+    sina = jnp.sqrt(1 - pitchgrid.xi**2)
+    cosa = -pitchgrid.xi
+    w = (
+        -field.bdotgradB
+        / (2 * field.Bmag)
+        * (1 - pitchgrid.xi[:, None, None] ** 2)
+        / sina[:, None, None]
+    )
+    w -= (nu * cosa / sina)[:, None, None]
+    return w
+
+
+@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+def dfdtheta(
+    f, field, pitchgrid, E_psi, axorder="atz", p=4, diag=False, flip=False, gauge=False
+):
+    """Advection operator in theta direction.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Distribution function.
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    E_psi : float
+        Normalized electric field, E_psi/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p : int
+        Order of approximation for derivatives.
+    diag : bool
+        If True, only apply the diagonal part of the operator.
+    flip : bool
+        If True, assume f is ordered backwards in each coordinate.
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+
+    Returns
+    -------
+    dfdtheta : jax.Array
+        Distribution function advected along theta.
+    """
+    assert field.ntheta > p
+    shp = f.shape
+    shape, caxorder = _parse_axorder_shape(
+        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
+    )
+    f = f.reshape(shape)
+    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+    w = w_theta(field, pitchgrid, E_psi)
+    h = 2 * np.pi / field.ntheta
+    if diag:
+        fd = fwd_coeffs[1][p][0] / h * f
+        bd = bwd_coeffs[1][p][-1] / h * f
+    else:
+        fd = fdfwd(f, p, 1, h=h, bc="periodic", axis=1)
+        bd = fdbwd(f, p, 1, h=h, bc="periodic", axis=1)
+    # get only L or U by only taking forward or backward diff? + diagonal correction
+    df = w * ((w > 0) * bd + (w <= 0) * fd)
+    if gauge:
+        df = df.at[0, 0, 0].set(f[0, 0, 0])
+    df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+    df = jax.lax.cond(flip, lambda: df[..., ::-1], lambda: df)
+    return df.reshape(shp)
+
+
+@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+def dfdzeta(
+    f, field, pitchgrid, E_psi, axorder="atz", p=4, diag=False, flip=False, gauge=False
+):
+    """Advection operator in zeta direction.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Distribution function.
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    E_psi : float
+        Normalized electric field, E_psi/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p : int
+        Order of approximation for derivatives.
+    diag : bool
+        If True, only apply the diagonal part of the operator.
+    flip : bool
+        If True, assume f is ordered backwards in each coordinate.
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+
+    Returns
+    -------
+    dfdzeta : jax.Array
+        Distribution function advected along zeta.
+    """
+    assert field.nzeta > p
+    shp = f.shape
+    shape, caxorder = _parse_axorder_shape(
+        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
+    )
+    f = f.reshape(shape)
+    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+    w = w_zeta(field, pitchgrid, E_psi)
+    h = 2 * np.pi / field.nzeta / field.NFP
+    if diag:
+        fd = fwd_coeffs[1][p][0] / h * f
+        bd = bwd_coeffs[1][p][-1] / h * f
+    else:
+        fd = fdfwd(f, p, 1, h=h, bc="periodic", axis=2)
+        bd = fdbwd(f, p, 1, h=h, bc="periodic", axis=2)
+    df = w * ((w > 0) * bd + (w <= 0) * fd)
+    if gauge:
+        df = df.at[0, 0, 0].set(f[0, 0, 0])
+    df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+    df = jax.lax.cond(flip, lambda: df[..., ::-1], lambda: df)
+    return df.reshape(shp)
+
+
+@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+def dfdxi(
+    f,
+    field,
+    pitchgrid,
+    nu,
+    axorder="atz",
+    p=4,
+    diag=False,
+    flip=False,
+    gauge=False,
+):
+    """Advection operator in xi/pitch direction.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Distribution function.
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    nu : float
+        Normalized collisionality, nu/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p : int
+        Order of approximation for derivatives.
+    diag : bool
+        If True, only apply the diagonal part of the operator.
+    flip : bool
+        If True, assume f is ordered backwards in each coordinate.
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+
+    Returns
+    -------
+    dfdxi : jax.Array
+        Distribution function advected along xi.
+    """
+    assert pitchgrid.nxi > p
+    shp = f.shape
+    shape, caxorder = _parse_axorder_shape(
+        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
+    )
+    f = f.reshape(shape)
+    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+    w = w_pitch(field, pitchgrid, nu)
+    h = np.pi / pitchgrid.nxi
+    if diag:
+        cf = fwd_coeffs[1][p][0] * jnp.ones_like(w)
+        cb = bwd_coeffs[1][p][-1] * jnp.ones_like(w)
+        for i in range((p + 1) // 2):
+            # if upwinding near xi=+/-1, symmetric bc gives slightly different weight
+            # to central point
+            bmask = jnp.zeros(w.shape).at[i].set(1).astype(bool)
+            fmask = jnp.zeros(w.shape).at[-1 - i].set(1).astype(bool)
+            cf = jnp.where(fmask & (w <= 0), cf + fwd_coeffs[1][p][2 * i + 1], cf)
+            cb = jnp.where(bmask & (w > 0), cb + bwd_coeffs[1][p][-2 - 2 * i], cb)
+        fd = cf / h * f
+        bd = cb / h * f
+    else:
+        fd = fdfwd(f, p, 1, h=h, bc="symmetric", axis=0)
+        bd = fdbwd(f, p, 1, h=h, bc="symmetric", axis=0)
+    df = w * ((w > 0) * bd + (w <= 0) * fd)
+    if gauge:
+        df = df.at[0, 0, 0].set(f[0, 0, 0])
+    df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+    df = jax.lax.cond(flip, lambda: df[..., ::-1], lambda: df)
+    return df.reshape(shp)
+
+
+@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+def dfdpitch(
+    f,
+    field,
+    pitchgrid,
+    nu,
+    axorder="atz",
+    p=6,
+    diag=False,
+    flip=False,
+    gauge=False,
+):
+    """Diffusion operator in xi/pitch direction.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Distribution function.
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    nu : float
+        Normalized collisionality, nu/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p : int
+        Order of approximation for derivatives.
+    diag : bool
+        If True, only apply the diagonal part of the operator.
+    flip : bool
+        If True, assume f is ordered backwards in each coordinate.
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+
+    Returns
+    -------
+    dfdpitch : jax.Array
+        Distribution function diffused along xi/pitch.
+    """
+    assert pitchgrid.nxi > p
+    shp = f.shape
+    shape, caxorder = _parse_axorder_shape(
+        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
+    )
+    f = f.reshape(shape)
+    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+    h = np.pi / pitchgrid.nxi
+    if diag:
+        c = ctr_coeffs[2][p][p // 2] * jnp.ones_like(pitchgrid.xi)
+        for i in range(max(1, p // 2 - 1)):
+            # near xi=+/-1, centered differencing w/ symmetry bc gives slightly
+            # different weight to central point
+            c = c.at[i].add(ctr_coeffs[2][p][p // 2 - 1 - 2 * i])
+            c = c.at[-1 - i].add(ctr_coeffs[2][p][p // 2 + 1 + 2 * i])
+        ddf = c[:, None, None] / h**2 * f
+    else:
+        ddf = fdctr(f, p, 2, h=h, bc="symmetric", axis=0)
+    if gauge:
+        ddf = ddf.at[0, 0, 0].set(-f[0, 0, 0])
+    ddf = jnp.moveaxis(ddf, (0, 1, 2), caxorder)
+    ddf = jax.lax.cond(flip, lambda: ddf[..., ::-1], lambda: ddf)
+    return -nu * ddf.reshape(shp)
+
+
+@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2", "gauge"])
+def mdke(
+    f, field, pitchgrid, E_psi, nu, axorder="atz", p1=4, p2=4, flip=False, gauge=False
+):
+    """MDKE operator.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Distribution function.
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    E_psi : float
+        Normalized electric field, E_psi/v
+    nu : float
+        Normalized collisionality, nu/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p1 : int
+        Order of approximation for first derivatives.
+    p2 : int
+        Order of approximation for second derivatives.
+    flip : bool
+        If True, assume f is ordered backwards in each coordinate.
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+
+    Returns
+    -------
+    df : jax.Array
+
+    """
+    dt = dfdtheta(f, field, pitchgrid, E_psi, axorder, p1, flip=flip, gauge=gauge)
+    dz = dfdzeta(f, field, pitchgrid, E_psi, axorder, p1, flip=flip, gauge=gauge)
+    di = dfdxi(f, field, pitchgrid, nu, axorder, p1, flip=flip, gauge=gauge)
+    dp = dfdpitch(f, field, pitchgrid, nu, axorder, p2, flip=flip, gauge=gauge)
+    return dt + dz + di + dp
