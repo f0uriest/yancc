@@ -6,75 +6,44 @@ import operator
 import jax
 import jax.numpy as jnp
 
-fwd_coeffs = {
-    1: {
-        1: jnp.array([-1, 1]),
-        2: jnp.array([-3 / 2, 2, -1 / 2]),
-        3: jnp.array([-11 / 6, 3, -3 / 2, 1 / 3]),
-        4: jnp.array([-25 / 12, 4, -3, 4 / 3, -1 / 4]),
-        5: jnp.array([-137 / 60, 5, -5, 10 / 3, -5 / 4, 1 / 5]),
-        6: jnp.array([-49 / 20, 6, -15 / 2, 20 / 3, -15 / 4, 6 / 5, -1 / 6]),
-    },
-    2: {
-        1: jnp.array([1, -2, 1]),
-        2: jnp.array([2, -5, 4, -1]),
-        3: jnp.array([35 / 12, -26 / 3, 19 / 2, -14 / 3, 11 / 12]),
-        4: jnp.array([15 / 4, -77 / 6, 107 / 6, -13, 61 / 12, -5 / 6]),
-        5: jnp.array(
-            [203 / 45, -87 / 5, 117 / 4, -254 / 9, 33 / 2, -27 / 5, 137 / 180]
-        ),
-        6: jnp.array(
-            [
-                469 / 90,
-                -223 / 10,
-                879 / 20,
-                -949 / 18,
-                41,
-                -201 / 10,
-                1019 / 180,
-                -7 / 10,
-            ]
-        ),
-    },
-}
-bwd_coeffs = {
-    1: {
-        1: -jnp.array([-1, 1])[::-1],
-        2: -jnp.array([-3 / 2, 2, -1 / 2])[::-1],
-        3: -jnp.array([-11 / 6, 3, -3 / 2, 1 / 3])[::-1],
-        4: -jnp.array([-25 / 12, 4, -3, 4 / 3, -1 / 4])[::-1],
-        5: -jnp.array([-137 / 60, 5, -5, 10 / 3, -5 / 4, 1 / 5])[::-1],
-        6: -jnp.array([-49 / 20, 6, -15 / 2, 20 / 3, -15 / 4, 6 / 5, -1 / 6])[::-1],
-    },
-    2: {
-        1: jnp.array([1, -2, 1])[::-1],
-        2: jnp.array([2, -5, 4, -1])[::-1],
-        3: jnp.array([35 / 12, -26 / 3, 19 / 2, -14 / 3, 11 / 12])[::-1],
-        4: jnp.array([15 / 4, -77 / 6, 107 / 6, -13, 61 / 12, -5 / 6])[::-1],
-        5: jnp.array(
-            [203 / 45, -87 / 5, 117 / 4, -254 / 9, 33 / 2, -27 / 5, 137 / 180]
-        )[::-1],
-        6: jnp.array(
-            [
-                469 / 90,
-                -223 / 10,
-                879 / 20,
-                -949 / 18,
-                41,
-                -201 / 10,
-                1019 / 180,
-                -7 / 10,
-            ]
-        )[::-1],
-    },
-}
+y1b = 0.15
+y3c = 0.2
+y5c = 0.04
 
-ctr_coeffs = {
+fd_coeffs = {
+    # these are for forward difference,
+    # with the reference point at the center of the stencil
+    # to get backward version flip coeffs left/right and negate
     1: {
-        2: jnp.array([-1 / 2, 0, 1 / 2]),
-        4: jnp.array([1 / 12, -2 / 3, 0, 2 / 3, -1 / 12]),
-        6: jnp.array([-1 / 60, 3 / 20, -3 / 4, 0, 3 / 4, -3 / 20, 1 / 60]),
+        "1a": jnp.array([0, -1, 1]),
+        "1b": jnp.array([-1 / 2 + y1b, -2 * y1b, 1 / 2 + y1b]),
+        "2a": jnp.array([0, 0, -3 / 2, 2, -1 / 2]),
+        "2b": jnp.array([0, -1 / 4, -3 / 4, 5 / 4, -1 / 4]),
+        "3a": jnp.array([0, 0, 0, -11 / 6, 3, -3 / 2, 1 / 3]),
+        "3b": jnp.array([0, -1 / 3, -1 / 2, 1, -1 / 6]),
+        "3c": jnp.array(
+            [1 / 12 - y3c, -2 / 3 + 4 * y3c, -6 * y3c, 2 / 3 + 4 * y3c, -1 / 12 - y3c]
+        ),
+        "4a": jnp.array([0, 0, 0, 0, -25 / 12, 4, -3, 4 / 3, -1 / 4]),
+        "4b": jnp.array([0, 0, -1 / 4, -5 / 6, 3 / 2, -1 / 2, 1 / 12]),
+        "5a": jnp.array([0, 0, 0, 0, 0, -137 / 60, 5, -5, 10 / 3, -5 / 4, 1 / 5]),
+        "5b": jnp.array([0, 1 / 20, -1 / 2, -1 / 3, 1, -1 / 4, 1 / 30]),
+        "5c": jnp.array(
+            [
+                -1 / 60 + y5c,
+                3 / 20 - 6 * y5c,
+                -3 / 4 + 15 * y5c,
+                -20 * y5c,
+                3 / 4 + 15 * y5c,
+                -3 / 20 - 6 * y5c,
+                1 / 60 + y5c,
+            ]
+        ),
+        "6a": jnp.array(
+            [0, 0, 0, 0, 0, 0, -49 / 20, 6, -15 / 2, 20 / 3, -15 / 4, 6 / 5, -1 / 6]
+        ),
     },
+    # these are centered coeffs for 2nd derivatives.
     2: {
         2: jnp.array([1, -2, 1]),
         4: jnp.array([-1 / 12, 4 / 3, -5 / 2, 4 / 3, -1 / 12]),
@@ -83,108 +52,16 @@ ctr_coeffs = {
 }
 
 
-@functools.partial(jax.jit, static_argnames=("p", "d", "bc", "axis"))
-def fdbwd(f, p, d=1, h=1, bc="periodic", axis=0):
-    """Backward finite differences.
+@functools.partial(jax.jit, static_argnames=("p", "bc", "axis"))
+def fd2(f, p, h=1, bc="periodic", axis=0):
+    """Centered finite differences for second derivatives
 
     Parameters
     ----------
     f : jax.Array
         Function to differentiate at equally spaced points.
-    p : {1,2,3,4,5,6}
-        Order of accuracy.
-    d : {1,2}
-        Order of derivative.
-    h : float
-        Grid spacing.
-    bc : {"periodic", "symmetric"}
-        Type of boundary conditions.
-    axis : int
-        Axis along which to differentiate f
-
-    Returns
-    -------
-    df : jax.Array
-        Backward finite difference approximation to the derivative of f.
-
-    """
-    axis = operator.index(axis)
-    f = jnp.moveaxis(f, axis, -1)
-    df = _fdbwd(f, p=p, d=d, h=h, bc=bc)
-    return jnp.moveaxis(df, -1, axis)
-
-
-@functools.partial(jnp.vectorize, signature="(n)->(n)", excluded=["p", "d", "h", "bc"])
-def _fdbwd(f, *, p, d=1, h=1, bc="periodic"):
-    assert bc in {"periodic", "symmetric"}
-    dx = bwd_coeffs[d][p] / h**d
-    m = len(dx)
-    if bc == "symmetric":
-        fp = f[:m][::-1]
-    elif bc == "periodic":
-        fp = f[-m:]
-    fpad = jnp.concatenate([fp, f])
-    df = jnp.convolve(fpad, dx[::-1], "valid")
-    return df[-len(f) :]
-
-
-@functools.partial(jax.jit, static_argnames=("p", "d", "bc", "axis"))
-def fdfwd(f, p, d=1, h=1, bc="periodic", axis=0):
-    """Forward finite differences.
-
-    Parameters
-    ----------
-    f : jax.Array
-        Function to differentiate at equally spaced points.
-    p : {1,2,3,4,5,6}
-        Order of accuracy.
-    d : {1,2}
-        Order of derivative.
-    h : float
-        Grid spacing.
-    bc : {"periodic", "symmetric"}
-        Type of boundary conditions.
-    axis : int
-        Axis along which to differentiate f
-
-    Returns
-    -------
-    df : jax.Array
-        Forward finite difference approximation to the derivative of f.
-
-    """
-    axis = operator.index(axis)
-    f = jnp.moveaxis(f, axis, -1)
-    df = _fdfwd(f, p=p, d=d, h=h, bc=bc)
-    return jnp.moveaxis(df, -1, axis)
-
-
-@functools.partial(jnp.vectorize, signature="(n)->(n)", excluded=["p", "d", "h", "bc"])
-def _fdfwd(f, *, p, d=1, h=1, bc="periodic"):
-    assert bc in {"periodic", "symmetric"}
-    dx = fwd_coeffs[d][p] / h**d
-    m = len(dx)
-    if bc == "symmetric":
-        fp = f[-m:][::-1]
-    elif bc == "periodic":
-        fp = f[:m]
-    fpad = jnp.concatenate([f, fp])
-    df = jnp.convolve(fpad, dx[::-1], "valid")
-    return df[: len(f)]
-
-
-@functools.partial(jax.jit, static_argnames=("p", "d", "bc", "axis"))
-def fdctr(f, p, d=1, h=1, bc="periodic", axis=0):
-    """Centered finite differences.
-
-    Parameters
-    ----------
-    f : jax.Array
-        Function to differentiate at equally spaced points.
-    p : {2,4,6}
-        Order of accuracy.
-    d : {1,2}
-        Order of derivative.
+    p : str
+        Order of accuracy
     h : float
         Grid spacing.
     bc : {"periodic", "symmetric"}
@@ -200,14 +77,14 @@ def fdctr(f, p, d=1, h=1, bc="periodic", axis=0):
     """
     axis = operator.index(axis)
     f = jnp.moveaxis(f, axis, -1)
-    df = _fdctr(f, p=p, d=d, h=h, bc=bc)
+    stencil = fd_coeffs[2][p] / h**2
+    df = _fdctr(f, stencil, bc)
     return jnp.moveaxis(df, -1, axis)
 
 
-@functools.partial(jnp.vectorize, signature="(n)->(n)", excluded=["p", "d", "h", "bc"])
-def _fdctr(f, *, p, d=1, h=1, bc="periodic"):
+@functools.partial(jnp.vectorize, signature="(n)->(n)", excluded=[1, 2])
+def _fdctr(f, dx, bc="periodic"):
     assert bc in {"periodic", "symmetric"}
-    dx = ctr_coeffs[d][p] / h**d
     m = len(dx)
     if bc == "symmetric":
         f1 = f[:m][::-1]
@@ -218,3 +95,67 @@ def _fdctr(f, *, p, d=1, h=1, bc="periodic"):
     fpad = jnp.concatenate([f1, f, f2])
     df = jnp.convolve(fpad, dx[::-1], "valid")
     return df[m // 2 + 1 : f.size + m // 2 + 1]
+
+
+@functools.partial(jax.jit, static_argnames=("p", "bc", "axis"))
+def fdbwd(f, p, h=1, bc="periodic", axis=0):
+    """Backward finite differences for first derivatives.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Function to differentiate at equally spaced points.
+    p : str
+        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
+        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
+        upwinded, "b" and "c" if they exist are upwind biased but not fully.
+    h : float
+        Grid spacing.
+    bc : {"periodic", "symmetric"}
+        Type of boundary conditions.
+    axis : int
+        Axis along which to differentiate f
+
+    Returns
+    -------
+    df : jax.Array
+        Backward finite difference approximation to the derivative of f.
+
+    """
+    axis = operator.index(axis)
+    f = jnp.moveaxis(f, axis, -1)
+    stencil = -fd_coeffs[1][p][::-1] / h
+    df = _fdctr(f, stencil, bc)
+    return jnp.moveaxis(df, -1, axis)
+
+
+@functools.partial(jax.jit, static_argnames=("p", "bc", "axis"))
+def fdfwd(f, p, h=1, bc="periodic", axis=0):
+    """Forward finite differences for first derivatives.
+
+    Parameters
+    ----------
+    f : jax.Array
+        Function to differentiate at equally spaced points.
+    p : str
+        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
+        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
+        upwinded, "b" and "c" if they exist are upwind biased but not fully.
+    h : float
+        Grid spacing.
+    bc : {"periodic", "symmetric"}
+        Type of boundary conditions.
+    axis : int
+        Axis along which to differentiate f
+
+    Returns
+    -------
+    df : jax.Array
+        Forward finite difference approximation to the derivative of f.
+
+    """
+    axis = operator.index(axis)
+    f = jnp.moveaxis(f, axis, -1)
+    stencil = fd_coeffs[1][p] / h
+    df = _fdctr(f, stencil, bc)
+    return jnp.moveaxis(df, -1, axis)

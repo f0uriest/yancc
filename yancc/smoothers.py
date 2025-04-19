@@ -4,20 +4,19 @@ import functools
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from .trajectories import _parse_axorder_shape, dfdpitch, dfdtheta, dfdxi, dfdzeta
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2", "gauge"])
+@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
 def get_block_diag(
-    field, pitchgrid, E_psi, nu, axorder="atz", p1=4, p2=4, flip=False, gauge=False
+    field, pitchgrid, E_psi, nu, axorder="atz", p1="1a", p2=2, flip=False, gauge=False
 ):
     """Extract the block diagonal part of the MDKE operator for a given ordering."""
     assert axorder[-1] in "atz"
 
     if axorder[-1] == "a":
-        x = np.tile(np.eye(pitchgrid.nxi)[None], (field.ntheta * field.nzeta, 1, 1))
+        x = jnp.tile(jnp.eye(pitchgrid.nxi)[None], (field.ntheta * field.nzeta, 1, 1))
         f = jnp.ones(field.ntheta * field.nzeta * pitchgrid.nxi)
         f1 = jax.vmap(
             lambda x: dfdxi(
@@ -74,7 +73,7 @@ def get_block_diag(
         return f1 + f2 + f3 + f4
 
     elif axorder[-1] == "t":
-        x = np.tile(np.eye(field.ntheta)[None], (pitchgrid.nxi * field.nzeta, 1, 1))
+        x = jnp.tile(jnp.eye(field.ntheta)[None], (pitchgrid.nxi * field.nzeta, 1, 1))
         f = jnp.ones(field.ntheta * field.nzeta * pitchgrid.nxi)
         f1 = dfdxi(
             f,
@@ -127,7 +126,7 @@ def get_block_diag(
         return f1 + f2 + f3 + f4
 
     elif axorder[-1] == "z":
-        x = np.tile(np.eye(field.nzeta)[None], (pitchgrid.nxi * field.ntheta, 1, 1))
+        x = jnp.tile(jnp.eye(field.nzeta)[None], (pitchgrid.nxi * field.ntheta, 1, 1))
         f = jnp.ones(field.ntheta * field.nzeta * pitchgrid.nxi)
         f1 = dfdxi(
             f,

@@ -9,7 +9,7 @@ import numpy as np
 from monkes import LocalMaxwellian
 
 from .field import Field
-from .finite_diff import bwd_coeffs, ctr_coeffs, fdbwd, fdctr, fdfwd, fwd_coeffs
+from .finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
 from .linalg import approx_kron_diag2d, approx_sum_kron, prodkron2kronprod
 from .velocity_grids import PitchAngleGrid, SpeedGrid
 
@@ -698,9 +698,17 @@ def w_pitch(field, pitchgrid, nu):
     return w
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+@functools.partial(jax.jit, static_argnames=["axorder", "p"])
 def dfdtheta(
-    f, field, pitchgrid, E_psi, axorder="atz", p=4, diag=False, flip=False, gauge=False
+    f,
+    field,
+    pitchgrid,
+    E_psi,
+    axorder="atz",
+    p="1a",
+    diag=False,
+    flip=False,
+    gauge=False,
 ):
     """Advection operator in theta direction.
 
@@ -716,8 +724,10 @@ def dfdtheta(
         Normalized electric field, E_psi/v
     axorder : {"atz", "zat", "tza"}
         Ordering for variables in f, eg how the 3d array is flattened
-    p : int
-        Order of approximation for derivatives.
+    p : str
+        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
+        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
+        upwinded, "b" and "c" if they exist are upwind biased but not fully.
     diag : bool
         If True, only apply the diagonal part of the operator.
     flip : bool
@@ -730,34 +740,53 @@ def dfdtheta(
     dfdtheta : jax.Array
         Distribution function advected along theta.
     """
-    assert field.ntheta > p
+    assert field.ntheta > fd_coeffs[1][p].size
     shp = f.shape
     shape, caxorder = _parse_axorder_shape(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     w = w_theta(field, pitchgrid, E_psi)
     h = 2 * np.pi / field.ntheta
-    if diag:
-        fd = fwd_coeffs[1][p][0] / h * f
-        bd = bwd_coeffs[1][p][-1] / h * f
-    else:
-        fd = fdfwd(f, p, 1, h=h, bc="periodic", axis=1)
-        bd = fdbwd(f, p, 1, h=h, bc="periodic", axis=1)
+
+    fd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fdfwd)(f[0, :, 0], p, h=h, bc="periodic"))[
+            None, :, None
+        ]
+        * f
+    )
+    bd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fdbwd)(f[0, :, 0], p, h=h, bc="periodic"))[
+            None, :, None
+        ]
+        * f
+    )
+    fd_full = lambda f: fdfwd(f, p, h=h, bc="periodic", axis=1)
+    bd_full = lambda f: fdbwd(f, p, h=h, bc="periodic", axis=1)
+    fd = jax.lax.cond(diag, fd_diag, fd_full, f)
+    bd = jax.lax.cond(diag, bd_diag, bd_full, f)
     # get only L or U by only taking forward or backward diff? + diagonal correction
     df = w * ((w > 0) * bd + (w <= 0) * fd)
-    if gauge:
-        df = df.at[0, 0, 0].set(f[0, 0, 0])
+    idx = pitchgrid.nxi // 2
+    df = jnp.where(gauge, df.at[idx, 0, 0].set(f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    df = jax.lax.cond(flip, lambda: df[..., ::-1], lambda: df)
+    df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+@functools.partial(jax.jit, static_argnames=["axorder", "p"])
 def dfdzeta(
-    f, field, pitchgrid, E_psi, axorder="atz", p=4, diag=False, flip=False, gauge=False
+    f,
+    field,
+    pitchgrid,
+    E_psi,
+    axorder="atz",
+    p="1a",
+    diag=False,
+    flip=False,
+    gauge=False,
 ):
     """Advection operator in zeta direction.
 
@@ -773,8 +802,10 @@ def dfdzeta(
         Normalized electric field, E_psi/v
     axorder : {"atz", "zat", "tza"}
         Ordering for variables in f, eg how the 3d array is flattened
-    p : int
-        Order of approximation for derivatives.
+    p : str
+        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
+        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
+        upwinded, "b" and "c" if they exist are upwind biased but not fully.
     diag : bool
         If True, only apply the diagonal part of the operator.
     flip : bool
@@ -787,38 +818,48 @@ def dfdzeta(
     dfdzeta : jax.Array
         Distribution function advected along zeta.
     """
-    assert field.nzeta > p
+    assert field.nzeta > fd_coeffs[1][p].size
     shp = f.shape
     shape, caxorder = _parse_axorder_shape(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     w = w_zeta(field, pitchgrid, E_psi)
     h = 2 * np.pi / field.nzeta / field.NFP
-    if diag:
-        fd = fwd_coeffs[1][p][0] / h * f
-        bd = bwd_coeffs[1][p][-1] / h * f
-    else:
-        fd = fdfwd(f, p, 1, h=h, bc="periodic", axis=2)
-        bd = fdbwd(f, p, 1, h=h, bc="periodic", axis=2)
+    fd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fdfwd)(f[0, 0, :], p, h=h, bc="periodic"))[
+            None, None, :
+        ]
+        * f
+    )
+    bd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fdbwd)(f[0, 0, :], p, h=h, bc="periodic"))[
+            None, None, :
+        ]
+        * f
+    )
+    fd_full = lambda f: fdfwd(f, p, h=h, bc="periodic", axis=2)
+    bd_full = lambda f: fdbwd(f, p, h=h, bc="periodic", axis=2)
+    fd = jax.lax.cond(diag, fd_diag, fd_full, f)
+    bd = jax.lax.cond(diag, bd_diag, bd_full, f)
     df = w * ((w > 0) * bd + (w <= 0) * fd)
-    if gauge:
-        df = df.at[0, 0, 0].set(f[0, 0, 0])
+    idx = pitchgrid.nxi // 2
+    df = jnp.where(gauge, df.at[idx, 0, 0].set(f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    df = jax.lax.cond(flip, lambda: df[..., ::-1], lambda: df)
+    df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+@functools.partial(jax.jit, static_argnames=["axorder", "p"])
 def dfdxi(
     f,
     field,
     pitchgrid,
     nu,
     axorder="atz",
-    p=4,
+    p="1a",
     diag=False,
     flip=False,
     gauge=False,
@@ -837,8 +878,10 @@ def dfdxi(
         Normalized collisionality, nu/v
     axorder : {"atz", "zat", "tza"}
         Ordering for variables in f, eg how the 3d array is flattened
-    p : int
-        Order of approximation for derivatives.
+    p : str
+        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
+        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
+        upwinded, "b" and "c" if they exist are upwind biased but not fully.
     diag : bool
         If True, only apply the diagonal part of the operator.
     flip : bool
@@ -851,47 +894,49 @@ def dfdxi(
     dfdxi : jax.Array
         Distribution function advected along xi.
     """
-    assert pitchgrid.nxi > p
+    assert pitchgrid.nxi > fd_coeffs[1][p].size
     shp = f.shape
     shape, caxorder = _parse_axorder_shape(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     w = w_pitch(field, pitchgrid, nu)
     h = np.pi / pitchgrid.nxi
-    if diag:
-        cf = fwd_coeffs[1][p][0] * jnp.ones_like(w)
-        cb = bwd_coeffs[1][p][-1] * jnp.ones_like(w)
-        for i in range((p + 1) // 2):
-            # if upwinding near xi=+/-1, symmetric bc gives slightly different weight
-            # to central point
-            bmask = jnp.zeros(w.shape).at[i].set(1).astype(bool)
-            fmask = jnp.zeros(w.shape).at[-1 - i].set(1).astype(bool)
-            cf = jnp.where(fmask & (w <= 0), cf + fwd_coeffs[1][p][2 * i + 1], cf)
-            cb = jnp.where(bmask & (w > 0), cb + bwd_coeffs[1][p][-2 - 2 * i], cb)
-        fd = cf / h * f
-        bd = cb / h * f
-    else:
-        fd = fdfwd(f, p, 1, h=h, bc="symmetric", axis=0)
-        bd = fdbwd(f, p, 1, h=h, bc="symmetric", axis=0)
+
+    fd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fdfwd)(f[:, 0, 0], p, h=h, bc="symmetric"))[
+            :, None, None
+        ]
+        * f
+    )
+    bd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fdbwd)(f[:, 0, 0], p, h=h, bc="symmetric"))[
+            :, None, None
+        ]
+        * f
+    )
+    fd_full = lambda f: fdfwd(f, p, h=h, bc="symmetric", axis=0)
+    bd_full = lambda f: fdbwd(f, p, h=h, bc="symmetric", axis=0)
+    fd = jax.lax.cond(diag, fd_diag, fd_full, f)
+    bd = jax.lax.cond(diag, bd_diag, bd_full, f)
     df = w * ((w > 0) * bd + (w <= 0) * fd)
-    if gauge:
-        df = df.at[0, 0, 0].set(f[0, 0, 0])
+    idx = pitchgrid.nxi // 2
+    df = jnp.where(gauge, df.at[idx, 0, 0].set(f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    df = jax.lax.cond(flip, lambda: df[..., ::-1], lambda: df)
+    df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p", "diag", "gauge"])
+@functools.partial(jax.jit, static_argnames=["axorder", "p"])
 def dfdpitch(
     f,
     field,
     pitchgrid,
     nu,
     axorder="atz",
-    p=6,
+    p=2,
     diag=False,
     flip=False,
     gauge=False,
@@ -930,29 +975,37 @@ def dfdpitch(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
+    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     h = np.pi / pitchgrid.nxi
-    if diag:
-        c = ctr_coeffs[2][p][p // 2] * jnp.ones_like(pitchgrid.xi)
-        for i in range(max(1, p // 2 - 1)):
-            # near xi=+/-1, centered differencing w/ symmetry bc gives slightly
-            # different weight to central point
-            c = c.at[i].add(ctr_coeffs[2][p][p // 2 - 1 - 2 * i])
-            c = c.at[-1 - i].add(ctr_coeffs[2][p][p // 2 + 1 + 2 * i])
-        ddf = c[:, None, None] / h**2 * f
-    else:
-        ddf = fdctr(f, p, 2, h=h, bc="symmetric", axis=0)
-    if gauge:
-        ddf = ddf.at[0, 0, 0].set(-f[0, 0, 0])
+
+    fd_diag = (
+        lambda f: jnp.diag(jax.jacfwd(fd2)(f[:, 0, 0], p, h=h, bc="symmetric"))[
+            :, None, None
+        ]
+        * f
+    )
+    fd_full = lambda f: fd2(f, p, h=h, bc="symmetric", axis=0)
+    ddf = jax.lax.cond(diag, fd_diag, fd_full, f)
+    idx = pitchgrid.nxi // 2
+    ddf = jnp.where(gauge, ddf.at[idx, 0, 0].set(-f[idx, 0, 0]), ddf)
     ddf = jnp.moveaxis(ddf, (0, 1, 2), caxorder)
-    ddf = jax.lax.cond(flip, lambda: ddf[..., ::-1], lambda: ddf)
+    ddf = jnp.where(flip, ddf[..., ::-1], ddf)
     return -nu * ddf.reshape(shp)
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2", "gauge"])
+@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
 def mdke(
-    f, field, pitchgrid, E_psi, nu, axorder="atz", p1=4, p2=4, flip=False, gauge=False
+    f,
+    field,
+    pitchgrid,
+    E_psi,
+    nu,
+    axorder="atz",
+    p1="1a",
+    p2=2,
+    flip=False,
+    gauge=False,
 ):
     """MDKE operator.
 

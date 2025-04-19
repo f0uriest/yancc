@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from yancc.field import Field
+from yancc.finite_diff import fd_coeffs
 from yancc.smoothers import get_block_diag, permute_f
 from yancc.trajectories import dfdpitch, dfdtheta, dfdxi, dfdzeta, mdke
 from yancc.velocity_grids import PitchAngleGrid
@@ -15,14 +16,14 @@ from yancc.velocity_grids import PitchAngleGrid
 def field():
     """Field for testing."""
     eq = desc.examples.get("W7-X")
-    field = Field.from_desc(eq, 0.5, 7, 7)
+    field = Field.from_desc(eq, 0.5, 15, 15)
     return field
 
 
 @pytest.fixture
 def pitchgrid():
     """Pitch angle grid for testing"""
-    return PitchAngleGrid(14)
+    return PitchAngleGrid(15)
 
 
 def extract_blocks(a, m):
@@ -107,7 +108,7 @@ def test_diagonals(field, pitchgrid):
     nu = 1e-4
 
     order = "tza"
-    for p in range(1, 7):
+    for p in fd_coeffs[1].keys():
         Ai = jax.jacfwd(lambda x: dfdxi(x, field, pitchgrid, nu, axorder=order, p=p))(
             np.zeros(nt * nz * nl)
         )
@@ -143,7 +144,7 @@ def test_diagonals(field, pitchgrid):
         )
 
     order = "atz"
-    for p in range(1, 7):
+    for p in fd_coeffs[1].keys():
         Az = jax.jacfwd(
             lambda x: dfdzeta(x, field, pitchgrid, E_psi, axorder=order, p=p)
         )(np.zeros(nt * nz * nl))
@@ -161,7 +162,7 @@ def test_diagonals(field, pitchgrid):
         )
 
     order = "zat"
-    for p in range(1, 7):
+    for p in fd_coeffs[1].keys():
         At = jax.jacfwd(
             lambda x: dfdtheta(x, field, pitchgrid, E_psi, axorder=order, p=p)
         )(np.zeros(nt * nz * nl))
@@ -186,12 +187,12 @@ def test_M_matrix(field, pitchgrid):
     N = field.ntheta * field.nzeta * pitchgrid.nxi
 
     Dt = jax.jacfwd(dfdtheta)(
-        np.zeros(N), field, pitchgrid, E_psi, "atz", p=1, gauge=True
+        np.zeros(N), field, pitchgrid, E_psi, "atz", p="1a", gauge=True
     )
     Dz = jax.jacfwd(dfdzeta)(
-        np.zeros(N), field, pitchgrid, E_psi, "atz", p=1, gauge=True
+        np.zeros(N), field, pitchgrid, E_psi, "atz", p="1a", gauge=True
     )
-    Dx = jax.jacfwd(dfdxi)(np.zeros(N), field, pitchgrid, nu, "atz", p=1, gauge=True)
+    Dx = jax.jacfwd(dfdxi)(np.zeros(N), field, pitchgrid, nu, "atz", p="1a", gauge=True)
     Dp = jax.jacfwd(dfdpitch)(np.zeros(N), field, pitchgrid, nu, "atz", p=2, gauge=True)
     A = Dt + Dz + Dx + Dp
 
@@ -212,7 +213,7 @@ def test_M_matrix(field, pitchgrid):
 
 def test_permutations(field, pitchgrid):
     """Test that re-ordering the grid points gives equivalent operators."""
-    p1 = 2
+    p1 = "2a"
     p2 = 2
     E_psi = 1e-4
     nu = 1e-4
