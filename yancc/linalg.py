@@ -1,5 +1,7 @@
 """Linear algebra helpers."""
 
+import functools
+
 import cola
 import jax
 import jax.numpy as jnp
@@ -721,3 +723,64 @@ def build_precond(Ai, B, C, D):
     CC = -schuri @ C @ Ai
     DD = schuri
     return BorderedOperator(AA, BB, CC, DD)
+
+
+def make_dense_tridiag(l, d, u, l0=jnp.array(0.0), un=jnp.array(0.0)):
+    """Make a dense matrix from tridiagonals.
+
+    Parameters
+    ----------
+    l, d, u : jax.Array, shape[N-1], shape[N], shape[N-1]
+        lower, main, upper diagonals
+    l0, un : float
+        cyclic edge values
+    """
+    out = jnp.diag(d) + jnp.diag(l, k=-1) + jnp.diag(u, k=1)
+    out = out.at[0, -1].set(l0).at[-1, 0].set(un)
+    return out
+
+
+@jax.jit
+@functools.partial(jnp.vectorize, signature="(m,m),(m)->(m)")
+def tridiag_solve_dense(A, b):
+    """Solve a (possibly cyclical) tridiagonal system in dense form."""
+    d = jnp.diag(A, k=0)
+    l = jnp.diag(A, k=-1)
+    u = jnp.diag(A, k=1)
+    l0 = A[0, -1]
+    un = A[-1, 0]
+    return tridiag_solve(l, d, u, b, l0, un)
+
+
+@jax.jit
+def tridiag_solve(l, d, u, b, l0=jnp.array(0.0), un=jnp.array(0.0)):
+    """Solve a (possibly cyclical) tridiagonal system in banded form.
+
+    Parameters
+    ----------
+    l, d, u : jax.Array, shape[N-1], shape[N], shape[N-1]
+        lower, main, upper diagonals.
+    b : jax.Array, shape[N]
+        rhs vector.
+    l0, un : float
+        cyclic edge values.
+    """
+    return _tridiag_solve_cyclic(l, d, u, b, l0, un)
+
+
+@functools.partial(jnp.vectorize, signature="(m),(n),(m),(n),(),()->(n)")
+def _tridiag_solve_cyclic(l, d, u, b, l0, un):
+    gamma = -d[0]
+    t = jnp.zeros_like(d).at[0].set(gamma).at[-1].set(un)
+    v = jnp.zeros_like(d).at[0].set(1.0).at[-1].set(l0 / gamma)
+    d = d.at[0].add(-gamma).at[-1].add(-un * l0 / gamma)
+    y = _tridiag_solve(l, d, u, b)
+    q = _tridiag_solve(l, d, u, t)
+    out = y - q * jnp.dot(v, y) / (1 + jnp.dot(v, q))
+    return out
+
+
+def _tridiag_solve(l, d, u, b, *args):
+    l = jnp.pad(l, (1, 0))
+    u = jnp.pad(u, (0, 1))
+    return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]

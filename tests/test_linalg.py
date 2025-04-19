@@ -247,6 +247,7 @@ def test_approx_sum_kron2():
 
 
 def test_real_imag():
+    """Test getting real and imaginary parts of an operator."""
     A = np.random.random((5, 5)) + 1j * np.random.random((5, 5))
     x = np.random.random(5)
     B = cola.fns.lazify(A)
@@ -261,3 +262,21 @@ def test_real_imag():
 
     np.testing.assert_allclose(Bi @ x, (A.imag @ x))
     np.testing.assert_allclose(Bi @ (1j + x), (A.imag @ (1j + x)))
+
+
+def test_tridiagonal():
+    """Test for solving tridiagonal systems."""
+    N = 140
+    l = np.random.random(N - 1)
+    d = np.random.random(N)
+    u = np.random.random(N - 1)
+    b = np.random.random(N)
+    A = yancc.linalg.make_dense_tridiag(l, d, u)
+    B = yancc.linalg.make_dense_tridiag(l, d, u, 1.2, 3.2)
+
+    np.testing.assert_allclose(
+        np.linalg.solve(A, b), yancc.linalg.tridiag_solve_dense(A, b)
+    )
+    np.testing.assert_allclose(
+        np.linalg.solve(B, b), yancc.linalg.tridiag_solve_dense(B, b)
+    )
