@@ -125,3 +125,28 @@ class PitchAngleGrid(eqx.Module):
         kk = -jnp.diag(k * (k + 1))
         # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv
+
+
+class UniformPitchAngleGrid(eqx.Module):
+    """Grid for pitch angle variable gamma= arccos(v||/v).
+
+    Uniform grid not including endpoints.
+
+    Parameters
+    ----------
+    nxi : int
+        Number of grid points.
+
+    """
+
+    nxi: int = eqx.field(static=True)
+    gamma: jax.Array
+    xi: jax.Array
+
+    def __init__(self, nxi):
+        nxi = eqx.error_if(nxi, nxi % 2 == 0, "nxi must be odd")
+        self.nxi = nxi
+        gamma = jnp.linspace(0, jnp.pi, nxi, endpoint=False)
+        gamma += jnp.pi / (2 * nxi)
+        self.gamma = gamma
+        self.xi = -jnp.cos(gamma)
