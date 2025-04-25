@@ -2,10 +2,16 @@
 
 import functools
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import lineax as lx
 
+from .field import Field
+from .finite_diff import fd_coeffs
+from .linalg import tridiag_solve_dense
 from .trajectories import _parse_axorder_shape, dfdpitch, dfdtheta, dfdxi, dfdzeta
+from .velocity_grids import PitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
@@ -188,3 +194,126 @@ def permute_f(f, field, pitchgrid, axorder, flip):
     f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     return f.flatten()
+
+
+class MDKEJacobiSmoother(lx.AbstractLinearOperator):
+    """Block diagonal smoother for MDKE.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    E_psi : float
+        Normalized electric field, E_psi/v
+    nu : float
+        Normalized collisionality, nu/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p1 : int
+        Order of approximation for first derivatives.
+    p2 : int
+        Order of approximation for second derivatives.
+    flip : bool
+        If True, assume f is ordered backwards in each coordinate.
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+
+    """
+
+    field: Field
+    pitchgrid: PitchAngleGrid
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    flip: bool
+    axorder: str = eqx.field(static=True)
+    mats: jax.Array
+
+    def __init__(
+        self,
+        field,
+        pitchgrid,
+        E_psi,
+        nu,
+        p1="1a",
+        p2=2,
+        axorder="atz",
+        flip=False,
+        gauge=True,
+    ):
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+        self.flip = jnp.array(flip)
+
+        mats = get_block_diag(
+            field,
+            pitchgrid,
+            E_psi,
+            nu,
+            axorder=axorder,
+            p1=p1,
+            p2=p2,
+            flip=flip,
+            gauge=gauge,
+        )
+        if fd_coeffs[1][self.p1].size <= 3 and fd_coeffs[2][self.p2].size <= 3:
+            self.mats = mats
+        else:
+            self.mats = jnp.linalg.inv(mats)
+
+    @eqx.filter_jit
+    def mv(self, x):
+        """Matrix vector product."""
+        permute = lambda f: permute_f(
+            f, self.field, self.pitchgrid, self.axorder, self.flip
+        )
+        x = jax.linear_transpose(permute, x)(x)[0]
+        size, N, M = self.mats.shape
+        x = x.reshape(size, N)
+        if fd_coeffs[1][self.p1].size <= 3 and fd_coeffs[2][self.p2].size <= 3:
+            b = tridiag_solve_dense(self.mats, x)
+        else:
+            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+        return permute(b.flatten())
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
+
+
+@lx.is_symmetric.register(MDKEJacobiSmoother)
+def _(operator):
+    return False
+
+
+@lx.is_diagonal.register(MDKEJacobiSmoother)
+def _(operator):
+    return False
