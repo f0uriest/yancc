@@ -1,29 +1,11 @@
 """Tests for constructing smoothing operators."""
 
-import desc
 import jax
 import numpy as np
-import pytest
 
-from yancc.field import Field
 from yancc.finite_diff import fd_coeffs
 from yancc.smoothers import get_block_diag, permute_f
 from yancc.trajectories import dfdpitch, dfdtheta, dfdxi, dfdzeta, mdke
-from yancc.velocity_grids import PitchAngleGrid
-
-
-@pytest.fixture
-def field():
-    """Field for testing."""
-    eq = desc.examples.get("W7-X")
-    field = Field.from_desc(eq, 0.5, 15, 15)
-    return field
-
-
-@pytest.fixture
-def pitchgrid():
-    """Pitch angle grid for testing"""
-    return PitchAngleGrid(15)
 
 
 def extract_blocks(a, m):
