@@ -95,7 +95,8 @@ def _fdctr(f, dx, bc="periodic"):
         f2 = f[:m]
     fpad = jnp.concatenate([f1, f, f2])
     df = jnp.convolve(fpad, dx[::-1], "valid")
-    return df[m // 2 + 1 : f.size + m // 2 + 1]
+    offset = (df.size - f.size) // 2
+    return df[offset : f.size + offset]
 
 
 @functools.partial(jax.jit, static_argnames=("p", "bc", "axis"))
