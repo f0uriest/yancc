@@ -14,7 +14,7 @@ from monkes import Field, LocalMaxwellian
 
 from .linalg import BlockOperator
 from .utils import lGammainc, lGammaincc
-from .velocity_grids import PitchAngleGrid, SpeedGrid
+from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
 
 class RosenbluthPotentials(eqx.Module):
@@ -24,7 +24,7 @@ class RosenbluthPotentials(eqx.Module):
     ----------
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -36,7 +36,7 @@ class RosenbluthPotentials(eqx.Module):
     """
 
     speedgrid: SpeedGrid
-    pitchgrid: PitchAngleGrid
+    pitchgrid: LegendrePitchAngleGrid
     quad: bool = eqx.field(static=True)
     ddGxlk: jax.Array
     Hxlk: jax.Array
@@ -373,7 +373,7 @@ class FokkerPlanckLandau(cola.ops.Sum):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -387,7 +387,7 @@ class FokkerPlanckLandau(cola.ops.Sum):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         normalize: bool = False,
@@ -418,7 +418,7 @@ class FieldParticleScattering(cola.ops.Sum):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -437,7 +437,7 @@ class FieldParticleScattering(cola.ops.Sum):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         approx_rdot: bool = False,
@@ -489,7 +489,7 @@ class PitchAngleScattering(cola.ops.Kronecker):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -506,7 +506,7 @@ class PitchAngleScattering(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         approx_rdot: bool = False,
         normalize: bool = False,
@@ -552,7 +552,7 @@ class EnergyScattering(cola.ops.Kronecker):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -569,7 +569,7 @@ class EnergyScattering(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         approx_rdot: bool = False,
         normalize: bool = False,
@@ -632,7 +632,7 @@ class _CD(cola.ops.Kronecker):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -651,7 +651,7 @@ class _CD(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         approx_rdot: bool = False,
@@ -718,7 +718,7 @@ class _CG(cola.ops.Kronecker):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -737,7 +737,7 @@ class _CG(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         approx_rdot: bool = False,
@@ -808,7 +808,7 @@ class _CH(cola.ops.Kronecker):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -827,7 +827,7 @@ class _CH(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         approx_rdot: bool = False,
@@ -913,7 +913,7 @@ class MonoenergeticPitchAngleScattering(cola.ops.Kronecker):
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : LocalMaxwellian
         Species being considered
@@ -931,7 +931,7 @@ class MonoenergeticPitchAngleScattering(cola.ops.Kronecker):
     def __init__(
         self,
         field: Field,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: LocalMaxwellian,
         v: float,
         approx_rdot: bool = False,

@@ -4,7 +4,7 @@ import desc
 import pytest
 
 from yancc.field import Field
-from yancc.velocity_grids import PitchAngleGrid
+from yancc.velocity_grids import LegendrePitchAngleGrid
 
 
 @pytest.fixture(scope="session")
@@ -18,4 +18,4 @@ def field():
 @pytest.fixture(scope="session")
 def pitchgrid():
     """Pitch angle grid for testing"""
-    return PitchAngleGrid(15)
+    return LegendrePitchAngleGrid(15)

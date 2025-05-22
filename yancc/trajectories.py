@@ -13,7 +13,7 @@ from monkes import LocalMaxwellian
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
 from .linalg import approx_kron_diag2d, approx_sum_kron, prodkron2kronprod
-from .velocity_grids import PitchAngleGrid, SpeedGrid
+from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid, UniformPitchAngleGrid
 
 
 class FullTrajectories(cola.ops.Sum):
@@ -41,7 +41,7 @@ class FullTrajectories(cola.ops.Sum):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
         normalize: bool = False,
@@ -93,7 +93,7 @@ class DKESTrajectories(cola.ops.Sum):
     def __init__(
         self,
         field: Field,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: LocalMaxwellian,
         v: float,
         E_psi: float,
@@ -145,7 +145,7 @@ class FullTrajectoriesSpeed(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
@@ -207,7 +207,7 @@ class FullTrajectoriesPitch1(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
@@ -268,7 +268,7 @@ class FullTrajectoriesPitch2(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
@@ -331,7 +331,7 @@ class FullTrajectoriesSurface1(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
@@ -404,7 +404,7 @@ class FullTrajectoriesSurface2(cola.ops.Kronecker):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
         approx_rdot: bool = False,
@@ -481,7 +481,7 @@ class DKESTrajectoriesPitch(cola.ops.Kronecker):
     def __init__(
         self,
         field: Field,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: LocalMaxwellian,
         v: float,
         E_psi: float,
@@ -540,7 +540,7 @@ class DKESTrajectoriesSurface1(cola.ops.Kronecker):
     def __init__(
         self,
         field: Field,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: LocalMaxwellian,
         v: float,
         E_psi: float,
@@ -611,7 +611,7 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
     def __init__(
         self,
         field: Field,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: LocalMaxwellian,
         v: float,
         E_psi: float,
@@ -720,7 +720,7 @@ def dfdtheta(
         Distribution function.
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
@@ -798,7 +798,7 @@ def dfdzeta(
         Distribution function.
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
@@ -874,7 +874,7 @@ def dfdxi(
         Distribution function.
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     nu : float
         Normalized collisionality, nu/v
@@ -951,7 +951,7 @@ def dfdpitch(
         Distribution function.
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     nu : float
         Normalized collisionality, nu/v
@@ -1017,7 +1017,7 @@ def mdke(
         Distribution function.
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
@@ -1053,7 +1053,7 @@ class MDKE(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
@@ -1073,7 +1073,7 @@ class MDKE(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: PitchAngleGrid
+    pitchgrid: UniformPitchAngleGrid
     E_psi: float
     nu: float
     p1: str = eqx.field(static=True)

@@ -11,7 +11,7 @@ from .field import Field
 from .finite_diff import fd_coeffs
 from .linalg import tridiag_solve_dense
 from .trajectories import _parse_axorder_shape, dfdpitch, dfdtheta, dfdxi, dfdzeta
-from .velocity_grids import PitchAngleGrid
+from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
@@ -223,7 +223,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: PitchAngleGrid
+    pitchgrid: UniformPitchAngleGrid
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     flip: bool

@@ -84,7 +84,7 @@ class SpeedGrid(eqx.Module):
         return (f * self.wx[None, :, None, None]).sum(axis=1)
 
 
-class PitchAngleGrid(eqx.Module):
+class LegendrePitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable xi=v||/v.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
@@ -142,6 +142,7 @@ class UniformPitchAngleGrid(eqx.Module):
     nxi: int = eqx.field(static=True)
     gamma: jax.Array
     xi: jax.Array
+    wxi: jax.Array
 
     def __init__(self, nxi):
         nxi = eqx.error_if(nxi, nxi % 2 == 0, "nxi must be odd")
@@ -150,3 +151,19 @@ class UniformPitchAngleGrid(eqx.Module):
         gamma += jnp.pi / (2 * nxi)
         self.gamma = gamma
         self.xi = -jnp.cos(gamma)
+
+        # fejer type 1 quadrature
+        length = nxi // 2
+        r = nxi - length
+
+        kappa = jnp.arange(r)
+        beta = jnp.hstack(
+            [
+                2 * jnp.exp(1j * jnp.pi * kappa / nxi) / (1 - 4 * kappa**2),
+                jnp.zeros(length + 1),
+            ]
+        )
+        beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
+
+        wxi = jnp.fft.ifft(beta)
+        self.wxi = wxi.real

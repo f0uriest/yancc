@@ -34,7 +34,7 @@ def _solve_mdke(field, pitchgrid, species, E_psi, v):
 
 def test_solve_mdke_against_monkes():
     """Test solutions of MDKE against MONKES."""
-    pitchgrid = yancc.velocity_grids.PitchAngleGrid(11)
+    pitchgrid = yancc.velocity_grids.LegendrePitchAngleGrid(11)
 
     nt = 7
     nz = 7

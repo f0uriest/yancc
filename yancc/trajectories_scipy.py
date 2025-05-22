@@ -21,7 +21,7 @@ def dfdtheta(
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
@@ -78,7 +78,7 @@ def dfdzeta(
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
@@ -134,7 +134,7 @@ def dfdxi(
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     nu : float
         Normalized collisionality, nu/v
@@ -190,7 +190,7 @@ def dfdpitch(
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     nu : float
         Normalized collisionality, nu/v
@@ -241,7 +241,7 @@ def mdke(
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v

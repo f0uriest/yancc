@@ -7,7 +7,7 @@ import pytest
 
 from yancc.collisions import RosenbluthPotentials
 from yancc.utils import Gammainc, Gammaincc
-from yancc.velocity_grids import PitchAngleGrid, SpeedGrid
+from yancc.velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
 mpmath.mp.dps = 100
 
@@ -21,7 +21,7 @@ def xgrid():
 @pytest.fixture
 def xigrid():
     """Pitch angle grid for testing"""
-    return PitchAngleGrid(30)
+    return LegendrePitchAngleGrid(30)
 
 
 @pytest.fixture

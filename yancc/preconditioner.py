@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import monkes
 from monkes import Field, LocalMaxwellian
 
-from .velocity_grids import PitchAngleGrid, SpeedGrid
+from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
 
 class MONKESPreconditioner(cola.ops.LinearOperator):
@@ -19,7 +19,7 @@ class MONKESPreconditioner(cola.ops.LinearOperator):
         Magnetic field information
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -32,7 +32,7 @@ class MONKESPreconditioner(cola.ops.LinearOperator):
         self,
         field: Field,
         speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: LegendrePitchAngleGrid,
         species: list[LocalMaxwellian],
         E_psi: float,
     ):

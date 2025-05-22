@@ -4,13 +4,13 @@ import monkes
 import numpy as np
 
 from yancc.collisions import FokkerPlanckLandau, RosenbluthPotentials
-from yancc.velocity_grids import PitchAngleGrid, SpeedGrid
+from yancc.velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
 
 def test_verify_collision_null_single_species():
     """Check the null space of single species collision operator."""
     speedgrid = SpeedGrid(11)
-    pitchgrid = PitchAngleGrid(12)
+    pitchgrid = LegendrePitchAngleGrid(12)
 
     # just need a dummy field for this
     nt = 1
