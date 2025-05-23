@@ -58,7 +58,7 @@ def dfdtheta(
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
-        mask[idx] = 1
+        mask[idx] = np.mean(np.abs(w)) / h
         df *= mask[:, None] == 0
         df += scipy.sparse.diags_array(mask)
 
@@ -114,7 +114,7 @@ def dfdzeta(
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
-        mask[idx] = 1
+        mask[idx] = np.mean(np.abs(w)) / h
         df *= mask[:, None] == 0
         df += scipy.sparse.diags_array(mask)
 
@@ -170,7 +170,7 @@ def dfdxi(
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
-        mask[idx] = 1
+        mask[idx] = np.mean(np.abs(w)) / h
         df *= mask[:, None] == 0
         df += scipy.sparse.diags_array(mask)
 
@@ -219,7 +219,7 @@ def dfdpitch(
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
-        mask[idx] = -1
+        mask[idx] = nu / h**2
         df *= mask[:, None] == 0
         df += scipy.sparse.diags_array(mask)
 

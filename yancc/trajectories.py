@@ -772,7 +772,8 @@ def dfdtheta(
     # get only L or U by only taking forward or backward diff? + diagonal correction
     df = w * ((w > 0) * bd + (w <= 0) * fd)
     idx = pitchgrid.nxi // 2
-    df = jnp.where(gauge, df.at[idx, 0, 0].set(f[idx, 0, 0]), df)
+    scale = jnp.mean(jnp.abs(w)) / h
+    df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
     df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
@@ -848,7 +849,8 @@ def dfdzeta(
     bd = jax.lax.cond(diag, bd_diag, bd_full, f)
     df = w * ((w > 0) * bd + (w <= 0) * fd)
     idx = pitchgrid.nxi // 2
-    df = jnp.where(gauge, df.at[idx, 0, 0].set(f[idx, 0, 0]), df)
+    scale = jnp.mean(jnp.abs(w)) / h
+    df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
     df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
@@ -925,7 +927,8 @@ def dfdxi(
     bd = jax.lax.cond(diag, bd_diag, bd_full, f)
     df = w * ((w > 0) * bd + (w <= 0) * fd)
     idx = pitchgrid.nxi // 2
-    df = jnp.where(gauge, df.at[idx, 0, 0].set(f[idx, 0, 0]), df)
+    scale = jnp.mean(jnp.abs(w)) / h
+    df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
     df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
@@ -990,7 +993,8 @@ def dfdpitch(
     fd_full = lambda f: fd2(f, p, h=h, bc="symmetric", axis=0)
     ddf = -nu * jax.lax.cond(diag, fd_diag, fd_full, f)
     idx = pitchgrid.nxi // 2
-    ddf = jnp.where(gauge, ddf.at[idx, 0, 0].set(-f[idx, 0, 0]), ddf)
+    scale = nu / h**2
+    ddf = jnp.where(gauge, ddf.at[idx, 0, 0].set(scale * f[idx, 0, 0]), ddf)
     ddf = jnp.moveaxis(ddf, (0, 1, 2), caxorder)
     ddf = jnp.where(flip, ddf[..., ::-1], ddf)
     return ddf.reshape(shp)
