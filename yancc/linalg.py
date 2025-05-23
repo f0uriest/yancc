@@ -3,8 +3,10 @@
 import functools
 
 import cola
+import equinox as eqx
 import jax
 import jax.numpy as jnp
+import lineax as lx
 import optimistix
 import scipy
 from cola.fns import add, dot
@@ -784,3 +786,77 @@ def _tridiag_solve(l, d, u, b, *args):
     l = jnp.pad(l, (1, 0))
     u = jnp.pad(u, (0, 1))
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
+
+
+@jax.jit
+def lstsq(a, b):
+    """Least squares via normal equations."""
+    A = a.T @ a
+    B = a.T @ b
+    return jnp.linalg.solve(A, B)
+
+
+class InverseLinearOperator(lx.AbstractLinearOperator):
+    """Inverse of another linear operator."""
+
+    operator: lx.AbstractLinearOperator
+    solver: lx.AbstractLinearSolver
+    static_state: object = eqx.field(static=True)
+    dynamic_state: object
+    options: dict
+    throw: bool = eqx.field(static=True)
+
+    def __init__(
+        self,
+        operator,
+        solver=lx.AutoLinearSolver(well_posed=True),
+        options=None,
+        throw=True,
+    ):
+        self.operator = operator
+        self.solver = solver
+        state = solver.init(operator, options)
+        dynamic_state, static_state = eqx.partition(state, eqx.is_array)
+        dynamic_state = jax.lax.stop_gradient(dynamic_state)
+        self.static_state = static_state
+        self.dynamic_state = dynamic_state
+        self.options = options
+        self.throw = throw
+
+    def mv(self, x):
+        """Matrix vector product."""
+        return lx.linear_solve(
+            self.operator,
+            x,
+            solver=self.solver,
+            state=eqx.combine(self.dynamic_state, self.static_state),
+            options=self.options,
+            throw=self.throw,
+        ).value
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return self.operator.out_structure()
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return self.operator.in_structure()
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return InverseLinearOperator(self.operator.T, self.solver)
+
+
+@lx.is_symmetric.register(InverseLinearOperator)
+def _(operator):
+    return lx.is_symmetric(operator.operator)
+
+
+@lx.is_diagonal.register(InverseLinearOperator)
+def _(operator):
+    return lx.is_diagonal(operator.operator)
