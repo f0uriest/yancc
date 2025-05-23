@@ -357,13 +357,6 @@ def _multigrid_cycle_recursive(
     assert smooth_method in {"standard", "krylov"}
     smooth = {"standard": standard_smooth, "krylov": krylov_smooth}[smooth_method]
 
-    idx = jnp.ravel_multi_index(
-        (Ak.pitchgrid.nxi // 2, 0, 0),
-        (Ak.pitchgrid.nxi, Ak.field.ntheta, Ak.field.nzeta),
-        mode="clip",
-    )
-    rhs = jnp.asarray(rhs).at[idx].set(0.0)
-
     if verbose:
         rk = rhs - Ak.mv(x)
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
