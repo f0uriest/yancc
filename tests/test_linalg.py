@@ -3,6 +3,7 @@
 import cola
 import numpy as np
 import pytest
+import scipy
 
 import yancc.linalg
 
@@ -248,8 +249,9 @@ def test_approx_sum_kron2():
 
 def test_real_imag():
     """Test getting real and imaginary parts of an operator."""
-    A = np.random.random((5, 5)) + 1j * np.random.random((5, 5))
-    x = np.random.random(5)
+    rng = np.random.default_rng(123)
+    A = rng.random((5, 5)) + 1j * rng.random((5, 5))
+    x = rng.random(5)
     B = cola.fns.lazify(A)
     Br = yancc.linalg.RealOperator(B)
     Bi = yancc.linalg.ImagOperator(B)
@@ -267,10 +269,12 @@ def test_real_imag():
 def test_tridiagonal():
     """Test for solving tridiagonal systems."""
     N = 140
-    l = np.random.random(N - 1)
-    d = np.random.random(N)
-    u = np.random.random(N - 1)
-    b = np.random.random(N)
+    rng = np.random.default_rng(123)
+
+    l = rng.random(N - 1)
+    d = rng.random(N)
+    u = rng.random(N - 1)
+    b = rng.random(N)
     A = yancc.linalg.make_dense_tridiag(l, d, u)
     B = yancc.linalg.make_dense_tridiag(l, d, u, 1.2, 3.2)
 
@@ -280,3 +284,80 @@ def test_tridiagonal():
     np.testing.assert_allclose(
         np.linalg.solve(B, b), yancc.linalg.tridiag_solve_dense(B, b)
     )
+
+
+def test_banded_to_dense():
+    """Test conversion between banded and dense formats."""
+    p = 4
+    q = 4
+    nn = 129
+    rng = np.random.default_rng(123)
+
+    A = rng.random((p + q + 1, nn))
+    b = rng.random(nn)
+
+    B = yancc.linalg.banded_to_dense(p, q, A)
+    C = yancc.linalg.dense_to_banded(p, q, B)
+
+    np.testing.assert_allclose(
+        yancc.linalg.dense_to_banded(
+            p, q, yancc.linalg.banded_to_dense(p, q, A, True), True
+        ),
+        A,
+    )
+    np.testing.assert_allclose(
+        yancc.linalg.banded_to_dense(p, q, yancc.linalg.dense_to_banded(p, q, B)), B
+    )
+    np.testing.assert_allclose(
+        scipy.linalg.solve_banded((p, q), A, b), np.linalg.solve(B, b)
+    )
+    np.testing.assert_allclose(
+        scipy.linalg.solve_banded((p, q), C, b), np.linalg.solve(B, b)
+    )
+
+
+def test_lu_factor_banded():
+    """Test that LU is the same without pivoting for diagonally dominance matrix."""
+    rng = np.random.default_rng(123)
+
+    A = (
+        np.diag(rng.random(8), k=-2)
+        + np.diag(rng.random(8), k=2)
+        + np.diag(rng.random(9), k=-1)
+        + np.diag(rng.random(9), k=1)
+        + np.diag(3 + rng.random(10), k=0)
+    )
+    lu1 = scipy.linalg.lu_factor(A)[0]
+    lu2 = yancc.linalg.lu_factor_banded(2, 2, A)
+    np.testing.assert_allclose(lu1, lu2)
+
+
+def test_solve_banded():
+    """Test solving regular banded system."""
+    p = 4
+    q = 4
+    nn = 129
+    rng = np.random.default_rng(123)
+
+    A = 0.5 - rng.random((p + q + 1, nn))
+    b = rng.random(nn)
+
+    B = yancc.linalg.banded_to_dense(p, q, A)
+
+    np.testing.assert_allclose(
+        scipy.linalg.solve_banded((p, q), A, b), yancc.linalg.solve_banded(p, q, B, b)
+    )
+
+
+def test_solve_banded_periodic():
+    """Test solving periodic banded system."""
+    r = 4
+    nn = 129
+    rng = np.random.default_rng(123)
+    A = rng.random((2 * r + 1, nn))
+    A = yancc.linalg.banded_to_dense(r, r, A, True)
+    b = rng.random(nn)
+
+    x = yancc.linalg.solve_banded_periodic(r, A, b)
+    np.testing.assert_allclose(A @ x, b)
+    np.testing.assert_allclose(x, np.linalg.solve(A, b))
