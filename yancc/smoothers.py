@@ -10,7 +10,7 @@ import lineax as lx
 
 from .field import Field
 from .finite_diff import fd_coeffs
-from .linalg import tridiag_solve_dense
+from .linalg import lu_factor_banded_periodic, lu_solve_banded_periodic
 from .trajectories import _parse_axorder_shape, dfdpitch, dfdtheta, dfdxi, dfdzeta
 from .velocity_grids import UniformPitchAngleGrid
 
@@ -220,6 +220,10 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
+    smoother_solver : {"banded", "dense"}
+        Solver to use for inverting the smoother. "banded" is significantly faster in
+        most cases but may be numerically unstable in some edge cases. "dense" is
+        slower but more robust.
 
     """
 
@@ -229,6 +233,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     p2: int = eqx.field(static=True)
     flip: bool
     axorder: str = eqx.field(static=True)
+    bandwidth: int = eqx.field(static=True)
+    smoother_solver: str = eqx.field(static=True)
     mats: jax.Array
 
     def __init__(
@@ -242,6 +248,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         axorder="atz",
         flip=False,
         gauge=True,
+        smoother_solver="banded",
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -249,6 +256,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.flip = jnp.array(flip)
+        assert smoother_solver in {"banded", "dense"}
+        self.smoother_solver = smoother_solver
+        self.bandwidth = max(
+            fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+        )
 
         mats = get_block_diag(
             field,
@@ -261,8 +273,9 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             flip=flip,
             gauge=gauge,
         )
-        if fd_coeffs[1][self.p1].size <= 3 and fd_coeffs[2][self.p2].size <= 3:
-            self.mats = mats
+
+        if self.smoother_solver == "banded":
+            self.mats = lu_factor_banded_periodic(self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -273,12 +286,16 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             f, self.field, self.pitchgrid, self.axorder, self.flip
         )
         x = jax.linear_transpose(permute, x)(x)[0]
-        size, N, M = self.mats.shape
-        x = x.reshape(size, N)
-        if fd_coeffs[1][self.p1].size <= 3 and fd_coeffs[2][self.p2].size <= 3:
-            b = tridiag_solve_dense(self.mats, x)
+
+        if self.smoother_solver == "banded":
+            size, N, M = self.mats[0].shape
+            x = x.reshape(size, M)
+            b = lu_solve_banded_periodic(self.bandwidth, self.mats, x)
         else:
+            size, N, M = self.mats.shape
+            x = x.reshape(size, M)
             b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+
         return permute(b.flatten())
 
     def as_matrix(self):

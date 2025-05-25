@@ -43,14 +43,22 @@ def get_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
     return operators
 
 
-@functools.partial(jax.jit, static_argnames=["p1", "p2"])
-def get_jacobi_smoothers(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
+@functools.partial(jax.jit, static_argnames=["p1", "p2", "smoother_solver"])
+def get_jacobi_smoothers(fields, pitchgrids, E_psi, nu, p1, p2, gauge, smoother_solver):
     """Get multigrid smoothers for each field, pitchgrid."""
     smoothers = []
     for field, pitchgrid in zip(fields, pitchgrids):
         smooth = [
             MDKEJacobiSmoother(
-                field, pitchgrid, E_psi, nu, axorder=order, p1=p1, p2=p2, gauge=gauge
+                field,
+                pitchgrid,
+                E_psi,
+                nu,
+                axorder=order,
+                p1=p1,
+                p2=p2,
+                gauge=gauge,
+                smoother_solver=smoother_solver,
             )
             for order in ["atz", "zat", "tza"]
         ]
