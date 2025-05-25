@@ -286,30 +286,38 @@ def test_tridiagonal():
     )
 
 
-def test_banded_to_dense():
+@pytest.mark.parametrize(
+    "nr", [(n, r) for n in [1, 4, 8, 16] for r in np.arange(5) if r <= n]
+)
+def test_banded_to_dense(nr):
     """Test conversion between banded and dense formats."""
-    p = 4
-    q = 4
-    nn = 129
+    n, r = nr
+    p = r
+    q = r
     rng = np.random.default_rng(123)
 
-    A = rng.random((p + q + 1, nn))
-    b = rng.random(nn)
+    A = np.diag(np.random.random(n))
+    for i in range(1, p + 1):
+        A += np.diag(np.random.random(n - i), k=-i)
+    for i in range(1, q + 1):
+        A += np.diag(np.random.random(n - i), k=i)
 
-    B = yancc.linalg.banded_to_dense(p, q, A)
-    C = yancc.linalg.dense_to_banded(p, q, B)
+    b = rng.random(n)
 
-    np.testing.assert_allclose(
-        yancc.linalg.dense_to_banded(
-            p, q, yancc.linalg.banded_to_dense(p, q, A, True), True
-        ),
-        A,
-    )
+    C = yancc.linalg.dense_to_banded(p, q, A)
+    B = yancc.linalg.banded_to_dense(p, q, C)
+
+    np.testing.assert_allclose(A, B)
+
+    if n > 2 * r:
+        np.testing.assert_allclose(
+            yancc.linalg.banded_to_dense(
+                p, q, yancc.linalg.dense_to_banded(p, q, A, True), True
+            ),
+            A,
+        )
     np.testing.assert_allclose(
         yancc.linalg.banded_to_dense(p, q, yancc.linalg.dense_to_banded(p, q, B)), B
-    )
-    np.testing.assert_allclose(
-        scipy.linalg.solve_banded((p, q), A, b), np.linalg.solve(B, b)
     )
     np.testing.assert_allclose(
         scipy.linalg.solve_banded((p, q), C, b), np.linalg.solve(B, b)
@@ -327,36 +335,48 @@ def test_lu_factor_banded():
         + np.diag(rng.random(9), k=1)
         + np.diag(3 + rng.random(10), k=0)
     )
+    B = yancc.linalg.dense_to_banded(2, 2, A)
     lu1 = scipy.linalg.lu_factor(A)[0]
-    lu2 = yancc.linalg.lu_factor_banded(2, 2, A)
-    np.testing.assert_allclose(lu1, lu2)
+    lu2 = yancc.linalg.lu_factor_banded(2, 2, B)
+    np.testing.assert_allclose(lu1, yancc.linalg.banded_to_dense(2, 2, lu2))
 
 
-def test_solve_banded():
+@pytest.mark.parametrize(
+    "nr", [(n, r) for n in [1, 4, 8, 16] for r in np.arange(5) if r <= n]
+)
+def test_solve_banded(nr):
     """Test solving regular banded system."""
-    p = 4
-    q = 4
-    nn = 129
+    n, r = nr
+    p = r
+    q = r
     rng = np.random.default_rng(123)
 
-    A = 0.5 - rng.random((p + q + 1, nn))
-    b = rng.random(nn)
-
-    B = yancc.linalg.banded_to_dense(p, q, A)
+    A = 0.5 - rng.random((p + q + 1, n))
+    b = rng.random(n)
 
     np.testing.assert_allclose(
-        scipy.linalg.solve_banded((p, q), A, b), yancc.linalg.solve_banded(p, q, B, b)
+        scipy.linalg.solve_banded((p, q), A, b), yancc.linalg.solve_banded(p, q, A, b)
     )
 
 
-def test_solve_banded_periodic():
+@pytest.mark.parametrize(
+    "nr", [(n, r) for n in [1, 4, 8, 16] for r in np.arange(5) if r <= n]
+)
+def test_solve_banded_periodic(nr):
     """Test solving periodic banded system."""
-    r = 4
-    nn = 129
+    n, r = nr
     rng = np.random.default_rng(123)
-    A = rng.random((2 * r + 1, nn))
-    A = yancc.linalg.banded_to_dense(r, r, A, True)
-    b = rng.random(nn)
+    A = np.diag(np.random.random(n))
+    for i in range(1, r + 1):
+        A += np.diag(np.random.random(n - i), k=-i)
+    for i in range(1, r + 1):
+        A += np.diag(np.random.random(n - i), k=i)
+    if r > 0:
+        F = np.triu(np.random.random((r, r)))
+        G = np.tril(np.random.random((r, r)))
+        A[:r, -r:] = F
+        A[-r:, :r] = G
+    b = rng.random(n)
 
     x = yancc.linalg.solve_banded_periodic(r, A, b)
     np.testing.assert_allclose(A @ x, b)
