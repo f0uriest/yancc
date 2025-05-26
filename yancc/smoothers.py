@@ -220,7 +220,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
-    smoother_solver : {"banded", "dense"}
+    smooth_solver : {"banded", "dense"}
         Solver to use for inverting the smoother. "banded" is significantly faster in
         most cases but may be numerically unstable in some edge cases. "dense" is
         slower but more robust.
@@ -234,7 +234,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     flip: bool
     axorder: str = eqx.field(static=True)
     bandwidth: int = eqx.field(static=True)
-    smoother_solver: str = eqx.field(static=True)
+    smooth_solver: str = eqx.field(static=True)
     mats: jax.Array
 
     def __init__(
@@ -248,7 +248,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         axorder="atz",
         flip=False,
         gauge=True,
-        smoother_solver="banded",
+        smooth_solver="banded",
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -256,8 +256,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.flip = jnp.array(flip)
-        assert smoother_solver in {"banded", "dense"}
-        self.smoother_solver = smoother_solver
+        assert smooth_solver in {"banded", "dense"}
+        self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
@@ -274,7 +274,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             gauge=gauge,
         )
 
-        if self.smoother_solver == "banded":
+        if self.smooth_solver == "banded":
             self.mats = lu_factor_banded_periodic(self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -287,7 +287,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         )
         x = jax.linear_transpose(permute, x)(x)[0]
 
-        if self.smoother_solver == "banded":
+        if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
             x = x.reshape(size, M)
             b = lu_solve_banded_periodic(self.bandwidth, self.mats, x)
