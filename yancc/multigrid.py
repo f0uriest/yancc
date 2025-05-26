@@ -274,7 +274,8 @@ def multigrid_cycle(
     smooth_weights=None,
     interp_method="linear",
     smooth_method="standard",
-    opinv=None,
+    coarse_opinv=None,
+    coarse_overweight=1.0,
     verbose=False,
 ):
     """Apply multigrid cycle for solving operator @ x = rhs
@@ -303,8 +304,11 @@ def multigrid_cycle(
         Method of interpolation, passed to interpax.interp3d
     smooth_method : {"standard", "krylov"}
         Method to use for smoothing.
-    opinv: lx.AbstractLinearOperator
+    coarse_opinv: lx.AbstractLinearOperator
         Precomputed inverse of coarse grid operator.
+    coarse_overweight : float
+        Factor to weight coarse grid residuals by, to improve coarse grid correction
+        for closed characteristics.
     verbose : int
         Level of verbosity:
           - 0: no into printed.
@@ -316,8 +320,8 @@ def multigrid_cycle(
     kk = len(operators) - 1
     if x0 is None:
         x0 = jnp.zeros_like(rhs)
-    if opinv is None:
-        opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+    if coarse_opinv is None:
+        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
 
     def body(i, x):
         x = _multigrid_cycle_recursive(
@@ -332,7 +336,8 @@ def multigrid_cycle(
             smooth_weights=smooth_weights,
             interp_method=interp_method,
             smooth_method=smooth_method,
-            opinv=opinv,
+            coarse_opinv=coarse_opinv,
+            coarse_overweight=coarse_overweight,
             verbose=max(verbose - 1, 0),
         )
         if verbose:
@@ -356,7 +361,8 @@ def _multigrid_cycle_recursive(
     smooth_weights,
     interp_method,
     smooth_method,
-    opinv,
+    coarse_opinv,
+    coarse_overweight,
     verbose,
 ):
     Ak = operators[k]
@@ -379,7 +385,7 @@ def _multigrid_cycle_recursive(
     if verbose:
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
         jax.debug.print("(level={k}) after presmooth err: {err:.3e}", err=err, k=k)
-    rkm1 = interpolate(
+    rkm1 = coarse_overweight * interpolate(
         rk,
         operators[k].field,
         operators[k - 1].field,
@@ -388,7 +394,7 @@ def _multigrid_cycle_recursive(
         interp_method,
     )
     if k == 1:
-        ykm1 = opinv.mv(rkm1)
+        ykm1 = coarse_opinv.mv(rkm1)
         if verbose:
             err = jnp.linalg.norm(ykm1)
             jax.debug.print("(level=0) coarse_correction: {err:.3e}", err=err)
@@ -408,6 +414,8 @@ def _multigrid_cycle_recursive(
                 smooth_weights=smooth_weights,
                 interp_method=interp_method,
                 smooth_method=smooth_method,
+                coarse_opinv=coarse_opinv,
+                coarse_overweight=coarse_overweight,
                 verbose=verbose,
             ),
         )
@@ -476,8 +484,11 @@ class MultigridOperator(lx.AbstractLinearOperator):
         Method of interpolation, passed to interpax.interp3d
     smooth_method : {"standard", "krylov"}
         Method to use for smoothing.
-    opinv: lx.AbstractLinearOperator
+    coarse_opinv: lx.AbstractLinearOperator
         Precomputed inverse of coarse grid operator.
+    coarse_overweight : float
+        Factor to weight coarse grid residuals by, to improve coarse grid correction
+        for closed characteristics.
     verbose : int
         Level of verbosity:
           - 0: no into printed.
@@ -496,7 +507,8 @@ class MultigridOperator(lx.AbstractLinearOperator):
     smooth_weights: jax.Array
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
-    opinv: InverseLinearOperator
+    coarse_opinv: InverseLinearOperator
+    coarse_overweight: jax.Array
     verbose: int = eqx.field(static=True)
 
     def __init__(
@@ -510,7 +522,8 @@ class MultigridOperator(lx.AbstractLinearOperator):
         smooth_weights=None,
         interp_method="linear",
         smooth_method="standard",
-        opinv=None,
+        coarse_opinv=None,
+        coarse_overweight=1.0,
         verbose=False,
     ):
 
@@ -523,9 +536,10 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.smooth_weights = smooth_weights
         self.interp_method = interp_method
         self.smooth_method = smooth_method
-        if opinv is None:
-            opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
-        self.opinv = opinv
+        if coarse_opinv is None:
+            coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        self.coarse_opinv = coarse_opinv
+        self.coarse_overweight = jnp.asarray(coarse_overweight)
         self.verbose = verbose
 
     @eqx.filter_jit
@@ -544,7 +558,8 @@ class MultigridOperator(lx.AbstractLinearOperator):
             smooth_weights=self.smooth_weights,
             interp_method=self.interp_method,
             smooth_method=self.smooth_method,
-            opinv=self.opinv,
+            coarse_opinv=self.coarse_opinv,
+            coarse_overweight=self.coarse_overweight,
             verbose=self.verbose,
         )
         return x
