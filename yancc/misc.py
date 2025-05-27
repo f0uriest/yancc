@@ -3,8 +3,9 @@
 import cola
 import jax
 import jax.numpy as jnp
-from monkes import Field, LocalMaxwellian
 
+from .field import Field
+from .species import LocalMaxwellian
 from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
 

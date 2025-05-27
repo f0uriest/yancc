@@ -8,11 +8,11 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from monkes import LocalMaxwellian
 
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
 from .linalg import approx_kron_diag2d, approx_sum_kron, prodkron2kronprod
+from .species import LocalMaxwellian
 from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid, UniformPitchAngleGrid
 
 

@@ -6,13 +6,13 @@ import cola
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import monkes
 import numpy as np
 import orthax
 import quadax
-from monkes import Field, LocalMaxwellian
 
+from .field import Field
 from .linalg import BlockOperator
+from .species import LocalMaxwellian, gamma_ab, nuD_ab, nupar_ab
 from .utils import lGammainc, lGammaincc
 from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
@@ -528,7 +528,7 @@ class PitchAngleScattering(cola.ops.Kronecker):
         for spa in species:
             nu = 0.0
             for spb in species:
-                nu += monkes._species.nuD_ab(spa, spb, x * spa.v_thermal)
+                nu += nuD_ab(spa, spb, x * spa.v_thermal)
             if normalize:
                 nus.append(nu / 2 / spa.v_thermal)
             else:
@@ -596,9 +596,9 @@ class EnergyScattering(cola.ops.Kronecker):
             term2 = 0.0
             term3 = 0.0
             for spb in species:
-                nupar = monkes._species.nupar_ab(spa, spb, v)
-                nuD = monkes._species.nuD_ab(spa, spb, v)
-                gamma = monkes._species.gamma_ab(spa, spb, v)
+                nupar = nupar_ab(spa, spb, v)
+                nuD = nuD_ab(spa, spb, v)
+                gamma = gamma_ab(spa, spb, v)
                 ma, mb = spa.species.mass, spb.species.mass
                 vtb = spb.v_thermal
                 term1 += nupar * x**2 / 2
@@ -680,7 +680,7 @@ class _CD(cola.ops.Kronecker):
             v = x * va
             Fa = spa(v)
             for b, spb in enumerate(species):
-                gamma = monkes._species.gamma_ab(spa, spb, v)
+                gamma = gamma_ab(spa, spb, v)
                 vb = spb.v_thermal
                 mb = spb.species.mass
                 # need to evaluate fb on the speed grid for fa
@@ -772,7 +772,7 @@ class _CG(cola.ops.Kronecker):
             v = x * va
             Fa = spa(v)
             for b, spb in enumerate(species):
-                gamma = monkes._species.gamma_ab(spa, spb, v)
+                gamma = gamma_ab(spa, spb, v)
                 vb = spb.v_thermal
                 ddGxlk = potentials.ddGxlk[a, b]
                 # its diagonal in legendre index (axis position 1)
@@ -863,7 +863,7 @@ class _CH(cola.ops.Kronecker):
             v = x * va
             Fa = spa(v)
             for b, spb in enumerate(species):
-                gamma = monkes._species.gamma_ab(spa, spb, v)
+                gamma = gamma_ab(spa, spb, v)
                 vb = spb.v_thermal
                 mb = spb.species.mass
                 Hxlk = potentials.Hxlk[a, b]
@@ -947,7 +947,7 @@ class MonoenergeticPitchAngleScattering(cola.ops.Kronecker):
         Iz = cola.ops.Identity((field.nzeta, field.nzeta), field.zeta.dtype)
         L = cola.ops.Dense(pitchgrid.L)
 
-        nu = monkes._species.nuD_ab(species, species, v) / 2
+        nu = nuD_ab(species, species, v) / 2
         if normalize:
             nu /= v
         nu = cola.ops.Dense(jnp.atleast_2d(nu))
