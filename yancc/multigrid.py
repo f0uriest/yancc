@@ -592,3 +592,108 @@ class MultigridOperator(lx.AbstractLinearOperator):
 @lx.is_tridiagonal.register(MultigridOperator)
 def _(operator):
     return False
+
+
+def get_multigrid_preconditioner(
+    field,
+    E_psi,
+    nu,
+    nl,
+    nz=None,
+    nt=None,
+    p1="4d",
+    p2=4,
+    cycle_index=0,
+    v1=3,
+    v2=3,
+    smooth_weights=None,
+    interp_method="linear",
+    smooth_method="standard",
+    smooth_solver="banded",
+    coarse_overweight=1.0,
+    coarse_N=200,
+    coarsening=2,
+    gauge=True,
+    verbose=False,
+):
+    """Multigrid linear operator for preconditioning.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    E_psi : float
+        Normalized radial electric field.
+    nu : float
+        Normalized collisionality.
+    nl : int
+        Number of grid points in pitch angle.
+    nz, nt : int
+        Number of grid points in zeta/theta. Defaults to that from field.
+    p1 : str
+        Finite difference stencil for first derivatives.
+    p2 : str
+        Finite difference stencil for second derivatives.
+    cycle_index : int
+        Type of cycle. 0 = F cycle, 1 = V cycle, 2 = W cycle etc.
+    v1, v2 : int
+        Number of pre- and post- smoothing iterations.
+    smooth_weights : jax.Array
+        Damping factors for under relaxed smoothing.
+    interp_method : str
+        Method of interpolation, passed to interpax.interp3d
+    smooth_method : {"standard", "krylov"}
+        Method to use for smoothing.
+    smooth_solver : {"banded", "dense"}
+        Solver to use for inverting the smoother. "banded" is significantly faster in
+        most cases but may be numerically unstable in some edge cases. "dense" is
+        slower but more robust.
+    coarse_overweight : float
+        Factor to weight coarse grid residuals by, to improve coarse grid correction
+        for closed characteristics.
+    coarse_N : int
+        Approximate max size of coarsest grid problem, which will be solve directly.
+    coarsening : int
+        How much to coarsen grids by in each direction at each level.
+    gauge : bool
+        Whether to include gauge freedom constraint.
+    verbose : int
+        Level of verbosity:
+          - 0: no into printed.
+          - 1: print residuals after each cycle.
+          - 2: also print residuals at each multigrid level before and after smoothing.
+          - 3: also print residuals within smoothing iterations.
+    """
+    if nt is None:
+        nt = field.ntheta
+    if nz is None:
+        nz = field.nzeta
+
+    fields, grids = get_fields_grids(
+        field,
+        nt,
+        nz,
+        nl,
+        coarsening_factor=coarsening,
+        min_N=coarse_N,
+        min_nt=5,
+        min_nz=5,
+        min_nx=5,
+    )
+    operators = get_operators(fields, grids, E_psi, nu, p1, p2, gauge)
+    smoothers = get_jacobi_smoothers(
+        fields, grids, E_psi, nu, p1, p2, gauge, smooth_solver
+    )
+    Mlx = MultigridOperator(
+        operators[::-1],
+        smoothers[::-1],
+        cycle_index=cycle_index,
+        v1=v1,
+        v2=v2,
+        smooth_weights=smooth_weights,
+        interp_method=interp_method,
+        smooth_method=smooth_method,
+        coarse_overweight=coarse_overweight,
+        verbose=verbose,
+    )
+    return Mlx
