@@ -540,9 +540,3 @@ def gcrotmk(
 
 def _roll_prepend(X, y):
     return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
-
-
-def _safediv(x, y, tol):
-    mask = jnp.abs(y) > tol
-    y = jnp.where(mask, y, 1)
-    return jnp.where(mask, x / y, 0)
