@@ -709,7 +709,6 @@ def dfdtheta(
     axorder="atz",
     p="1a",
     diag=False,
-    flip=False,
     gauge=False,
 ):
     """Advection operator in theta direction.
@@ -732,8 +731,6 @@ def dfdtheta(
         upwinded, "b" and "c" if they exist are upwind biased but not fully.
     diag : bool
         If True, only apply the diagonal part of the operator.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
 
@@ -748,7 +745,6 @@ def dfdtheta(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     w = w_theta(field, pitchgrid, E_psi)
     h = 2 * np.pi / field.ntheta
@@ -775,7 +771,6 @@ def dfdtheta(
     scale = jnp.mean(jnp.abs(w)) / h
     df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
 
 
@@ -788,7 +783,6 @@ def dfdzeta(
     axorder="atz",
     p="1a",
     diag=False,
-    flip=False,
     gauge=False,
 ):
     """Advection operator in zeta direction.
@@ -811,8 +805,6 @@ def dfdzeta(
         upwinded, "b" and "c" if they exist are upwind biased but not fully.
     diag : bool
         If True, only apply the diagonal part of the operator.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
 
@@ -827,7 +819,6 @@ def dfdzeta(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     w = w_zeta(field, pitchgrid, E_psi)
     h = 2 * np.pi / field.nzeta / field.NFP
@@ -852,7 +843,6 @@ def dfdzeta(
     scale = jnp.mean(jnp.abs(w)) / h
     df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
 
 
@@ -865,7 +855,6 @@ def dfdxi(
     axorder="atz",
     p="1a",
     diag=False,
-    flip=False,
     gauge=False,
 ):
     """Advection operator in xi/pitch direction.
@@ -888,8 +877,6 @@ def dfdxi(
         upwinded, "b" and "c" if they exist are upwind biased but not fully.
     diag : bool
         If True, only apply the diagonal part of the operator.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
 
@@ -904,7 +891,6 @@ def dfdxi(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     w = w_pitch(field, pitchgrid, nu)
     h = np.pi / pitchgrid.nxi
@@ -930,7 +916,6 @@ def dfdxi(
     scale = jnp.mean(jnp.abs(w)) / h
     df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
     df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    df = jnp.where(flip, df[..., ::-1], df)
     return df.reshape(shp)
 
 
@@ -943,7 +928,6 @@ def dfdpitch(
     axorder="atz",
     p=2,
     diag=False,
-    flip=False,
     gauge=False,
 ):
     """Diffusion operator in xi/pitch direction.
@@ -964,8 +948,6 @@ def dfdpitch(
         Order of approximation for derivatives.
     diag : bool
         If True, only apply the diagonal part of the operator.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
 
@@ -980,7 +962,6 @@ def dfdpitch(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jnp.where(flip, f[..., ::-1], f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     h = np.pi / pitchgrid.nxi
 
@@ -996,7 +977,6 @@ def dfdpitch(
     scale = nu / h**2
     ddf = jnp.where(gauge, ddf.at[idx, 0, 0].set(scale * f[idx, 0, 0]), ddf)
     ddf = jnp.moveaxis(ddf, (0, 1, 2), caxorder)
-    ddf = jnp.where(flip, ddf[..., ::-1], ddf)
     return ddf.reshape(shp)
 
 
@@ -1010,7 +990,6 @@ def mdke(
     axorder="atz",
     p1="1a",
     p2=2,
-    flip=False,
     gauge=False,
 ):
     """MDKE operator.
@@ -1033,8 +1012,6 @@ def mdke(
         Order of approximation for first derivatives.
     p2 : int
         Order of approximation for second derivatives.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
 
@@ -1043,10 +1020,10 @@ def mdke(
     df : jax.Array
 
     """
-    dt = dfdtheta(f, field, pitchgrid, E_psi, axorder, p1, flip=flip, gauge=gauge)
-    dz = dfdzeta(f, field, pitchgrid, E_psi, axorder, p1, flip=flip, gauge=gauge)
-    di = dfdxi(f, field, pitchgrid, nu, axorder, p1, flip=flip, gauge=gauge)
-    dp = dfdpitch(f, field, pitchgrid, nu, axorder, p2, flip=flip, gauge=gauge)
+    dt = dfdtheta(f, field, pitchgrid, E_psi, axorder, p1, gauge=gauge)
+    dz = dfdzeta(f, field, pitchgrid, E_psi, axorder, p1, gauge=gauge)
+    di = dfdxi(f, field, pitchgrid, nu, axorder, p1, gauge=gauge)
+    dp = dfdpitch(f, field, pitchgrid, nu, axorder, p2, gauge=gauge)
     return dt + dz + di + dp
 
 
@@ -1069,8 +1046,6 @@ class MDKE(lx.AbstractLinearOperator):
         Order of approximation for first derivatives.
     p2 : int
         Order of approximation for second derivatives.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
 
@@ -1082,7 +1057,6 @@ class MDKE(lx.AbstractLinearOperator):
     nu: float
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    flip: bool
     gauge: bool
     axorder: str = eqx.field(static=True)
 
@@ -1095,7 +1069,6 @@ class MDKE(lx.AbstractLinearOperator):
         p1="1a",
         p2=2,
         axorder="atz",
-        flip=False,
         gauge=True,
     ):
         self.field = field
@@ -1105,7 +1078,6 @@ class MDKE(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        self.flip = jnp.array(flip)
         self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
@@ -1120,7 +1092,6 @@ class MDKE(lx.AbstractLinearOperator):
             axorder=self.axorder,
             p1=self.p1,
             p2=self.p2,
-            flip=self.flip,
             gauge=self.gauge,
         )
 

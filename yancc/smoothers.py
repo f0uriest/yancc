@@ -17,7 +17,7 @@ from .velocity_grids import UniformPitchAngleGrid
 
 @functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
 def get_block_diag(
-    field, pitchgrid, E_psi, nu, axorder="atz", p1="1a", p2=2, flip=False, gauge=False
+    field, pitchgrid, E_psi, nu, axorder="atz", p1="1a", p2=2, gauge=False
 ):
     """Extract the block diagonal part of the MDKE operator for a given ordering."""
     assert axorder[-1] in "atz"
@@ -33,7 +33,6 @@ def get_block_diag(
                 nu,
                 axorder=axorder,
                 p=p1,
-                flip=flip,
                 gauge=gauge,
             )
         )(x.reshape((-1, pitchgrid.nxi)).T).T.reshape(
@@ -47,7 +46,6 @@ def get_block_diag(
                 nu,
                 axorder=axorder,
                 p=p2,
-                flip=flip,
                 gauge=gauge,
             )
         )(x.reshape((-1, pitchgrid.nxi)).T).T.reshape(
@@ -61,7 +59,6 @@ def get_block_diag(
             axorder=axorder,
             p=p1,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f3 = jax.vmap(jnp.diag)(f3.reshape((-1, pitchgrid.nxi)))
@@ -73,7 +70,6 @@ def get_block_diag(
             axorder=axorder,
             p=p1,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f4 = jax.vmap(jnp.diag)(f4.reshape((-1, pitchgrid.nxi)))
@@ -90,7 +86,6 @@ def get_block_diag(
             axorder=axorder,
             p=p1,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f1 = jax.vmap(jnp.diag)(f1.reshape((-1, field.ntheta)))
@@ -102,7 +97,6 @@ def get_block_diag(
             axorder=axorder,
             p=p2,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f2 = jax.vmap(jnp.diag)(f2.reshape((-1, field.ntheta)))
@@ -114,7 +108,6 @@ def get_block_diag(
                 E_psi,
                 axorder=axorder,
                 p=p1,
-                flip=flip,
                 gauge=gauge,
             )
         )(x.reshape((-1, field.ntheta)).T).T.reshape((-1, field.ntheta, field.ntheta))
@@ -126,7 +119,6 @@ def get_block_diag(
             axorder=axorder,
             p=p1,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f4 = jax.vmap(jnp.diag)(f4.reshape((-1, field.ntheta)))
@@ -143,7 +135,6 @@ def get_block_diag(
             axorder=axorder,
             p=p1,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f1 = jax.vmap(jnp.diag)(f1.reshape((-1, field.nzeta)))
@@ -155,7 +146,6 @@ def get_block_diag(
             axorder=axorder,
             p=p2,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f2 = jax.vmap(jnp.diag)(f2.reshape((-1, field.nzeta)))
@@ -167,7 +157,6 @@ def get_block_diag(
             axorder=axorder,
             p=p1,
             diag=True,
-            flip=flip,
             gauge=gauge,
         )
         f3 = jax.vmap(jnp.diag)(f3.reshape((-1, field.nzeta)))
@@ -179,20 +168,18 @@ def get_block_diag(
                 E_psi,
                 axorder=axorder,
                 p=p1,
-                flip=flip,
                 gauge=gauge,
             )
         )(x.reshape((-1, field.nzeta)).T).T.reshape((-1, field.nzeta, field.nzeta))
         return f1 + f2 + f3 + f4
 
 
-def permute_f(f, field, pitchgrid, axorder, flip):
+def permute_f(f, field, pitchgrid, axorder):
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)
-    f = jax.lax.cond(flip, lambda: f[..., ::-1], lambda: f)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
     return f.flatten()
 
@@ -216,8 +203,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         Order of approximation for first derivatives.
     p2 : int
         Order of approximation for second derivatives.
-    flip : bool
-        If True, assume f is ordered backwards in each coordinate.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
     smooth_solver : {"banded", "dense"}
@@ -231,7 +216,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    flip: bool
     axorder: str = eqx.field(static=True)
     bandwidth: int = eqx.field(static=True)
     smooth_solver: str = eqx.field(static=True)
@@ -246,7 +230,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         p1="1a",
         p2=2,
         axorder="atz",
-        flip=False,
         gauge=True,
         smooth_solver="banded",
     ):
@@ -255,7 +238,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        self.flip = jnp.array(flip)
         assert smooth_solver in {"banded", "dense"}
         self.smooth_solver = smooth_solver
         self.bandwidth = max(
@@ -270,7 +252,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             axorder=axorder,
             p1=p1,
             p2=p2,
-            flip=flip,
             gauge=gauge,
         )
 
@@ -282,9 +263,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, x):
         """Matrix vector product."""
-        permute = lambda f: permute_f(
-            f, self.field, self.pitchgrid, self.axorder, self.flip
-        )
+        permute = lambda f: permute_f(f, self.field, self.pitchgrid, self.axorder)
         x = jax.linear_transpose(permute, x)(x)[0]
 
         if self.smooth_solver == "banded":

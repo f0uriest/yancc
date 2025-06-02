@@ -50,37 +50,6 @@ def test_get_block_diag(pitchgrid, field):
     )
     np.testing.assert_allclose(a1, a2, err_msg=order)
 
-    # flipped
-    order = "tza"
-    a1 = get_block_diag(field, pitchgrid, 1e-3, 1e-3, order, flip=True)
-    a2 = extract_blocks(
-        jax.jacfwd(
-            lambda x: mdke(x, field, pitchgrid, 1e-3, 1e-3, axorder=order, flip=True)
-        )(np.zeros(nt * nz * nl)),
-        nl,
-    )
-    np.testing.assert_allclose(a1, a2, err_msg=order)
-
-    order = "zat"
-    a1 = get_block_diag(field, pitchgrid, 1e-3, 1e-3, order, flip=True)
-    a2 = extract_blocks(
-        jax.jacfwd(
-            lambda x: mdke(x, field, pitchgrid, 1e-3, 1e-3, axorder=order, flip=True)
-        )(np.zeros(nt * nz * nl)),
-        nt,
-    )
-    np.testing.assert_allclose(a1, a2, err_msg=order)
-
-    order = "atz"
-    a1 = get_block_diag(field, pitchgrid, 1e-3, 1e-3, order, flip=True)
-    a2 = extract_blocks(
-        jax.jacfwd(
-            lambda x: mdke(x, field, pitchgrid, 1e-3, 1e-3, axorder=order, flip=True)
-        )(np.zeros(nt * nz * nl)),
-        nz,
-    )
-    np.testing.assert_allclose(a1, a2, err_msg=order)
-
 
 def test_diagonals(field, pitchgrid):
     """Test that tricks for getting the diagonal work correctly."""
@@ -210,19 +179,6 @@ def test_permutations(field, pitchgrid):
         "atz",
         p1=p1,
         p2=p2,
-        flip=False,
-        gauge=True,
-    )
-    A0b = jax.jacfwd(mdke)(
-        np.zeros(N),
-        field,
-        pitchgrid,
-        E_psi,
-        nu,
-        "atz",
-        p1=p1,
-        p2=p2,
-        flip=True,
         gauge=True,
     )
     A1f = jax.jacfwd(mdke)(
@@ -234,19 +190,6 @@ def test_permutations(field, pitchgrid):
         "zat",
         p1=p1,
         p2=p2,
-        flip=False,
-        gauge=True,
-    )
-    A1b = jax.jacfwd(mdke)(
-        np.zeros(N),
-        field,
-        pitchgrid,
-        E_psi,
-        nu,
-        "zat",
-        p1=p1,
-        p2=p2,
-        flip=True,
         gauge=True,
     )
     A2f = jax.jacfwd(mdke)(
@@ -258,49 +201,24 @@ def test_permutations(field, pitchgrid):
         "tza",
         p1=p1,
         p2=p2,
-        flip=False,
-        gauge=True,
-    )
-    A2b = jax.jacfwd(mdke)(
-        np.zeros(N),
-        field,
-        pitchgrid,
-        E_psi,
-        nu,
-        "tza",
-        p1=p1,
-        p2=p2,
-        flip=True,
         gauge=True,
     )
 
-    P0f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "atz", False)
-    P0b = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "atz", True)
-    P1f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "zat", False)
-    P1b = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "zat", True)
-    P2f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "tza", False)
-    P2b = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "tza", True)
+    P0f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "atz")
+    P1f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "zat")
+    P2f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "tza")
 
     # dummy check that Ps are permutation matrices
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f @ P0f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P0b @ P0b.T)
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P1f @ P1f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P1b @ P1b.T)
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P2f @ P2f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P2b @ P2b.T)
 
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f.T @ P0f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P0b.T @ P0b)
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P1f.T @ P1f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P1b.T @ P1b)
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P2f.T @ P2f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P2b.T @ P2b)
 
     # applying permutation matrices should be the same as the operator in
     # re-ordered basis
     np.testing.assert_allclose(A0f, P0f @ A0f @ P0f.T)
-    np.testing.assert_allclose(A0f, P0b @ A0b @ P0b.T)
     np.testing.assert_allclose(A0f, P1f @ A1f @ P1f.T)
-    np.testing.assert_allclose(A0f, P1b @ A1b @ P1b.T)
     np.testing.assert_allclose(A0f, P2f @ A2f @ P2f.T)
-    np.testing.assert_allclose(A0f, P2b @ A2b @ P2b.T)
