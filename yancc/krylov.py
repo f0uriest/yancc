@@ -535,7 +535,7 @@ def gcrotmk(
     U = tree_map(_roll_prepend, U, x)
     C = tree_map(_roll_prepend, C, _sub(b, r))
 
-    return x, j_outer, C, U
+    return x, j_outer, beta, C, U
 
 
 def _roll_prepend(X, y):
