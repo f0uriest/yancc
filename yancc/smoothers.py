@@ -1,7 +1,5 @@
 """Smoothing operators for multigrid."""
 
-import functools
-
 import equinox as eqx
 import interpax
 import jax
@@ -11,167 +9,8 @@ import lineax as lx
 from .field import Field
 from .finite_diff import fd_coeffs
 from .linalg import lu_factor_banded_periodic, lu_solve_banded_periodic
-from .trajectories import _parse_axorder_shape, dfdpitch, dfdtheta, dfdxi, dfdzeta
+from .trajectories import MDKE, _parse_axorder_shape
 from .velocity_grids import UniformPitchAngleGrid
-
-
-@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
-def get_block_diag(
-    field, pitchgrid, E_psi, nu, axorder="atz", p1="1a", p2=2, gauge=False
-):
-    """Extract the block diagonal part of the MDKE operator for a given ordering."""
-    assert axorder[-1] in "atz"
-
-    if axorder[-1] == "a":
-        x = jnp.tile(jnp.eye(pitchgrid.nxi)[None], (field.ntheta * field.nzeta, 1, 1))
-        f = jnp.ones(field.ntheta * field.nzeta * pitchgrid.nxi)
-        f1 = jax.vmap(
-            lambda x: dfdxi(
-                x,
-                field,
-                pitchgrid,
-                nu,
-                axorder=axorder,
-                p=p1,
-                gauge=gauge,
-            )
-        )(x.reshape((-1, pitchgrid.nxi)).T).T.reshape(
-            (-1, pitchgrid.nxi, pitchgrid.nxi)
-        )
-        f2 = jax.vmap(
-            lambda x: dfdpitch(
-                x,
-                field,
-                pitchgrid,
-                nu,
-                axorder=axorder,
-                p=p2,
-                gauge=gauge,
-            )
-        )(x.reshape((-1, pitchgrid.nxi)).T).T.reshape(
-            (-1, pitchgrid.nxi, pitchgrid.nxi)
-        )
-        f3 = dfdtheta(
-            f,
-            field,
-            pitchgrid,
-            E_psi,
-            axorder=axorder,
-            p=p1,
-            diag=True,
-            gauge=gauge,
-        )
-        f3 = jax.vmap(jnp.diag)(f3.reshape((-1, pitchgrid.nxi)))
-        f4 = dfdzeta(
-            f,
-            field,
-            pitchgrid,
-            E_psi,
-            axorder=axorder,
-            p=p1,
-            diag=True,
-            gauge=gauge,
-        )
-        f4 = jax.vmap(jnp.diag)(f4.reshape((-1, pitchgrid.nxi)))
-        return f1 + f2 + f3 + f4
-
-    elif axorder[-1] == "t":
-        x = jnp.tile(jnp.eye(field.ntheta)[None], (pitchgrid.nxi * field.nzeta, 1, 1))
-        f = jnp.ones(field.ntheta * field.nzeta * pitchgrid.nxi)
-        f1 = dfdxi(
-            f,
-            field,
-            pitchgrid,
-            nu,
-            axorder=axorder,
-            p=p1,
-            diag=True,
-            gauge=gauge,
-        )
-        f1 = jax.vmap(jnp.diag)(f1.reshape((-1, field.ntheta)))
-        f2 = dfdpitch(
-            f,
-            field,
-            pitchgrid,
-            nu,
-            axorder=axorder,
-            p=p2,
-            diag=True,
-            gauge=gauge,
-        )
-        f2 = jax.vmap(jnp.diag)(f2.reshape((-1, field.ntheta)))
-        f3 = jax.vmap(
-            lambda x: dfdtheta(
-                x,
-                field,
-                pitchgrid,
-                E_psi,
-                axorder=axorder,
-                p=p1,
-                gauge=gauge,
-            )
-        )(x.reshape((-1, field.ntheta)).T).T.reshape((-1, field.ntheta, field.ntheta))
-        f4 = dfdzeta(
-            f,
-            field,
-            pitchgrid,
-            E_psi,
-            axorder=axorder,
-            p=p1,
-            diag=True,
-            gauge=gauge,
-        )
-        f4 = jax.vmap(jnp.diag)(f4.reshape((-1, field.ntheta)))
-        return f1 + f2 + f3 + f4
-
-    elif axorder[-1] == "z":
-        x = jnp.tile(jnp.eye(field.nzeta)[None], (pitchgrid.nxi * field.ntheta, 1, 1))
-        f = jnp.ones(field.ntheta * field.nzeta * pitchgrid.nxi)
-        f1 = dfdxi(
-            f,
-            field,
-            pitchgrid,
-            nu,
-            axorder=axorder,
-            p=p1,
-            diag=True,
-            gauge=gauge,
-        )
-        f1 = jax.vmap(jnp.diag)(f1.reshape((-1, field.nzeta)))
-        f2 = dfdpitch(
-            f,
-            field,
-            pitchgrid,
-            nu,
-            axorder=axorder,
-            p=p2,
-            diag=True,
-            gauge=gauge,
-        )
-        f2 = jax.vmap(jnp.diag)(f2.reshape((-1, field.nzeta)))
-        f3 = dfdtheta(
-            f,
-            field,
-            pitchgrid,
-            E_psi,
-            axorder=axorder,
-            p=p1,
-            diag=True,
-            gauge=gauge,
-        )
-        f3 = jax.vmap(jnp.diag)(f3.reshape((-1, field.nzeta)))
-        f4 = jax.vmap(
-            lambda x: dfdzeta(
-                x,
-                field,
-                pitchgrid,
-                E_psi,
-                axorder=axorder,
-                p=p1,
-                gauge=gauge,
-            )
-        )(x.reshape((-1, field.nzeta)).T).T.reshape((-1, field.nzeta, field.nzeta))
-        return f1 + f2 + f3 + f4
 
 
 def permute_f(f, field, pitchgrid, axorder):
@@ -244,16 +83,9 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
 
-        mats = get_block_diag(
-            field,
-            pitchgrid,
-            E_psi,
-            nu,
-            axorder=axorder,
-            p1=p1,
-            p2=p2,
-            gauge=gauge,
-        )
+        mats = MDKE(
+            field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge
+        ).block_diagonal()
 
         if self.smooth_solver == "banded":
             self.mats = lu_factor_banded_periodic(self.bandwidth, mats)

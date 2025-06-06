@@ -150,7 +150,7 @@ def dfdxi(
     df : scipy sparse array
     """
     assert pitchgrid.nxi > fd_coeffs[1][p].size // 2
-    w = np.array(w_pitch(field, pitchgrid, nu).flatten())[:, None]
+    w = np.array(w_pitch(field, pitchgrid).flatten())[:, None]
     h = np.pi / pitchgrid.nxi
 
     f = np.ones(pitchgrid.nxi)
@@ -207,10 +207,17 @@ def dfdpitch(
     h = np.pi / pitchgrid.nxi
 
     f = np.ones(pitchgrid.nxi)
-    fd = scipy.sparse.csr_array(jax.jacfwd(fd2)(f, p, h=h, bc="symmetric"))
+    sina = np.sqrt(1 - pitchgrid.xi**2)
+    cosa = -pitchgrid.xi
+
+    f1 = scipy.sparse.csr_array(jax.jacfwd(fdfwd)(f, str(p) + "z", h=h, bc="symmetric"))
+    f1 *= -(nu * cosa / sina)[:, None]
+    f2 = scipy.sparse.csr_array(jax.jacfwd(fd2)(f, p, h=h, bc="symmetric"))
+    f2 *= -nu
+    df = f1 + f2
     It = scipy.sparse.eye_array(field.ntheta)
     Iz = scipy.sparse.eye_array(field.nzeta)
-    df = -nu * scipy.sparse.kron(scipy.sparse.kron(fd, It), Iz)
+    df = scipy.sparse.kron(scipy.sparse.kron(df, It), Iz)
 
     if gauge:
         idx = np.ravel_multi_index(

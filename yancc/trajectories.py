@@ -1,7 +1,5 @@
 """Drift Kinetic Operators without collisions."""
 
-import functools
-
 import cola
 import equinox as eqx
 import jax
@@ -686,318 +684,182 @@ def w_zeta(field, pitchgrid, E_psi):
     return w
 
 
-def w_pitch(field, pitchgrid, nu):
-    """Wind in xi/pitch direction for MDKE, including first order scattering term."""
+def w_pitch(field, pitchgrid):
+    """Wind in xi/pitch direction for MDKE."""
     sina = jnp.sqrt(1 - pitchgrid.xi**2)
-    cosa = -pitchgrid.xi
     w = (
         -field.bdotgradB
         / (2 * field.Bmag)
         * (1 - pitchgrid.xi[:, None, None] ** 2)
         / sina[:, None, None]
     )
-    w -= (nu * cosa / sina)[:, None, None]
     return w
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p"])
-def dfdtheta(
-    f,
-    field,
-    pitchgrid,
-    E_psi,
-    axorder="atz",
-    p="1a",
-    diag=False,
-    gauge=False,
-):
+class MDKETheta(lx.AbstractLinearOperator):
     """Advection operator in theta direction.
 
     Parameters
     ----------
-    f : jax.Array
-        Distribution function.
     field : Field
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
+    nu : float
+        Normalized collisionality, nu/v
+    p1 : str
+        Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
+        Number denotes formal order of accuracy, letter denotes degree of upwinding.
+        "a" is fully upwinded, "b" and "c" if they exist are upwind biased but
+        not fully.
+    p2 : int
+        Order of approximation for second derivatives.
     axorder : {"atz", "zat", "tza"}
         Ordering for variables in f, eg how the 3d array is flattened
-    p : str
-        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
-        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
-        upwinded, "b" and "c" if they exist are upwind biased but not fully.
-    diag : bool
-        If True, only apply the diagonal part of the operator.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
-
-    Returns
-    -------
-    dfdtheta : jax.Array
-        Distribution function advected along theta.
     """
-    assert field.ntheta > fd_coeffs[1][p].size // 2
-    shp = f.shape
-    shape, caxorder = _parse_axorder_shape(
-        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
-    )
-    f = f.reshape(shape)
-    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-    w = w_theta(field, pitchgrid, E_psi)
-    h = 2 * np.pi / field.ntheta
 
-    fd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fdfwd)(f[0, :, 0], p, h=h, bc="periodic"))[
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    E_psi: float
+    nu: float
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    gauge: bool
+    axorder: str = eqx.field(static=True)
+
+    def __init__(
+        self,
+        field,
+        pitchgrid,
+        E_psi,
+        nu,
+        p1="1a",
+        p2=2,
+        axorder="atz",
+        gauge=True,
+    ):
+        assert field.ntheta > fd_coeffs[1][p1].size // 2
+        assert field.ntheta > fd_coeffs[2][p2].size // 2
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.E_psi = jnp.array(E_psi)
+        self.nu = jnp.array(nu)
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+        self.gauge = jnp.array(gauge)
+
+    @eqx.filter_jit
+    def mv(self, f):
+        """Matrix vector product."""
+        shp = f.shape
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = f.reshape(shape)
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+        w = w_theta(self.field, self.pitchgrid, self.E_psi)
+        h = 2 * np.pi / self.field.ntheta
+
+        fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=1)
+        bd = fdbwd(f, self.p1, h=h, bc="periodic", axis=1)
+        # get only L or U by only taking forward or backward diff? + diagonal correction
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.reshape(shp)
+
+    def diagonal(self):
+        """Diagonal of the operator as a 1d array."""
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        w = w_theta(self.field, self.pitchgrid, self.E_psi)
+        h = 2 * np.pi / self.field.ntheta
+        fd = jnp.diag(jax.jacfwd(fdfwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
             None, :, None
         ]
-        * f
-    )
-    bd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fdbwd)(f[0, :, 0], p, h=h, bc="periodic"))[
+        bd = jnp.diag(jax.jacfwd(fdbwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
             None, :, None
         ]
-        * f
-    )
-    fd_full = lambda f: fdfwd(f, p, h=h, bc="periodic", axis=1)
-    bd_full = lambda f: fdbwd(f, p, h=h, bc="periodic", axis=1)
-    fd = jax.lax.cond(diag, fd_diag, fd_full, f)
-    bd = jax.lax.cond(diag, bd_diag, bd_full, f)
-    # get only L or U by only taking forward or backward diff? + diagonal correction
-    df = w * ((w > 0) * bd + (w <= 0) * fd)
-    idx = pitchgrid.nxi // 2
-    scale = jnp.mean(jnp.abs(w)) / h
-    df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
-    df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    return df.reshape(shp)
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    def block_diagonal(self):
+        """Block diagonal of operator as (N,M,M) array."""
+        if self.axorder[-1] == "a":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.nxi)))
+        if self.axorder[-1] == "z":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
+
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        w = w_theta(self.field, self.pitchgrid, self.E_psi)
+        h = 2 * np.pi / self.field.ntheta
+        fd = (jax.jacfwd(fdfwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
+            None, :, None, :
+        ]
+        bd = (jax.jacfwd(fdbwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
+            None, :, None, :
+        ]
+        w = w[:, :, :, None]
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, 0].set(scale), df
+        )
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
+        return df
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
 
 
-@functools.partial(jax.jit, static_argnames=["axorder", "p"])
-def dfdzeta(
-    f,
-    field,
-    pitchgrid,
-    E_psi,
-    axorder="atz",
-    p="1a",
-    diag=False,
-    gauge=False,
-):
+class MDKEZeta(lx.AbstractLinearOperator):
     """Advection operator in zeta direction.
 
     Parameters
     ----------
-    f : jax.Array
-        Distribution function.
-    field : Field
-        Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
-        Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
-    p : str
-        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
-        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
-        upwinded, "b" and "c" if they exist are upwind biased but not fully.
-    diag : bool
-        If True, only apply the diagonal part of the operator.
-    gauge : bool
-        Whether to impose gauge constraint by fixing f at a single point on the surface.
-
-    Returns
-    -------
-    dfdzeta : jax.Array
-        Distribution function advected along zeta.
-    """
-    assert field.nzeta > fd_coeffs[1][p].size // 2
-    shp = f.shape
-    shape, caxorder = _parse_axorder_shape(
-        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
-    )
-    f = f.reshape(shape)
-    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-    w = w_zeta(field, pitchgrid, E_psi)
-    h = 2 * np.pi / field.nzeta / field.NFP
-    fd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fdfwd)(f[0, 0, :], p, h=h, bc="periodic"))[
-            None, None, :
-        ]
-        * f
-    )
-    bd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fdbwd)(f[0, 0, :], p, h=h, bc="periodic"))[
-            None, None, :
-        ]
-        * f
-    )
-    fd_full = lambda f: fdfwd(f, p, h=h, bc="periodic", axis=2)
-    bd_full = lambda f: fdbwd(f, p, h=h, bc="periodic", axis=2)
-    fd = jax.lax.cond(diag, fd_diag, fd_full, f)
-    bd = jax.lax.cond(diag, bd_diag, bd_full, f)
-    df = w * ((w > 0) * bd + (w <= 0) * fd)
-    idx = pitchgrid.nxi // 2
-    scale = jnp.mean(jnp.abs(w)) / h
-    df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
-    df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    return df.reshape(shp)
-
-
-@functools.partial(jax.jit, static_argnames=["axorder", "p"])
-def dfdxi(
-    f,
-    field,
-    pitchgrid,
-    nu,
-    axorder="atz",
-    p="1a",
-    diag=False,
-    gauge=False,
-):
-    """Advection operator in xi/pitch direction.
-
-    Parameters
-    ----------
-    f : jax.Array
-        Distribution function.
-    field : Field
-        Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
-        Pitch angle grid data.
-    nu : float
-        Normalized collisionality, nu/v
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
-    p : str
-        Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
-        formal order of accuracy, letter denotes degree of upwinding. "a" is fully
-        upwinded, "b" and "c" if they exist are upwind biased but not fully.
-    diag : bool
-        If True, only apply the diagonal part of the operator.
-    gauge : bool
-        Whether to impose gauge constraint by fixing f at a single point on the surface.
-
-    Returns
-    -------
-    dfdxi : jax.Array
-        Distribution function advected along xi.
-    """
-    assert pitchgrid.nxi > fd_coeffs[1][p].size // 2
-    shp = f.shape
-    shape, caxorder = _parse_axorder_shape(
-        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
-    )
-    f = f.reshape(shape)
-    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-    w = w_pitch(field, pitchgrid, nu)
-    h = np.pi / pitchgrid.nxi
-
-    fd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fdfwd)(f[:, 0, 0], p, h=h, bc="symmetric"))[
-            :, None, None
-        ]
-        * f
-    )
-    bd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fdbwd)(f[:, 0, 0], p, h=h, bc="symmetric"))[
-            :, None, None
-        ]
-        * f
-    )
-    fd_full = lambda f: fdfwd(f, p, h=h, bc="symmetric", axis=0)
-    bd_full = lambda f: fdbwd(f, p, h=h, bc="symmetric", axis=0)
-    fd = jax.lax.cond(diag, fd_diag, fd_full, f)
-    bd = jax.lax.cond(diag, bd_diag, bd_full, f)
-    df = w * ((w > 0) * bd + (w <= 0) * fd)
-    idx = pitchgrid.nxi // 2
-    scale = jnp.mean(jnp.abs(w)) / h
-    df = jnp.where(gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
-    df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-    return df.reshape(shp)
-
-
-@functools.partial(jax.jit, static_argnames=["axorder", "p"])
-def dfdpitch(
-    f,
-    field,
-    pitchgrid,
-    nu,
-    axorder="atz",
-    p=2,
-    diag=False,
-    gauge=False,
-):
-    """Diffusion operator in xi/pitch direction.
-
-    Parameters
-    ----------
-    f : jax.Array
-        Distribution function.
-    field : Field
-        Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
-        Pitch angle grid data.
-    nu : float
-        Normalized collisionality, nu/v
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
-    p : int
-        Order of approximation for derivatives.
-    diag : bool
-        If True, only apply the diagonal part of the operator.
-    gauge : bool
-        Whether to impose gauge constraint by fixing f at a single point on the surface.
-
-    Returns
-    -------
-    dfdpitch : jax.Array
-        Distribution function diffused along xi/pitch.
-    """
-    assert pitchgrid.nxi > p
-    shp = f.shape
-    shape, caxorder = _parse_axorder_shape(
-        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
-    )
-    f = f.reshape(shape)
-    f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-    h = np.pi / pitchgrid.nxi
-
-    fd_diag = (
-        lambda f: jnp.diag(jax.jacfwd(fd2)(f[:, 0, 0], p, h=h, bc="symmetric"))[
-            :, None, None
-        ]
-        * f
-    )
-    fd_full = lambda f: fd2(f, p, h=h, bc="symmetric", axis=0)
-    ddf = -nu * jax.lax.cond(diag, fd_diag, fd_full, f)
-    idx = pitchgrid.nxi // 2
-    scale = nu / h**2
-    ddf = jnp.where(gauge, ddf.at[idx, 0, 0].set(scale * f[idx, 0, 0]), ddf)
-    ddf = jnp.moveaxis(ddf, (0, 1, 2), caxorder)
-    return ddf.reshape(shp)
-
-
-@functools.partial(jax.jit, static_argnames=["axorder", "p1", "p2"])
-def mdke(
-    f,
-    field,
-    pitchgrid,
-    E_psi,
-    nu,
-    axorder="atz",
-    p1="1a",
-    p2=2,
-    gauge=False,
-):
-    """MDKE operator.
-
-    Parameters
-    ----------
-    f : jax.Array
-        Distribution function.
     field : Field
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
@@ -1006,25 +868,484 @@ def mdke(
         Normalized electric field, E_psi/v
     nu : float
         Normalized collisionality, nu/v
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
-    p1 : int
-        Order of approximation for first derivatives.
+    p1 : str
+        Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
+        Number denotes formal order of accuracy, letter denotes degree of upwinding.
+        "a" is fully upwinded, "b" and "c" if they exist are upwind biased but
+        not fully.
     p2 : int
         Order of approximation for second derivatives.
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
-
-    Returns
-    -------
-    df : jax.Array
-
     """
-    dt = dfdtheta(f, field, pitchgrid, E_psi, axorder, p1, gauge=gauge)
-    dz = dfdzeta(f, field, pitchgrid, E_psi, axorder, p1, gauge=gauge)
-    di = dfdxi(f, field, pitchgrid, nu, axorder, p1, gauge=gauge)
-    dp = dfdpitch(f, field, pitchgrid, nu, axorder, p2, gauge=gauge)
-    return dt + dz + di + dp
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    E_psi: float
+    nu: float
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    gauge: bool
+    axorder: str = eqx.field(static=True)
+
+    def __init__(
+        self,
+        field,
+        pitchgrid,
+        E_psi,
+        nu,
+        p1="1a",
+        p2=2,
+        axorder="atz",
+        gauge=True,
+    ):
+        assert field.nzeta > fd_coeffs[1][p1].size // 2
+        assert field.nzeta > fd_coeffs[2][p2].size // 2
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.E_psi = jnp.array(E_psi)
+        self.nu = jnp.array(nu)
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+        self.gauge = jnp.array(gauge)
+
+    @eqx.filter_jit
+    def mv(self, f):
+        """Matrix vector product."""
+        shp = f.shape
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = f.reshape(shape)
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+        w = w_zeta(self.field, self.pitchgrid, self.E_psi)
+        h = 2 * np.pi / self.field.nzeta / self.field.NFP
+
+        fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=2)
+        bd = fdbwd(f, self.p1, h=h, bc="periodic", axis=2)
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.reshape(shp)
+
+    def diagonal(self):
+        """Diagonal of the operator as a 1d array."""
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        w = w_zeta(self.field, self.pitchgrid, self.E_psi)
+        h = 2 * np.pi / self.field.nzeta / self.field.NFP
+        fd = jnp.diag(jax.jacfwd(fdfwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
+            None, None, :
+        ]
+        bd = jnp.diag(jax.jacfwd(fdbwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
+            None, None, :
+        ]
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    def block_diagonal(self):
+        """Block diagonal of operator as (N,M,M) array."""
+        if self.axorder[-1] == "a":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.nxi)))
+        if self.axorder[-1] == "t":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        w = w_zeta(self.field, self.pitchgrid, self.E_psi)
+        h = 2 * np.pi / self.field.nzeta / self.field.NFP
+        fd = (jax.jacfwd(fdfwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
+            None, None, :, :
+        ]
+        bd = (jax.jacfwd(fdbwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
+            None, None, :, :
+        ]
+        w = w[:, :, :, None]
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, 0].set(scale), df
+        )
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
+        return df
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
+
+
+class MDKEPitch(lx.AbstractLinearOperator):
+    """Advection operator in pitch angle direction.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    E_psi : float
+        Normalized electric field, E_psi/v
+    nu : float
+        Normalized collisionality, nu/v
+    p1 : str
+        Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
+        Number denotes formal order of accuracy, letter denotes degree of upwinding.
+        "a" is fully upwinded, "b" and "c" if they exist are upwind biased but
+        not fully.
+    p2 : int
+        Order of approximation for second derivatives.
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+    """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    E_psi: float
+    nu: float
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    gauge: bool
+    axorder: str = eqx.field(static=True)
+
+    def __init__(
+        self,
+        field,
+        pitchgrid,
+        E_psi,
+        nu,
+        p1="1a",
+        p2=2,
+        axorder="atz",
+        gauge=True,
+    ):
+        assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
+        assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.E_psi = jnp.array(E_psi)
+        self.nu = jnp.array(nu)
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+        self.gauge = jnp.array(gauge)
+
+    @eqx.filter_jit
+    def mv(self, f):
+        """Matrix vector product."""
+        shp = f.shape
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = f.reshape(shape)
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+        w = w_pitch(self.field, self.pitchgrid)
+        h = np.pi / self.pitchgrid.nxi
+
+        fd = fdfwd(f, self.p1, h=h, bc="symmetric", axis=0)
+        bd = fdbwd(f, self.p1, h=h, bc="symmetric", axis=0)
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.reshape(shp)
+
+    def diagonal(self):
+        """Diagonal of the operator as a 1d array."""
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        w = w_pitch(self.field, self.pitchgrid)
+        h = np.pi / self.pitchgrid.nxi
+        fd = jnp.diag(jax.jacfwd(fdfwd)(f[:, 0, 0], self.p1, h=h, bc="symmetric"))[
+            :, None, None
+        ]
+        bd = jnp.diag(jax.jacfwd(fdbwd)(f[:, 0, 0], self.p1, h=h, bc="symmetric"))[
+            :, None, None
+        ]
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    def block_diagonal(self):
+        """Block diagonal of operator as (N,M,M) array."""
+        if self.axorder[-1] == "z":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
+        if self.axorder[-1] == "t":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        w = w_pitch(self.field, self.pitchgrid)
+        h = np.pi / self.pitchgrid.nxi
+        fd = (jax.jacfwd(fdfwd)(f[:, 0, 0], self.p1, h=h, bc="symmetric"))[
+            :, None, None, :
+        ]
+        bd = (jax.jacfwd(fdbwd)(f[:, 0, 0], self.p1, h=h, bc="symmetric"))[
+            :, None, None, :
+        ]
+        w = w[:, :, :, None]
+        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nxi // 2
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, idx].set(scale), df
+        )
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+        return df
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
+
+
+class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
+    """Diffusion operator in xi direction.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    E_psi : float
+        Normalized electric field, E_psi/v
+    nu : float
+        Normalized collisionality, nu/v
+    p1 : str
+        Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
+        Number denotes formal order of accuracy, letter denotes degree of upwinding.
+        "a" is fully upwinded, "b" and "c" if they exist are upwind biased but
+        not fully.
+    p2 : int
+        Order of approximation for second derivatives.
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+    """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    E_psi: float
+    nu: float
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    gauge: bool
+    axorder: str = eqx.field(static=True)
+
+    def __init__(
+        self,
+        field,
+        pitchgrid,
+        E_psi,
+        nu,
+        p1="1a",
+        p2=2,
+        axorder="atz",
+        gauge=True,
+    ):
+        assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
+        assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.E_psi = jnp.array(E_psi)
+        self.nu = jnp.array(nu)
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+        self.gauge = jnp.array(gauge)
+
+    @eqx.filter_jit
+    def mv(self, f):
+        """Matrix vector product."""
+        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
+        cosa = -self.pitchgrid.xi
+        shp = f.shape
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = f.reshape(shape)
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2))
+        h = np.pi / self.pitchgrid.nxi
+
+        f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
+        f1 *= -(self.nu * cosa / sina)[:, None, None]
+        f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=0)
+        f2 *= -self.nu
+        df = f1 + f2
+
+        idx = self.pitchgrid.nxi // 2
+        scale = self.nu / h**2
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.reshape(shp)
+
+    def diagonal(self):
+        """Diagonal of the operator as a 1d array."""
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
+        cosa = -self.pitchgrid.xi
+
+        h = np.pi / self.pitchgrid.nxi
+
+        f1 = jnp.diag(
+            jax.jacfwd(fdfwd)(
+                f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
+            )
+        )[:, None, None]
+        f1 *= -(self.nu * cosa / sina)[:, None, None]
+        f2 = jnp.diag(
+            jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)
+        )[:, None, None]
+        f2 *= -self.nu
+        df = f1 + f2
+        df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta))
+
+        idx = self.pitchgrid.nxi // 2
+        scale = self.nu / h**2
+        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    def block_diagonal(self):
+        """Block diagonal of operator as (N,M,M) array."""
+        if self.axorder[-1] == "z":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
+        if self.axorder[-1] == "t":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+
+        shape, caxorder = _parse_axorder_shape(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        )
+        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
+        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
+        cosa = -self.pitchgrid.xi
+
+        h = np.pi / self.pitchgrid.nxi
+
+        f1 = jax.jacfwd(fdfwd)(
+            f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
+        )[:, None, None, :]
+        f1 *= -(self.nu * cosa / sina)[:, None, None, None]
+        f2 = jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)[
+            :, None, None, :
+        ]
+        f2 *= -self.nu
+        df = f1 + f2
+        df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta, 1))
+
+        idx = self.pitchgrid.nxi // 2
+        scale = self.nu / h**2
+        df = jnp.where(
+            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, idx].set(scale), df
+        )
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+        return df
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
 
 
 class MDKE(lx.AbstractLinearOperator):
@@ -1059,6 +1380,7 @@ class MDKE(lx.AbstractLinearOperator):
     p2: int = eqx.field(static=True)
     gauge: bool
     axorder: str = eqx.field(static=True)
+    operators: list[lx.AbstractLinearOperator]
 
     def __init__(
         self,
@@ -1080,20 +1402,38 @@ class MDKE(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
+        dtheta = MDKETheta(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge)
+        dzeta = MDKEZeta(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge)
+        dpitch = MDKEPitch(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge)
+        dscatter = MDKEPitchAngleScattering(
+            field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge
+        )
+        self.operators = [dtheta, dzeta, dpitch, dscatter]
+
     @eqx.filter_jit
     def mv(self, x):
         """Matrix vector product."""
-        return mdke(
-            f=x,
-            field=self.field,
-            pitchgrid=self.pitchgrid,
-            E_psi=self.E_psi,
-            nu=self.nu,
-            axorder=self.axorder,
-            p1=self.p1,
-            p2=self.p2,
-            gauge=self.gauge,
-        )
+        f0 = self.operators[0].mv(x)
+        f1 = self.operators[1].mv(x)
+        f2 = self.operators[2].mv(x)
+        f3 = self.operators[3].mv(x)
+        return f0 + f1 + f2 + f3
+
+    def diagonal(self):
+        """Diagonal of the operator as a 1d array."""
+        d0 = self.operators[0].diagonal()
+        d1 = self.operators[1].diagonal()
+        d2 = self.operators[2].diagonal()
+        d3 = self.operators[3].diagonal()
+        return d0 + d1 + d2 + d3
+
+    def block_diagonal(self):
+        """Block diagonal of operator as (N,M,M) array."""
+        d0 = self.operators[0].block_diagonal()
+        d1 = self.operators[1].block_diagonal()
+        d2 = self.operators[2].block_diagonal()
+        d3 = self.operators[3].block_diagonal()
+        return d0 + d1 + d2 + d3
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1127,5 +1467,17 @@ class MDKE(lx.AbstractLinearOperator):
 @lx.is_symmetric.register(MDKE)
 @lx.is_diagonal.register(MDKE)
 @lx.is_tridiagonal.register(MDKE)
+@lx.is_symmetric.register(MDKETheta)
+@lx.is_diagonal.register(MDKETheta)
+@lx.is_tridiagonal.register(MDKETheta)
+@lx.is_symmetric.register(MDKEZeta)
+@lx.is_diagonal.register(MDKEZeta)
+@lx.is_tridiagonal.register(MDKEZeta)
+@lx.is_symmetric.register(MDKEPitch)
+@lx.is_diagonal.register(MDKEPitch)
+@lx.is_tridiagonal.register(MDKEPitch)
+@lx.is_symmetric.register(MDKEPitchAngleScattering)
+@lx.is_diagonal.register(MDKEPitchAngleScattering)
+@lx.is_tridiagonal.register(MDKEPitchAngleScattering)
 def _(operator):
     return False
