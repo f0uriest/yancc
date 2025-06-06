@@ -296,9 +296,6 @@ def dke_rhs(
 def mdke_rhs(
     field: Field,
     pitchgrid: LegendrePitchAngleGrid,
-    v: float,
-    include_constraints: bool = True,
-    normalize: bool = False,
 ) -> jax.Array:
     """RHS of monoenergetic DKE.
 
@@ -308,34 +305,23 @@ def mdke_rhs(
         Magnetic field information
     pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
-    v : float
-        Speed being considered.
-    include_constraints : bool
-        Whether to append zeros to the rhs for constraint equations.
-    normalize : bool
-        Whether to divide equations by speed to non-dimensionalize
 
     Returns
     -------
     f : jax.Array, shape(N,3)
         RHS of linear monoenergetic DKE.
     """
-    xi = pitchgrid.xi[None, None, :, None, None]
+    xi = pitchgrid.xi[:, None, None]
     s1 = (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
     s2 = s1
     s3 = xi * field.Bmag
-    rhs = jnp.array([s1 * v, s2 * v, s3 * v]).reshape((3, -1)).T
-    if normalize:
-        rhs /= v
-    if include_constraints:
-        rhs = jnp.concatenate([rhs, jnp.zeros((1, 3))])
+    rhs = jnp.array([s1, s2, s3]).reshape((3, -1)).T
     return rhs
 
 
 @jax.jit
 def compute_monoenergetic_coefficients(
     f: jax.Array,
-    s: jax.Array,
     field: Field,
     pitchgrid: LegendrePitchAngleGrid,
     v: float,
@@ -368,7 +354,7 @@ def compute_monoenergetic_coefficients(
     # slice out source/constraint terms if present
     f = f[:N]
 
-    s = mdke_rhs(field, pitchgrid, v, False, False)
+    s = mdke_rhs(field, pitchgrid)
     s = s.reshape((-1, 3))
 
     # form monoenergetic coefficients
