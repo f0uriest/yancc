@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 
-from .linalg import InverseLinearOperator, lstsq
+from .linalg import InverseLinearOperator
 from .smoothers import MDKEJacobiSmoother, optimal_smoothing_parameter
 from .trajectories import MDKE
 from .velocity_grids import UniformPitchAngleGrid
@@ -198,7 +198,7 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, weights=None, verbose=F
         rb = rs[0]
         dr = -jnp.diff(rs, axis=0)
 
-        alpha = lstsq(dr.T, rb)
+        alpha = jnp.linalg.lstsq(dr.T, rb)[0]
         return x0 + dxs.T @ alpha
 
     x = jax.lax.fori_loop(0, nsteps, body, x)
