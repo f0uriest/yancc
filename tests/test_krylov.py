@@ -45,7 +45,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2 = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc)
+    H2, B2, V2, Z2, y2, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc)
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -67,7 +67,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2 = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc)
+    H2, B2, V2, Z2, y2, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc)
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -89,7 +89,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2 = _fgmres(
+    H2, B2, V2, Z2, y2, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
 
@@ -114,7 +114,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2 = _fgmres(
+    H2, B2, V2, Z2, y2, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
 
@@ -138,7 +138,9 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2 = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv)
+    H2, B2, V2, Z2, y2, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
+    )
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -169,7 +171,9 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2 = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv)
+    H2, B2, V2, Z2, y2, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
+    )
 
     u = Z2 @ y2
     c = V2 @ H2.T @ y2
@@ -205,7 +209,7 @@ def test_gcrotmk():
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, info2, C2, U2 = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k)
+    x2, _, _, _, C2, U2 = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k)
 
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
@@ -226,7 +230,7 @@ def test_gcrotmk():
         np.array(A.matrix), b, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
     )
 
-    x2, info2, C2, U2 = gcrotmk(
+    x2, _, _, _, C2, U2 = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2[:, 0], U=U2[:, 0]
     )
 
@@ -253,7 +257,7 @@ def test_gcrotmk():
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, info2, C2, U2 = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2, U=U2)
+    x2, _, _, _, C2, U2 = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2, U=U2)
 
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
@@ -274,7 +278,7 @@ def test_gcrotmk():
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, info2, C2, U2 = gcrotmk(
+    x2, _, _, _, C2, U2 = gcrotmk(
         A, b, x0=x2, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2, U=U2
     )
 

@@ -243,6 +243,8 @@ def _fgmres(
     y : ndarray
         Solution to ||H y - e_1||_2 = min!
     """
+    nmv = 0
+
     if lpsolve is None:
 
         def lpsolve(x):
@@ -289,7 +291,7 @@ def _fgmres(
     # FGMRES Arnoldi process
 
     def arnoldi_cond(carry):
-        j, _, _, _, _, _, _, _, res, breakdown = carry
+        j, _, _, _, _, _, _, _, _, res, breakdown = carry
         return jnp.logical_and(jnp.logical_and(j < maxiter, res > atol), ~breakdown)
 
     def arnoldi_loop(carry):
@@ -327,15 +329,15 @@ def _fgmres(
         res = abs(beta_vec[j + 1])
         breakdown = H[j, j + 1] < eps * w_norm
 
-        return j + 1, V, Z, B, R, H, givens, beta_vec, res, breakdown
+        return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown
 
-    carry = (0, V, Z, B, R, H, givens, beta_vec, res, breakdown)
-    _, V, Z, B, R, H, _, beta_vec, _, _ = lax.while_loop(
+    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown)
+    j, nmv, V, Z, B, R, H, _, beta_vec, _, _ = lax.while_loop(
         arnoldi_cond, arnoldi_loop, carry
     )
     y = jsp.linalg.solve_triangular(R[:, :-1].T, beta_vec[:-1])
 
-    return H, B, V, Z, y
+    return H, B, V, Z, y, j, nmv
 
 
 @eqx.filter_jit
@@ -429,6 +431,7 @@ def gcrotmk(
         x = x0
 
     r = _sub(b, matvec(x))
+    nmv = 1
     if k is None:
         k = m
 
@@ -445,6 +448,7 @@ def gcrotmk(
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
         if C is None:
             C = jax.vmap(matvec, in_axes=1, out_axes=1)(U)
+            nmv += C.shape[1]
         C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
         # Reorthogonalize old vectors
         c = tree_map(lambda x: x[..., 0], C)
@@ -481,9 +485,9 @@ def gcrotmk(
     x, r = lax.cond(lc, initial_projection, lambda *args: args, x, r)
 
     def gcmotmk_loop(carry):
-        j_outer, x, r, beta, C, U, lc = carry
+        j_outer, nmv, x, r, beta, C, U, lc = carry
 
-        H, B, V, Z, y = _fgmres(
+        H, B, V, Z, y, _, nmv_inner = _fgmres(
             matvec,
             v0=_mul(1 / beta, r),
             m=m,
@@ -494,6 +498,7 @@ def gcrotmk(
             lc=lc,
         )
         y *= beta
+        nmv += nmv_inner
 
         # ux := (Z - U B) y
         Zy = tree_map(lambda x: _dot(x, y), Z)
@@ -515,27 +520,28 @@ def gcrotmk(
         r = _sub(r, _mul(gamma, cx))
         x = _add(x, _mul(gamma, ux))
         r = _sub(b, matvec(x))
+        nmv += 1
+        beta = _norm(r)
 
         U = tree_map(_roll_prepend, U, ux)
         C = tree_map(_roll_prepend, C, cx)
         lc = jnp.minimum(lc + 1, k)
-        beta = _norm(r)
 
-        return j_outer + 1, x, r, beta, C, U, lc
+        return j_outer + 1, nmv, x, r, beta, C, U, lc
 
     def gcrotmk_cond(carry):
-        j_outer, _, _, beta, _, _, _ = carry
+        j_outer, _, _, _, beta, _, _, _ = carry
         return jnp.logical_and(j_outer < maxiter, beta > tol)
 
     beta = _norm(r)
-    carry = (0, x, r, beta, C, U, lc)
+    carry = (0, nmv, x, r, beta, C, U, lc)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
-    j_outer, x, r, beta, C, U, lc = carry
+    j_outer, nmv, x, r, beta, C, U, lc = carry
     # Include the solution vector to the span
     U = tree_map(_roll_prepend, U, x)
     C = tree_map(_roll_prepend, C, _sub(b, r))
 
-    return x, j_outer, beta, C, U
+    return x, j_outer, nmv, beta, C, U
 
 
 def _roll_prepend(X, y):
