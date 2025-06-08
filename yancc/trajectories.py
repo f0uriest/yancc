@@ -1242,9 +1242,9 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         h = np.pi / self.pitchgrid.nxi
 
         f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= -(self.nu * cosa / sina)[:, None, None]
+        f1 *= -(self.nu / 2 * cosa / sina)[:, None, None]
         f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=0)
-        f2 *= -self.nu
+        f2 *= -self.nu / 2
         df = f1 + f2
 
         idx = self.pitchgrid.nxi // 2
