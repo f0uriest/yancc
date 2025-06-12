@@ -195,6 +195,10 @@ def _apply_givens_rotations(H_row, givens, k):
 ####
 
 
+def _roll_prepend(X, y):
+    return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
+
+
 @eqx.filter_jit
 def _fgmres(
     matvec,
@@ -593,5 +597,188 @@ def gcrotmk(
     return x, j_outer, nmv, beta, C, U
 
 
-def _roll_prepend(X, y):
-    return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
+@eqx.filter_jit
+def lgmres(
+    A,
+    b,
+    x0=None,
+    *,
+    rtol=1e-5,
+    atol=0.0,
+    maxiter=1000,
+    M=None,
+    m=30,
+    k=3,
+    outer_v=None,
+    outer_Av=None,
+):
+    """
+    Solve a matrix equation using the LGMRES algorithm.
+
+    The LGMRES algorithm [1]_ [2]_ is designed to avoid some problems
+    in the convergence in restarted GMRES, and often converges in fewer
+    iterations.
+
+    Parameters
+    ----------
+    A : {sparse array, ndarray, LinearOperator}
+        The real or complex N-by-N matrix of the linear system.
+        Alternatively, ``A`` can be a linear operator which can
+        produce ``Ax`` using, e.g.,
+        ``scipy.sparse.linalg.LinearOperator``.
+    b : ndarray
+        Right hand side of the linear system. Has shape (N,) or (N,1).
+    x0 : ndarray
+        Starting guess for the solution.
+    rtol, atol : float, optional
+        Parameters for the convergence test. For convergence,
+        ``norm(b - A @ x) <= max(rtol*norm(b), atol)`` should be satisfied.
+        The default is ``rtol=1e-5``, the default for ``atol`` is ``0.0``.
+    maxiter : int, optional
+        Maximum number of iterations.  Iteration will stop after maxiter
+        steps even if the specified tolerance has not been achieved.
+    M : {sparse array, ndarray, LinearOperator}, optional
+        Preconditioner for A.  The preconditioner should approximate the
+        inverse of A.  Effective preconditioning dramatically improves the
+        rate of convergence, which implies that fewer iterations are needed
+        to reach a given error tolerance.
+    m : int, optional
+        Number of inner GMRES iterations per each outer iteration.
+    k : int, optional
+        Number of vectors to carry between inner GMRES iterations.
+        According to [1]_, good values are in the range of 1...3.
+        However, note that if you want to use the additional vectors to
+        accelerate solving multiple similar problems, larger values may
+        be beneficial.
+    outer_v, outer_Av : pytree of jax.Array, optional
+        Vectors and corresponding matrix-vector products, used to augment the Krylov
+        subspace, and carried between inner GMRES iterations. If ``outer_v`` is given
+        but ``outer_Av`` is ``None`` then ``outer_Av`` is recomputed automatically.
+         ``outer_v`` should have the same tree structure as ``x`` but with a trailing
+        dimension, and ``outer_Av`` should have the same structure as ``b`` but with
+        a trailing dimension.
+
+    Returns
+    -------
+    x : pytree of ndarray
+        The solution found.
+    iters : int
+        Number of iterations.
+    nmatvec : int
+        Number of matrix vector products.
+    residual : float
+        Residual of the linear system.
+    outer_v, outer_Av : pytree of jax.Array
+        Vectors and corresponding matrix-vector products, used to augment the Krylov
+        subspace, and carried between inner GMRES iterations.
+
+    Notes
+    -----
+    The LGMRES algorithm [1]_ [2]_ is designed to avoid the
+    slowing of convergence in restarted GMRES, due to alternating
+    residual vectors. Typically, it often outperforms GMRES(m) of
+    comparable memory requirements by some measure, or at least is not
+    much worse.
+
+    Another advantage in this algorithm is that you can supply it with
+    'guess' vectors in the `outer_v` argument that augment the Krylov
+    subspace. If the solution lies close to the span of these vectors,
+    the algorithm converges faster. This can be useful if several very
+    similar matrices need to be inverted one after another, such as in
+    Newton-Krylov iteration where the Jacobian matrix often changes
+    little in the nonlinear steps.
+
+    References
+    ----------
+    .. [1] A.H. Baker and E.R. Jessup and T. Manteuffel, "A Technique for
+             Accelerating the Convergence of Restarted GMRES", SIAM J. Matrix
+             Anal. Appl. 26, 962 (2005).
+    .. [2] A.H. Baker, "On Improving the Performance of the Linear Solver
+             restarted GMRES", PhD thesis, University of Colorado (2003).
+
+    """
+    structure = A.in_structure()
+    if M is None:
+        M = lx.IdentityLinearOperator(structure)
+
+    matvec = A.mv
+    psolve = M.mv
+
+    b_norm = _norm(b)
+    tol = jnp.maximum(atol, rtol * b_norm)
+
+    if x0 is None:
+        x = tree_map(jnp.zeros_like, b)
+    else:
+        x = x0
+
+    r = _sub(b, matvec(x))
+    nmv = 1
+    beta = _norm(r)
+
+    if outer_v is None:
+        assert outer_Av is None
+        lv = 0
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+    else:  # outer_v provided
+        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
+        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
+        if outer_Av is None:
+            outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
+            nmv += lv
+        # pad to full size
+        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
+        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+
+    def lgmres_cond(carry):
+        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv = carry
+        return jnp.logical_and(j_outer < maxiter, beta > tol)
+
+    def lgmres_loop(carry):
+        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv = carry
+
+        # -- inner LGMRES iteration
+        v0 = psolve(r)
+        inner_res_0 = _norm(v0)
+
+        v0 = _mul(1.0 / inner_res_0, v0)
+
+        H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
+            matvec,
+            v0,
+            m=m,
+            k=0,
+            lpsolve=psolve,
+            atol=tol / inner_res_0,
+            outer_v=outer_v,
+            outer_Av=outer_Av,
+            lv=lv,
+        )
+        nmv += nmv_inner
+        y *= inner_res_0
+
+        # -- GMRES terminated: eval solution
+        dx = tree_map(lambda x: _dot(x, y), Z)
+
+        # -- Store LGMRES augmentation vectors
+        nx = _norm(dx)
+        q = _dot(H.T, y)
+        ax = tree_map(lambda x: _dot(x, q), V)
+        outer_v = tree_map(_roll_prepend, outer_v, _mul(1 / nx, dx))
+        outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
+        lv = jnp.minimum(lv + 1, k)
+
+        # -- Apply step
+        x = _add(x, dx)
+        r = _sub(b, matvec(x))
+        nmv += 1
+        beta = _norm(r)
+
+        return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv
+
+    carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv)
+    carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
+    j_outer, nmv, x, r, beta, outer_v, outer_Av, lc = carry
+
+    return x, j_outer, nmv, beta, outer_v, outer_Av

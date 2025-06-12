@@ -6,7 +6,7 @@ import lineax as lx
 import numpy as np
 import scipy
 
-from yancc.krylov import _fgmres, gcrotmk
+from yancc.krylov import _fgmres, gcrotmk, lgmres
 
 
 def crop2(a, b):
@@ -316,3 +316,66 @@ def test_gcrotmk():
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
+
+
+def test_lgmres():
+    """Test that LCGMRES agrees with scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n))
+    A = lx.MatrixLinearOperator(jnp.array(A))
+    M = rng.random((n, n))
+    M = lx.MatrixLinearOperator(jnp.array(M))
+    b = rng.random(n)
+
+    tol = 0
+    m = 7
+    k = 5
+    maxiter = 10
+    outer_v = []
+
+    x1, info1 = scipy.sparse.linalg.lgmres(
+        np.array(A.matrix),
+        b,
+        rtol=tol,
+        maxiter=maxiter,
+        inner_m=m,
+        outer_k=k,
+        outer_v=outer_v,
+        prepend_outer_v=True,
+    )
+
+    V1 = np.array([v for (v, Av) in outer_v])[::-1].T
+    A1 = np.array([Av for (v, Av) in outer_v])[::-1].T
+
+    x2, j_outer, nmv, beta, V2, A2 = lgmres(A, b, rtol=tol, maxiter=maxiter, m=m, k=k)
+
+    np.testing.assert_allclose(x1, x2)
+    np.testing.assert_allclose(V1, V2)
+    np.testing.assert_allclose(A1, A2)
+
+    # test passing in outer_v
+    outer_v2 = rng.random((3, n))
+    outer_v1 = [(v, None) for v in outer_v2[::-1]]
+
+    x1, info1 = scipy.sparse.linalg.lgmres(
+        np.array(A.matrix),
+        b,
+        rtol=tol,
+        maxiter=maxiter,
+        inner_m=m,
+        outer_k=k,
+        outer_v=outer_v1,
+        prepend_outer_v=True,
+    )
+
+    V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
+    A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
+
+    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, outer_v=outer_v2.T
+    )
+
+    np.testing.assert_allclose(x1, x2)
+    np.testing.assert_allclose(V1, V2)
+    np.testing.assert_allclose(A1, A2)
