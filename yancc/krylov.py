@@ -242,6 +242,12 @@ def _fgmres(
         Columns of matrix Z
     y : ndarray
         Solution to ||H y - e_1||_2 = min!
+    j : int
+        Number of iterations.
+    nmv : int
+        Number of matrix vector products
+    res : float
+        Final residual.
     """
     nmv = 0
 
@@ -332,12 +338,12 @@ def _fgmres(
         return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown
 
     carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown)
-    j, nmv, V, Z, B, R, H, _, beta_vec, _, _ = lax.while_loop(
+    j, nmv, V, Z, B, R, H, _, beta_vec, res, _ = lax.while_loop(
         arnoldi_cond, arnoldi_loop, carry
     )
     y = jsp.linalg.solve_triangular(R[:, :-1].T, beta_vec[:-1])
 
-    return H, B, V, Z, y, j, nmv
+    return H, B, V, Z, y, j, nmv, res
 
 
 @eqx.filter_jit
@@ -353,7 +359,7 @@ def gcrotmk(
     m=20,
     k=None,
     C=None,
-    U=None
+    U=None,
 ):
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -397,14 +403,15 @@ def gcrotmk(
 
     Returns
     -------
-    x : ndarray
+    x : pytree of ndarray
         The solution found.
-    info : int
-        Provides convergence information:
-
-        * 0  : successful exit
-        * >0 : convergence to tolerance not achieved, number of iterations
-    C, U : pytree of jax.Array, optional
+    iters : int
+        Number of iterations.
+    nmatvec : int
+        Number of matrix vector products.
+    residual : float
+        Residual of the linear system.
+    C, U : pytree of jax.Array
         Matrices C and U in the GCROT(m,k) algorithm. For details, see [2]_.
 
     References
@@ -448,7 +455,7 @@ def gcrotmk(
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
         if C is None:
             C = jax.vmap(matvec, in_axes=1, out_axes=1)(U)
-            nmv += C.shape[1]
+            nmv += lc
         C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
         # Reorthogonalize old vectors
         c = tree_map(lambda x: x[..., 0], C)
@@ -487,7 +494,7 @@ def gcrotmk(
     def gcmotmk_loop(carry):
         j_outer, nmv, x, r, beta, C, U, lc = carry
 
-        H, B, V, Z, y, _, nmv_inner = _fgmres(
+        H, B, V, Z, y, _, nmv_inner, _ = _fgmres(
             matvec,
             v0=_mul(1 / beta, r),
             m=m,
@@ -517,7 +524,6 @@ def gcrotmk(
 
         # Update residual and solution
         gamma = _dot(cx, r)
-        r = _sub(r, _mul(gamma, cx))
         x = _add(x, _mul(gamma, ux))
         r = _sub(b, matvec(x))
         nmv += 1

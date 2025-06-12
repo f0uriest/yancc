@@ -45,7 +45,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc)
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc)
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -67,7 +67,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc)
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc)
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -89,7 +89,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
 
@@ -114,7 +114,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
 
@@ -138,7 +138,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
     )
 
@@ -171,7 +171,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
     )
 
