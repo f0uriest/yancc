@@ -1,5 +1,6 @@
 """Tests for FGMRES/GCROT(m,k) solver."""
 
+import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
@@ -183,6 +184,36 @@ def test_fgmres():
     x = np.dot(c, b) * u
 
     assert np.linalg.norm(A.mv(x) - b) < atol
+
+    # test passing v
+    atol = 0
+    m = 7
+    k = 5
+    outer_v = rng.random((3, n))
+    outer_Av = jax.vmap(A.mv, in_axes=0, out_axes=0)(outer_v)
+    lv = 3
+
+    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
+        A.mv,
+        b,
+        m=m + k,
+        atol=atol,
+        outer_v=list((v, Av) for v, Av in zip(outer_v, outer_Av)),
+        prepend_outer_v=True,
+    )
+    H1 = (Q1 @ R1).T
+    V1 = np.array(vs1).T
+    Z1 = np.array(zs1).T
+
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=atol, outer_v=outer_v.T, outer_Av=outer_Av.T, lv=lv
+    )
+
+    np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(V1, V2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
 
 def test_gcrotmk():

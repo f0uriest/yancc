@@ -202,10 +202,13 @@ def _fgmres(
     m,
     k,
     atol,
-    C=None,
-    lc=None,
     lpsolve=None,
     rpsolve=None,
+    C=None,
+    lc=None,
+    outer_v=None,
+    outer_Av=None,
+    lv=None,
 ):
     """FGMRES Arnoldi process, with optional projection or augmentation
 
@@ -221,14 +224,20 @@ def _fgmres(
         Number of vectors to carry between inner FGMRES iterations.
     atol : float
         Absolute tolerance for early exit
-    C : pytree of jax.Array
-        Matrix C in GCROTMK algorithm.
-    lc : int
-        Number of nonzero columns of C. Default C.shape[1]
     lpsolve : callable
         Left preconditioner L
     rpsolve : callable
         Right preconditioner R
+    C : pytree of jax.Array
+        Matrix C in GCROTMK algorithm.
+    lc : int
+        Number of nonzero columns of C. Default C.shape[1]
+    outer_v : pytree of jax.Array
+        Augmentation vectors in LGMRES.
+    outer_Av : pytree of jax.Array
+        Augmentation vectors in LGMRES.
+    lv : int
+        Number of nonzero columns of outer_v. Default outer_v.shape[1]
 
     Returns
     -------
@@ -261,13 +270,17 @@ def _fgmres(
         def rpsolve(x):
             return x
 
-    # krylov space V = [V0, Av0, A^2v0, ...]
-    V = tree_map(
-        lambda x: jnp.pad(x[..., None], ((0, 0),) * x.ndim + ((0, m + k),)),
-        v0,
-    )
-    # preconditioned krylov space [Mv0, M(AM)v0, M(AM)^2 v0, ...]
-    Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
+    if outer_v is None:
+        outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
+        outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
+        lv = 0
+
+    if lv is None:
+        lv = tree_leaves(outer_v)[0].shape[1]
+
+    if outer_Av is None:
+        outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
+        nmv += lv
 
     if C is None:
         C = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
@@ -278,22 +291,33 @@ def _fgmres(
     if lc is None:
         lc = tree_leaves(C)[0].shape[1]
 
+    maxiter = m + jnp.maximum(k - lc, 0) + lv
+    size = m + k + tree_leaves(outer_v)[0].shape[1]
+
+    # krylov space V = [V0, Av0, A^2v0, ...]
+    V = tree_map(
+        lambda x: jnp.pad(x[..., None], ((0, 0),) * x.ndim + ((0, size),)),
+        v0,
+    )
+    # preconditioned krylov space [Mv0, M(AM)v0, M(AM)^2 v0, ...]
+    Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
+
     dtype = jnp.result_type(*tree_leaves(v0))
     eps = jnp.finfo(dtype).eps
     res = jnp.array(_norm(v0))
 
     # Orthogonal projection coefficients
-    B = jnp.zeros((tree_leaves(C)[0].shape[1], m + k), dtype=v0.dtype)
+    B = jnp.zeros((tree_leaves(C)[0].shape[1], size), dtype=v0.dtype)
 
     # H=QR. We only need R here but need H itself in outer loop, never need Q, we only
     # store Q*e1*beta = beta_vec
-    R = jnp.eye(m + k, m + k + 1, dtype=v0.dtype)
-    H = jnp.zeros((m + k, m + k + 1), dtype=v0.dtype)
-    beta_vec = jnp.zeros((m + k + 1), dtype=dtype).at[0].set(res.astype(dtype))
-    givens = jnp.zeros((m + k, 2), dtype=dtype)
+    R = jnp.eye(size, size + 1, dtype=v0.dtype)
+    H = jnp.zeros((size, size + 1), dtype=v0.dtype)
+    beta_vec = jnp.zeros((size + 1), dtype=dtype).at[0].set(res.astype(dtype))
+    givens = jnp.zeros((size, 2), dtype=dtype)
 
-    breakdown = False
-    maxiter = m + jnp.maximum(k - lc, 0)
+    breakdown = jnp.array(False)
+
     # FGMRES Arnoldi process
 
     def arnoldi_cond(carry):
@@ -302,11 +326,30 @@ def _fgmres(
 
     def arnoldi_loop(carry):
         # L A Z = C B + V H
-        j, V, Z, B, R, H, givens, beta_vec, res, breakdown = carry
-        v = tree_map(lambda x: x[..., j], V)  # Gets V[:, k]
-        z = rpsolve(v)
-        w = lpsolve(matvec(z))
+        j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown = carry
 
+        def outer_v_iteration(j, nmv, V):
+            z = lax.cond(
+                j < lv,
+                lambda: tree_map(lambda x: x[..., j], outer_v),
+                lambda: rpsolve(v0),
+            )
+            w = lax.cond(
+                j < lv,
+                lambda: tree_map(lambda x: x[..., j], outer_Av),
+                lambda: lpsolve(matvec(z)),
+            )
+            nmv = jnp.where(j < lv, nmv, nmv + 1)
+            return z, w, nmv
+
+        def regular_iteration(j, nmv, V):
+            v = tree_map(lambda x: x[..., j], V)  # Gets V[:, k]
+            z = rpsolve(v)
+            w = lpsolve(matvec(z))
+            nmv += 1
+            return z, w, nmv
+
+        z, w, nmv = lax.cond(j <= lv, outer_v_iteration, regular_iteration, j, nmv, V)
         _, w_norm = _safe_normalize(w)
 
         # GCROT projection: L A -> (1 - C C^H) L A
