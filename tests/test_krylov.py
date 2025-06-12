@@ -76,7 +76,7 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
-    # test using bogus preconditioner
+    # test using bogus right preconditioner
     atol = 0
     m = 7
     k = 5
@@ -92,6 +92,30 @@ def test_fgmres():
 
     H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
+    )
+
+    np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(V1, V2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
+    np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
+
+    # test using bogus left preconditioner
+    atol = 0
+    m = 7
+    k = 5
+    C = rng.random((3, n))
+    lc = 3
+
+    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
+        A.mv, b, m=m + k - len(C), atol=atol, cs=C, lpsolve=M.mv
+    )
+    H1 = (Q1 @ R1).T
+    V1 = np.array(vs1).T
+    Z1 = np.array(zs1).T
+
+    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, lpsolve=M.mv
     )
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
@@ -317,9 +341,46 @@ def test_gcrotmk():
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
 
+    # test dummy preconditioner
+    tol = 0
+    m = 7
+    k = 5
+    maxiter = 6
+    CU = []
+
+    x1, info1 = scipy.sparse.linalg.gcrotmk(
+        np.array(A.matrix),
+        b,
+        x0=x1,
+        M=np.array(M.matrix),
+        rtol=tol,
+        maxiter=maxiter,
+        m=m,
+        k=k,
+        CU=CU,
+    )
+    CU[-1] = (A.mv(x1), CU[-1][1])
+    C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
+    U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
+
+    x2, _, _, _, C2, U2 = gcrotmk(
+        A,
+        b,
+        x0=x2,
+        MR=M,
+        rtol=tol,
+        maxiter=maxiter,
+        m=m,
+        k=k,
+    )
+
+    np.testing.assert_allclose(x1, x2)
+    np.testing.assert_allclose(C1, C2)
+    np.testing.assert_allclose(U1, U2)
+
 
 def test_lgmres():
-    """Test that LCGMRES agrees with scipy."""
+    """Test that LGMRES agrees with scipy."""
     n = 20
     rng = np.random.default_rng(0)
     A = rng.random((n, n))
@@ -379,3 +440,80 @@ def test_lgmres():
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(V1, V2)
     np.testing.assert_allclose(A1, A2)
+
+    # test dummy preconditioner
+    outer_v1 = []
+    m = 5
+    k = 3
+    maxiter = 10
+
+    x1, info1 = scipy.sparse.linalg.lgmres(
+        np.array(A.matrix),
+        b,
+        rtol=tol,
+        M=np.array(M.matrix),
+        maxiter=maxiter,
+        inner_m=m,
+        outer_k=k,
+        outer_v=outer_v1,
+        prepend_outer_v=True,
+    )
+
+    V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
+    A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
+
+    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+        A,
+        b,
+        rtol=tol,
+        ML=M,
+        maxiter=maxiter,
+        m=m,
+        k=k,
+        outer_v=None,
+    )
+
+    np.testing.assert_allclose(x1, x2)
+    np.testing.assert_allclose(V1, V2)
+    np.testing.assert_allclose(A1, A2)
+
+
+def test_left_right_preconditioner():
+    """Test that left and right preconditioning both work."""
+    rng = np.random.default_rng(123)
+    n = 1000
+
+    I = np.eye(n)
+    b = rng.random(n)
+    A = -scipy.sparse.random_array((n, n), rng=rng, format="csc")
+    A += 5 * scipy.sparse.eye_array(n)
+    Ai = scipy.sparse.linalg.spilu(A).solve(I)
+
+    A = lx.MatrixLinearOperator(jnp.array(A.toarray()))
+    M = lx.MatrixLinearOperator(jnp.array(Ai))
+
+    m = 5
+    k = 3
+    maxiter = 10
+    tol = 1e-5
+
+    x1, j1, nmv1, beta1, _, _ = lgmres(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M)
+
+    x2, j2, nmv2, beta2, _, _ = lgmres(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M)
+
+    assert beta1 / np.linalg.norm(b) < tol
+    assert beta2 / np.linalg.norm(b) < tol
+    np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
+
+    m = 5
+    k = 3
+    maxiter = 10
+    tol = 1e-5
+
+    x1, j1, nmv1, beta1, _, _ = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M)
+
+    x2, j2, nmv2, beta2, _, _ = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M)
+
+    assert beta1 / np.linalg.norm(b) < tol
+    assert beta2 / np.linalg.norm(b) < tol
+    np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)

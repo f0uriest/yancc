@@ -1,4 +1,4 @@
-"""GCROTMK krylov solver."""
+"""GCROT(m,k) and LGMRES krylov solvers."""
 
 import operator
 from functools import partial
@@ -109,8 +109,6 @@ def _iterative_classical_gram_schmidt(Q, x, xnorm, max_iterations=2):
     """
     # "twice is enough"
     # http://slepc.upv.es/documentation/reports/str1.pdf
-
-    # TODO(shoyer): consider switching to only one iteration, like SciPy?
 
     # This assumes that Q's leaves all have the same dimension in the last
     # axis.
@@ -233,7 +231,7 @@ def _fgmres(
     rpsolve : callable
         Right preconditioner R
     C : pytree of jax.Array
-        Matrix C in GCROTMK algorithm.
+        Matrix C in GCROT(m,k) algorithm.
     lc : int
         Number of nonzero columns of C. Default C.shape[1]
     outer_v : pytree of jax.Array
@@ -246,7 +244,7 @@ def _fgmres(
     Returns
     -------
     H : ndarray
-        Upper hessenberg matrix.
+        Upper Hessenberg matrix.
     B : ndarray
         Projections corresponding to matrix C
     V : pytree of jax.Array
@@ -402,7 +400,8 @@ def gcrotmk(
     rtol=jnp.array(1e-5),
     atol=jnp.array(0.0),
     maxiter=jnp.array(1000),
-    M=None,
+    ML=None,
+    MR=None,
     m=20,
     k=None,
     C=None,
@@ -427,12 +426,13 @@ def gcrotmk(
         Maximum number of iterations.  Iteration will stop after maxiter
         steps even if the specified tolerance has not been achieved. The
         default is ``1000``.
-    M : lineax.LinearOperator, optional
-        Preconditioner for `A`.  The preconditioner should approximate the
-        inverse of `A`. gcrotmk is a 'flexible' algorithm and the preconditioner
-        can vary from iteration to iteration. Effective preconditioning
-        dramatically improves the rate of convergence, which implies that
-        fewer iterations are needed to reach a given error tolerance.
+    ML, MR : lineax.LinearOperator, optional
+        Left and/or right Preconditioner for `A`.  The preconditioners should be such
+        that `ML @ A @ MR` is better conditioned than `A` itself. gcrotmk is a
+        'flexible' algorithm and the right preconditioner `MR` can vary from iteration
+        to iteration. Effective preconditioning dramatically improves the rate of
+        convergence, which implies that fewer iterations are needed to reach a given
+        error tolerance.
     m : int, optional
         Number of inner FGMRES iterations per each outer iteration.
         Default: 20
@@ -454,7 +454,7 @@ def gcrotmk(
         The solution found.
     iters : int
         Number of iterations.
-    nmatvec : int
+    nmv : int
         Number of matrix vector products.
     residual : float
         Residual of the linear system.
@@ -464,33 +464,40 @@ def gcrotmk(
     References
     ----------
     .. [1] E. de Sturler, ''Truncation strategies for optimal Krylov subspace
-           methods'', SIAM J. Numer. Anal. 36, 864 (1999).
+           methods'', SIAM J. Numerical Analysis 36, 864 (1999).
     .. [2] J.E. Hicken and D.W. Zingg, ''A simplified and flexible variant
            of GCROT for solving nonsymmetric linear systems'',
-           SIAM J. Sci. Comput. 32, 172 (2010).
+           SIAM Journal of  Scientific Computing 32, 172 (2010).
     .. [3] M.L. Parks, E. de Sturler, G. Mackey, D.D. Johnson, S. Maiti,
            ''Recycling Krylov subspaces for sequences of linear systems'',
-           SIAM J. Sci. Comput. 28, 1651 (2006).
+           SIAM Journal of  Scientific Computing 28, 1651 (2006).
 
     """
-    structure = A.in_structure()
-    if M is None:
-        M = lx.IdentityLinearOperator(structure)
+    if ML is None:
+        ML = lx.IdentityLinearOperator(A.out_structure())
+    if MR is None:
+        MR = lx.IdentityLinearOperator(A.in_structure())
+
     matvec = A.mv
-    psolve = M.mv
+    lpsolve = ML.mv
+    rpsolve = MR.mv
 
     if x0 is None:
-        x = tree_map(jnp.zeros_like, b)
+        x = tree_map(jnp.zeros_like, A.in_structure())
     else:
         x = x0
 
-    r = _sub(b, matvec(x))
-    nmv = 1
     if k is None:
         k = m
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
+    ptol_max_factor = 1.0
+    r = _sub(b, matvec(x))
+    dtype = jnp.result_type(*tree_leaves(r))
+    eps = jnp.finfo(dtype).eps
+    nmv = 1
+    beta = _norm(r)
 
     if U is None:
         assert C is None
@@ -504,7 +511,7 @@ def gcrotmk(
             C = jax.vmap(matvec, in_axes=1, out_axes=1)(U)
             nmv += lc
         C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
-        # Reorthogonalize old vectors
+        # re-orthogonalize old vectors
         c = tree_map(lambda x: x[..., 0], C)
         unflatten = jax.flatten_util.ravel_pytree(c)[1]
         C = jax.vmap(
@@ -538,58 +545,67 @@ def gcrotmk(
 
     x, r = lax.cond(lc, initial_projection, lambda *args: args, x, r)
 
-    def gcmotmk_loop(carry):
-        j_outer, nmv, x, r, beta, C, U, lc = carry
+    def gcrotmk_cond(carry):
+        j_outer, _, _, _, beta, _, _, _, _ = carry
+        return jnp.logical_and(j_outer < maxiter, beta > tol)
 
-        H, B, V, Z, y, _, nmv_inner, _ = _fgmres(
+    def gcmotmk_loop(carry):
+        j_outer, nmv, x, r, beta, C, U, lc, ptol_max_factor = carry
+
+        v0 = lpsolve(r)
+        inner_res_0 = _norm(v0)
+
+        v0 = _mul(1.0 / inner_res_0, v0)
+        ptol = jnp.minimum(ptol_max_factor, tol / beta)
+
+        H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
             matvec,
-            v0=_mul(1 / beta, r),
+            v0=v0,
             m=m,
             k=k,
-            rpsolve=psolve,
-            atol=tol / beta,
+            rpsolve=rpsolve,
+            lpsolve=lpsolve,
+            atol=ptol,
             C=C,
             lc=lc,
         )
-        y *= beta
+        y *= inner_res_0
         nmv += nmv_inner
 
-        # ux := (Z - U B) y
+        # Inner loop tolerance control
+        ptol_max_factor = jnp.where(
+            pres > ptol,
+            jnp.minimum(1.0, 1.5 * ptol_max_factor),
+            jnp.maximum(eps, 0.25 * ptol_max_factor),
+        )
+
+        # u := (Z - U B) y
         Zy = tree_map(lambda x: _dot(x, y), Z)
         By = B @ y
         UBy = tree_map(lambda x: _dot(x, By), U)
-        ux = _sub(Zy, UBy)
+        u = _sub(Zy, UBy)
 
+        # c := V H y
         Hy = H.T @ y
-        cx = tree_map(lambda x: _dot(x, Hy), V)
+        c = tree_map(lambda x: _dot(x, Hy), V)
 
-        # Normalize cx, maintaining cx = A ux
-        # This new cx is orthogonal to the previous C, by construction
-        alpha = 1 / _norm(cx)
-        cx = _mul(alpha, cx)
-        ux = _mul(alpha, ux)
-
-        # Update residual and solution
-        gamma = _dot(cx, r)
-        x = _add(x, _mul(gamma, ux))
+        x = _add(x, u)
         r = _sub(b, matvec(x))
         nmv += 1
         beta = _norm(r)
 
-        U = tree_map(_roll_prepend, U, ux)
-        C = tree_map(_roll_prepend, C, cx)
+        # Normalize cx, maintaining cx = A ux
+        # This new cx is orthogonal to the previous C, by construction
+        alpha = 1 / _norm(c)
+        U = tree_map(_roll_prepend, U, _mul(alpha, u))
+        C = tree_map(_roll_prepend, C, _mul(alpha, c))
         lc = jnp.minimum(lc + 1, k)
 
-        return j_outer + 1, nmv, x, r, beta, C, U, lc
+        return j_outer + 1, nmv, x, r, beta, C, U, lc, ptol_max_factor
 
-    def gcrotmk_cond(carry):
-        j_outer, _, _, _, beta, _, _, _ = carry
-        return jnp.logical_and(j_outer < maxiter, beta > tol)
-
-    beta = _norm(r)
-    carry = (0, nmv, x, r, beta, C, U, lc)
+    carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
-    j_outer, nmv, x, r, beta, C, U, lc = carry
+    j_outer, nmv, x, r, beta, C, U, _, _ = carry
     # Include the solution vector to the span
     U = tree_map(_roll_prepend, U, x)
     C = tree_map(_roll_prepend, C, _sub(b, r))
@@ -606,7 +622,8 @@ def lgmres(
     rtol=1e-5,
     atol=0.0,
     maxiter=1000,
-    M=None,
+    ML=None,
+    MR=None,
     m=30,
     k=3,
     outer_v=None,
@@ -637,11 +654,13 @@ def lgmres(
     maxiter : int, optional
         Maximum number of iterations.  Iteration will stop after maxiter
         steps even if the specified tolerance has not been achieved.
-    M : {sparse array, ndarray, LinearOperator}, optional
-        Preconditioner for A.  The preconditioner should approximate the
-        inverse of A.  Effective preconditioning dramatically improves the
-        rate of convergence, which implies that fewer iterations are needed
-        to reach a given error tolerance.
+    ML, MR : lineax.LinearOperator, optional
+        Left and/or right Preconditioner for `A`.  The preconditioners should be such
+        that `ML @ A @ MR` is better conditioned than `A` itself. gcrotmk is a
+        'flexible' algorithm and the right preconditioner `MR` can vary from iteration
+        to iteration. Effective preconditioning dramatically improves the rate of
+        convergence, which implies that fewer iterations are needed to reach a given
+        error tolerance.
     m : int, optional
         Number of inner GMRES iterations per each outer iteration.
     k : int, optional
@@ -664,7 +683,7 @@ def lgmres(
         The solution found.
     iters : int
         Number of iterations.
-    nmatvec : int
+    nmv : int
         Number of matrix vector products.
     residual : float
         Residual of the linear system.
@@ -697,22 +716,26 @@ def lgmres(
              restarted GMRES", PhD thesis, University of Colorado (2003).
 
     """
-    structure = A.in_structure()
-    if M is None:
-        M = lx.IdentityLinearOperator(structure)
+    if ML is None:
+        ML = lx.IdentityLinearOperator(A.out_structure())
+    if MR is None:
+        MR = lx.IdentityLinearOperator(A.in_structure())
 
     matvec = A.mv
-    psolve = M.mv
-
-    b_norm = _norm(b)
-    tol = jnp.maximum(atol, rtol * b_norm)
+    lpsolve = ML.mv
+    rpsolve = MR.mv
 
     if x0 is None:
-        x = tree_map(jnp.zeros_like, b)
+        x = tree_map(jnp.zeros_like, A.in_structure())
     else:
         x = x0
 
+    b_norm = _norm(b)
+    tol = jnp.maximum(atol, rtol * b_norm)
+    ptol_max_factor = 1.0
     r = _sub(b, matvec(x))
+    dtype = jnp.result_type(*tree_leaves(r))
+    eps = jnp.finfo(dtype).eps
     nmv = 1
     beta = _norm(r)
 
@@ -732,39 +755,49 @@ def lgmres(
         outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
 
     def lgmres_cond(carry):
-        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv = carry
+        j_outer, nmv, x, r, beta, _, _, _, _ = carry
         return jnp.logical_and(j_outer < maxiter, beta > tol)
 
     def lgmres_loop(carry):
-        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv = carry
+        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor = carry
 
         # -- inner LGMRES iteration
-        v0 = psolve(r)
+        v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
 
         v0 = _mul(1.0 / inner_res_0, v0)
+        ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
         H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
             matvec,
-            v0,
+            v0=v0,
             m=m,
             k=0,
-            lpsolve=psolve,
-            atol=tol / inner_res_0,
+            lpsolve=lpsolve,
+            rpsolve=rpsolve,
+            atol=ptol,
             outer_v=outer_v,
             outer_Av=outer_Av,
             lv=lv,
         )
-        nmv += nmv_inner
         y *= inner_res_0
+        nmv += nmv_inner
+
+        # Inner loop tolerance control
+        ptol_max_factor = jnp.where(
+            pres > ptol,
+            jnp.minimum(1.0, 1.5 * ptol_max_factor),
+            jnp.maximum(eps, 0.25 * ptol_max_factor),
+        )
 
         # -- GMRES terminated: eval solution
+        # dx = Z y
         dx = tree_map(lambda x: _dot(x, y), Z)
 
         # -- Store LGMRES augmentation vectors
         nx = _norm(dx)
-        q = _dot(H.T, y)
-        ax = tree_map(lambda x: _dot(x, q), V)
+        # ax = V H y
+        ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
         outer_v = tree_map(_roll_prepend, outer_v, _mul(1 / nx, dx))
         outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
         lv = jnp.minimum(lv + 1, k)
@@ -775,10 +808,10 @@ def lgmres(
         nmv += 1
         beta = _norm(r)
 
-        return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv
+        return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor
 
-    carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv)
+    carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor)
     carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
-    j_outer, nmv, x, r, beta, outer_v, outer_Av, lc = carry
+    j_outer, nmv, x, r, beta, outer_v, outer_Av, _, _ = carry
 
     return x, j_outer, nmv, beta, outer_v, outer_Av
