@@ -1269,11 +1269,11 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
                 f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
             )
         )[:, None, None]
-        f1 *= -(self.nu * cosa / sina)[:, None, None]
+        f1 *= -(self.nu / 2 * cosa / sina)[:, None, None]
         f2 = jnp.diag(
             jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)
         )[:, None, None]
-        f2 *= -self.nu
+        f2 *= -self.nu / 2
         df = f1 + f2
         df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta))
 
@@ -1302,11 +1302,11 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         f1 = jax.jacfwd(fdfwd)(
             f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
         )[:, None, None, :]
-        f1 *= -(self.nu * cosa / sina)[:, None, None, None]
+        f1 *= -(self.nu / 2 * cosa / sina)[:, None, None, None]
         f2 = jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)[
             :, None, None, :
         ]
-        f2 *= -self.nu
+        f2 *= -self.nu / 2
         df = f1 + f2
         df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta, 1))
 

@@ -211,9 +211,9 @@ def dfdpitch(
     cosa = -pitchgrid.xi
 
     f1 = scipy.sparse.csr_array(jax.jacfwd(fdfwd)(f, str(p) + "z", h=h, bc="symmetric"))
-    f1 *= -(nu * cosa / sina)[:, None]
+    f1 *= -(nu / 2 * cosa / sina)[:, None]
     f2 = scipy.sparse.csr_array(jax.jacfwd(fd2)(f, p, h=h, bc="symmetric"))
-    f2 *= -nu
+    f2 *= -nu / 2
     df = f1 + f2
     It = scipy.sparse.eye_array(field.ntheta)
     Iz = scipy.sparse.eye_array(field.nzeta)
