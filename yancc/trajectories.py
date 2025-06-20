@@ -657,7 +657,7 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         super().__init__(*Ms)
 
 
-def _parse_axorder_shape(nt, nz, na, axorder):
+def _parse_axorder_shape_3d(nt, nz, na, axorder):
     shape = np.arange(3)
     shape[axorder.index("a")] = na
     shape[axorder.index("t")] = nt
@@ -666,7 +666,7 @@ def _parse_axorder_shape(nt, nz, na, axorder):
     return tuple(shape), caxorder
 
 
-def w_theta(field, pitchgrid, E_psi):
+def dkes_w_theta(field, pitchgrid, E_psi):
     """Wind in theta direction for MDKE."""
     w = (
         field.B_sup_t / field.Bmag * pitchgrid.xi[:, None, None]
@@ -675,7 +675,7 @@ def w_theta(field, pitchgrid, E_psi):
     return w
 
 
-def w_zeta(field, pitchgrid, E_psi):
+def dkes_w_zeta(field, pitchgrid, E_psi):
     """Wind in zeta direction for MDKE."""
     w = (
         field.B_sup_z / field.Bmag * pitchgrid.xi[:, None, None]
@@ -684,7 +684,7 @@ def w_zeta(field, pitchgrid, E_psi):
     return w
 
 
-def w_pitch(field, pitchgrid):
+def dkes_w_pitch(field, pitchgrid):
     """Wind in xi/pitch direction for MDKE."""
     sina = jnp.sqrt(1 - pitchgrid.xi**2)
     w = (
@@ -707,8 +707,6 @@ class MDKETheta(lx.AbstractLinearOperator):
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -725,7 +723,6 @@ class MDKETheta(lx.AbstractLinearOperator):
     field: Field
     pitchgrid: UniformPitchAngleGrid
     E_psi: float
-    nu: float
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: bool
@@ -736,7 +733,6 @@ class MDKETheta(lx.AbstractLinearOperator):
         field,
         pitchgrid,
         E_psi,
-        nu,
         p1="1a",
         p2=2,
         axorder="atz",
@@ -747,7 +743,6 @@ class MDKETheta(lx.AbstractLinearOperator):
         self.field = field
         self.pitchgrid = pitchgrid
         self.E_psi = jnp.array(E_psi)
-        self.nu = jnp.array(nu)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -757,12 +752,12 @@ class MDKETheta(lx.AbstractLinearOperator):
     def mv(self, f):
         """Matrix vector product."""
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        w = w_theta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_theta(self.field, self.pitchgrid, self.E_psi)
         h = 2 * np.pi / self.field.ntheta
 
         fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=1)
@@ -777,11 +772,11 @@ class MDKETheta(lx.AbstractLinearOperator):
 
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = w_theta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_theta(self.field, self.pitchgrid, self.E_psi)
         h = 2 * np.pi / self.field.ntheta
         fd = jnp.diag(jax.jacfwd(fdfwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
             None, :, None
@@ -803,11 +798,11 @@ class MDKETheta(lx.AbstractLinearOperator):
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = w_theta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_theta(self.field, self.pitchgrid, self.E_psi)
         h = 2 * np.pi / self.field.ntheta
         fd = (jax.jacfwd(fdfwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
             None, :, None, :
@@ -866,8 +861,6 @@ class MDKEZeta(lx.AbstractLinearOperator):
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -884,7 +877,6 @@ class MDKEZeta(lx.AbstractLinearOperator):
     field: Field
     pitchgrid: UniformPitchAngleGrid
     E_psi: float
-    nu: float
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: bool
@@ -895,7 +887,6 @@ class MDKEZeta(lx.AbstractLinearOperator):
         field,
         pitchgrid,
         E_psi,
-        nu,
         p1="1a",
         p2=2,
         axorder="atz",
@@ -906,7 +897,6 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self.field = field
         self.pitchgrid = pitchgrid
         self.E_psi = jnp.array(E_psi)
-        self.nu = jnp.array(nu)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -916,12 +906,12 @@ class MDKEZeta(lx.AbstractLinearOperator):
     def mv(self, f):
         """Matrix vector product."""
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        w = w_zeta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_zeta(self.field, self.pitchgrid, self.E_psi)
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
 
         fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=2)
@@ -935,11 +925,11 @@ class MDKEZeta(lx.AbstractLinearOperator):
 
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = w_zeta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_zeta(self.field, self.pitchgrid, self.E_psi)
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
         fd = jnp.diag(jax.jacfwd(fdfwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
             None, None, :
@@ -961,11 +951,11 @@ class MDKEZeta(lx.AbstractLinearOperator):
         if self.axorder[-1] == "t":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = w_zeta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_zeta(self.field, self.pitchgrid, self.E_psi)
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
         fd = (jax.jacfwd(fdfwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
             None, None, :, :
@@ -1024,8 +1014,6 @@ class MDKEPitch(lx.AbstractLinearOperator):
         Pitch angle grid data.
     E_psi : float
         Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -1042,7 +1030,6 @@ class MDKEPitch(lx.AbstractLinearOperator):
     field: Field
     pitchgrid: UniformPitchAngleGrid
     E_psi: float
-    nu: float
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: bool
@@ -1053,7 +1040,6 @@ class MDKEPitch(lx.AbstractLinearOperator):
         field,
         pitchgrid,
         E_psi,
-        nu,
         p1="1a",
         p2=2,
         axorder="atz",
@@ -1064,7 +1050,6 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self.field = field
         self.pitchgrid = pitchgrid
         self.E_psi = jnp.array(E_psi)
-        self.nu = jnp.array(nu)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -1074,12 +1059,12 @@ class MDKEPitch(lx.AbstractLinearOperator):
     def mv(self, f):
         """Matrix vector product."""
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        w = w_pitch(self.field, self.pitchgrid)
+        w = dkes_w_pitch(self.field, self.pitchgrid)
         h = np.pi / self.pitchgrid.nxi
 
         fd = fdfwd(f, self.p1, h=h, bc="symmetric", axis=0)
@@ -1093,11 +1078,11 @@ class MDKEPitch(lx.AbstractLinearOperator):
 
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = w_pitch(self.field, self.pitchgrid)
+        w = dkes_w_pitch(self.field, self.pitchgrid)
         h = np.pi / self.pitchgrid.nxi
         fd = jnp.diag(jax.jacfwd(fdfwd)(f[:, 0, 0], self.p1, h=h, bc="symmetric"))[
             :, None, None
@@ -1119,11 +1104,11 @@ class MDKEPitch(lx.AbstractLinearOperator):
         if self.axorder[-1] == "t":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = w_pitch(self.field, self.pitchgrid)
+        w = dkes_w_pitch(self.field, self.pitchgrid)
         h = np.pi / self.pitchgrid.nxi
         fd = (jax.jacfwd(fdfwd)(f[:, 0, 0], self.p1, h=h, bc="symmetric"))[
             :, None, None, :
@@ -1180,8 +1165,6 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
     nu : float
         Normalized collisionality, nu/v
     p1 : str
@@ -1199,7 +1182,6 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: float
     nu: float
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -1210,7 +1192,6 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self,
         field,
         pitchgrid,
-        E_psi,
         nu,
         p1="1a",
         p2=2,
@@ -1221,7 +1202,6 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
-        self.E_psi = jnp.array(E_psi)
         self.nu = jnp.array(nu)
         self.p1 = p1
         self.p2 = p2
@@ -1234,7 +1214,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
         cosa = -self.pitchgrid.xi
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = f.reshape(shape)
@@ -1255,7 +1235,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
@@ -1290,7 +1270,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         if self.axorder[-1] == "t":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
-        shape, caxorder = _parse_axorder_shape(
+        shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
@@ -1402,11 +1382,11 @@ class MDKE(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
-        dtheta = MDKETheta(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge)
-        dzeta = MDKEZeta(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge)
-        dpitch = MDKEPitch(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge)
+        dtheta = MDKETheta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
+        dzeta = MDKEZeta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
+        dpitch = MDKEPitch(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
         dscatter = MDKEPitchAngleScattering(
-            field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge
+            field, pitchgrid, nu, p1, p2, axorder, gauge
         )
         self.operators = [dtheta, dzeta, dpitch, dscatter]
 

@@ -36,7 +36,7 @@ def test_get_block_diag(pitchgrid, field):
     for axorder in itertools.permutations("atz"):
         for gauge in [True, False]:
             axorder = "".join(axorder)
-            f = MDKETheta(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge=gauge)
+            f = MDKETheta(field, pitchgrid, E_psi, p1, p2, axorder, gauge=gauge)
             A = f.as_matrix()
             np.testing.assert_allclose(
                 np.diag(A), f.diagonal(), err_msg=axorder + str(gauge)
@@ -49,7 +49,7 @@ def test_get_block_diag(pitchgrid, field):
     for axorder in itertools.permutations("atz"):
         for gauge in [True, False]:
             axorder = "".join(axorder)
-            f = MDKEZeta(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge=gauge)
+            f = MDKEZeta(field, pitchgrid, E_psi, p1, p2, axorder, gauge=gauge)
             A = f.as_matrix()
             np.testing.assert_allclose(
                 np.diag(A), f.diagonal(), err_msg=axorder + str(gauge)
@@ -62,7 +62,7 @@ def test_get_block_diag(pitchgrid, field):
     for axorder in itertools.permutations("atz"):
         for gauge in [True, False]:
             axorder = "".join(axorder)
-            f = MDKEPitch(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge=gauge)
+            f = MDKEPitch(field, pitchgrid, E_psi, p1, p2, axorder, gauge=gauge)
             A = f.as_matrix()
             np.testing.assert_allclose(
                 np.diag(A), f.diagonal(), err_msg=axorder + str(gauge)
@@ -76,7 +76,7 @@ def test_get_block_diag(pitchgrid, field):
         for gauge in [True, False]:
             axorder = "".join(axorder)
             f = MDKEPitchAngleScattering(
-                field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge=gauge
+                field, pitchgrid, nu, p1, p2, axorder, gauge=gauge
             )
             A = f.as_matrix()
             np.testing.assert_allclose(

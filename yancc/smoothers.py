@@ -11,13 +11,13 @@ import lineax as lx
 from .field import Field
 from .finite_diff import fd_coeffs
 from .linalg import lu_factor_banded_periodic, lu_solve_banded_periodic
-from .trajectories import MDKE, _parse_axorder_shape
+from .trajectories import MDKE, _parse_axorder_shape_3d
 from .velocity_grids import UniformPitchAngleGrid
 
 
 def permute_f(f, field, pitchgrid, axorder):
     """Rearrange elements of f to a given grid ordering."""
-    shape, caxorder = _parse_axorder_shape(
+    shape, caxorder = _parse_axorder_shape_3d(
         field.ntheta, field.nzeta, pitchgrid.nxi, axorder
     )
     f = f.reshape(shape)

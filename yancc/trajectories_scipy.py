@@ -5,7 +5,7 @@ import numpy as np
 import scipy
 
 from yancc.finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
-from yancc.trajectories import w_pitch, w_theta, w_zeta
+from yancc.trajectories import dkes_w_pitch, dkes_w_theta, dkes_w_zeta
 
 
 def dfdtheta(
@@ -38,7 +38,7 @@ def dfdtheta(
     """
     assert field.ntheta > fd_coeffs[1][p].size // 2
 
-    w = np.array(w_theta(field, pitchgrid, E_psi).flatten())[:, None]
+    w = np.array(dkes_w_theta(field, pitchgrid, E_psi).flatten())[:, None]
     h = 2 * np.pi / field.ntheta
 
     f = np.ones(field.ntheta)
@@ -94,7 +94,7 @@ def dfdzeta(
     df : scipy sparse array
     """
     assert field.nzeta > fd_coeffs[1][p].size // 2
-    w = np.array(w_zeta(field, pitchgrid, E_psi).flatten())[:, None]
+    w = np.array(dkes_w_zeta(field, pitchgrid, E_psi).flatten())[:, None]
     h = 2 * np.pi / field.nzeta / field.NFP
 
     f = np.ones(field.nzeta)
@@ -150,7 +150,7 @@ def dfdxi(
     df : scipy sparse array
     """
     assert pitchgrid.nxi > fd_coeffs[1][p].size // 2
-    w = np.array(w_pitch(field, pitchgrid).flatten())[:, None]
+    w = np.array(dkes_w_pitch(field, pitchgrid).flatten())[:, None]
     h = np.pi / pitchgrid.nxi
 
     f = np.ones(pitchgrid.nxi)
