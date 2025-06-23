@@ -343,7 +343,13 @@ def compute_transport_matrix(
     return integrand.sum(axis=1)
 
 
-def compute_fluxes(f, field, speedgrid, pitchgrid, species):
+def compute_fluxes(
+    f: jax.Array,
+    field: Field,
+    speedgrid: SpeedGrid,
+    pitchgrid: LegendrePitchAngleGrid,
+    species: list[LocalMaxwellian],
+):
     """Compute output fluxes from solution of DKE.
 
     Parameters

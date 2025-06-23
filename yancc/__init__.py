@@ -7,7 +7,6 @@ from . import (
     linalg,
     misc,
     multigrid,
-    preconditioner,
     smoothers,
     species,
     trajectories,
