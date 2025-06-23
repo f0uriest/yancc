@@ -119,82 +119,6 @@ class DKEConstraint(cola.ops.Dense):
         super().__init__(jax.scipy.linalg.block_diag(*Ia))
 
 
-class MDKESources(cola.ops.Dense):
-    """Fake sources of particles to ensure solvability of monoenergetic DKE.
-
-    Parameters
-    ----------
-    field : Field
-        Magnetic field information
-    pitchgrid : LegendrePitchAngleGrid
-        Grid of coordinates in pitch angle.
-    species : LocalMaxwellian
-        Species being considered
-    v : float
-        Speed being considered.
-
-    """
-
-    def __init__(
-        self,
-        field: Field,
-        pitchgrid: LegendrePitchAngleGrid,
-        species: LocalMaxwellian,
-        v: float,
-    ):
-        self.field = field
-        self.pitchgrid = pitchgrid
-        self.species = species
-        self.v = v
-        F = species(v)
-        x = v / species.v_thermal
-        s1 = (x**2 - 5 / 2) * F
-        N = pitchgrid.nxi * field.ntheta * field.nzeta
-        s1 = s1 * jnp.ones((N, 1))
-        super().__init__(s1)
-
-
-class MDKEConstraint(cola.ops.Dense):
-    """Constraints to fix gauge freedom in density for monoenergetic DKE.
-
-    Parameters
-    ----------
-    field : Field
-        Magnetic field information
-    pitchgrid : LegendrePitchAngleGrid
-        Grid of coordinates in pitch angle.
-    species : LocalMaxwellian
-        Species being considered
-    v : float
-        Speed being considered.
-
-    """
-
-    def __init__(
-        self,
-        field: Field,
-        pitchgrid: LegendrePitchAngleGrid,
-        species: LocalMaxwellian,
-        v: float,
-    ):
-        self.field = field
-        self.pitchgrid = pitchgrid
-        self.species = species
-        self.v = v
-
-        # enforcing that int(f d3v dr) = 0
-        d3v = pitchgrid.wxi
-
-        # flux surface average operator
-        dt = field.wtheta[:, None]
-        dz = field.wzeta[None, :]
-        dr = (field.sqrtg * dt * dz) / (field.sqrtg * dt * dz).sum()
-        dr = dr.flatten()
-
-        Ip = 2 * jnp.pi * (d3v[:, None] * dr[None, :]).reshape((1, -1))
-        super().__init__(Ip)
-
-
 def radial_magnetic_drift(
     field: Field,
     speedgrid: SpeedGrid,
@@ -324,7 +248,7 @@ def compute_monoenergetic_coefficients(
     f: jax.Array,
     field: Field,
     pitchgrid: LegendrePitchAngleGrid,
-    v: float,
+    v: float = 1.0,
 ) -> jax.Array:
     """Compute D_ij coefficients from solution for distribution function f.
 
