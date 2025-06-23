@@ -1,12 +1,13 @@
 """Magnetic field data structures."""
 
 import functools
+from typing import Optional
 
 import equinox as eqx
 import interpax
 import jax.numpy as jnp
 import numpy as np
-from jaxtyping import Array, Float
+from jaxtyping import Array, ArrayLike, Float, Int
 
 
 class Field(eqx.Module):
@@ -42,7 +43,7 @@ class Field(eqx.Module):
     """
 
     # note: assumes (psi, theta, zeta) coordinates, not (rho, theta, zeta)
-    rho: float
+    rho: Float[Array, ""]
     theta: Float[Array, "ntheta "]
     zeta: Float[Array, "nzeta "]
     wtheta: Float[Array, "ntheta "]
@@ -57,49 +58,49 @@ class Field(eqx.Module):
     BxgradpsidotgradB: Float[Array, "ntheta nzeta"]
     dBdt: Float[Array, "ntheta nzeta"]
     dBdz: Float[Array, "ntheta nzeta"]
-    Bmag_fsa: float
-    B2mag_fsa: float
-    psi_r: float
-    R_major: float
-    a_minor: float
-    iota: float
-    B0: float
+    Bmag_fsa: Float[Array, ""]
+    B2mag_fsa: Float[Array, ""]
+    psi_r: Float[Array, ""]
+    R_major: Float[Array, ""]
+    a_minor: Float[Array, ""]
+    iota: Float[Array, ""]
+    B0: Float[Array, ""]
     ntheta: int = eqx.field(static=True)
     nzeta: int = eqx.field(static=True)
-    NFP: int
+    NFP: Int[Array, ""]
 
     def __init__(
         self,
-        rho: float,
-        B_sup_t: Float[Array, "ntheta nzeta"],
-        B_sup_z: Float[Array, "ntheta nzeta"],
-        B_sub_t: Float[Array, "ntheta nzeta"],
-        B_sub_z: Float[Array, "ntheta nzeta"],
-        Bmag: Float[Array, "ntheta nzeta"],
-        sqrtg: Float[Array, "ntheta nzeta"],
-        psi_r: float,
-        iota: float,
-        R_major: float,
-        a_minor: float,
-        NFP: int = 1,
+        rho: Float[ArrayLike, ""],
+        B_sup_t: Float[ArrayLike, "ntheta nzeta"],
+        B_sup_z: Float[ArrayLike, "ntheta nzeta"],
+        B_sub_t: Float[ArrayLike, "ntheta nzeta"],
+        B_sub_z: Float[ArrayLike, "ntheta nzeta"],
+        Bmag: Float[ArrayLike, "ntheta nzeta"],
+        sqrtg: Float[ArrayLike, "ntheta nzeta"],
+        psi_r: Float[ArrayLike, ""],
+        iota: Float[ArrayLike, ""],
+        R_major: Float[ArrayLike, ""],
+        a_minor: Float[ArrayLike, ""],
+        NFP: Int[ArrayLike, ""] = 1,
         *,
-        dBdt=None,
-        dBdz=None,
-        B0=None,
+        dBdt: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
+        dBdz: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
+        B0: Optional[Float[ArrayLike, ""]] = None,
     ):
         self.rho = jnp.asarray(rho)
         self.NFP = jnp.asarray(NFP)
-        self.ntheta = sqrtg.shape[0]
-        self.nzeta = sqrtg.shape[1]
-        assert (self.ntheta % 2 == 1) and (
-            self.nzeta % 2 == 1
-        ), "ntheta and nzeta must be odd"
         self.B_sup_t = jnp.asarray(B_sup_t)
         self.B_sup_z = jnp.asarray(B_sup_z)
         self.B_sub_t = jnp.asarray(B_sub_t)
         self.B_sub_z = jnp.asarray(B_sub_z)
         self.sqrtg = jnp.asarray(sqrtg)
         self.Bmag = jnp.asarray(Bmag)
+        self.ntheta = self.sqrtg.shape[0]
+        self.nzeta = self.sqrtg.shape[1]
+        assert (self.ntheta % 2 == 1) and (
+            self.nzeta % 2 == 1
+        ), "ntheta and nzeta must be odd"
         if dBdt is None:
             dBdt = self._dfdt(self.Bmag)
         if dBdz is None:
@@ -130,10 +131,10 @@ class Field(eqx.Module):
     def from_desc(
         cls,
         eq,
-        rho: float,
+        rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
-    ):
+    ) -> "Field":
         """Construct Field from DESC equilibrium.
 
         Parameters
@@ -211,11 +212,11 @@ class Field(eqx.Module):
     def from_booz_xform(
         cls,
         booz,
-        s: float,
+        s: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
-        cutoff: float = 0.0,
-    ):
+        cutoff: Float[ArrayLike, ""] = 0.0,
+    ) -> "Field":
         """Construct Field from BOOZ_XFORM file.
 
         Parameters
@@ -302,7 +303,7 @@ class Field(eqx.Module):
         return cls(rho=jnp.sqrt(s), **data, NFP=nfp)
 
     @functools.partial(jnp.vectorize, signature="(m,n)->()", excluded=[0])
-    def flux_surface_average(self, f: Float[Array, "ntheta nzeta"]) -> float:
+    def flux_surface_average(self, f: Float[Array, "ntheta nzeta"]) -> Float[Array, ""]:
         """Compute flux surface average of f."""
         f = f.reshape((self.ntheta, self.nzeta))
         g = f * self.sqrtg
@@ -336,7 +337,7 @@ class Field(eqx.Module):
         df = jnp.fft.ifft(1j * k[None, :] * g, axis=1)
         return df.real
 
-    def resample(self, ntheta: int, nzeta: int):
+    def resample(self, ntheta: int, nzeta: int) -> "Field":
         """Resample field to a higher resolution."""
         if ntheta == self.ntheta and nzeta == self.nzeta:
             return self

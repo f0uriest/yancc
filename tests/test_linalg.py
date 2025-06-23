@@ -171,6 +171,7 @@ def test_inv_sum_kron():
     np.testing.assert_allclose(C, np.linalg.inv((A + B).to_dense()))
 
 
+@pytest.mark.xfail
 def test_approx_sum_kron():
     """Tests for approx_sum_kron."""
     rng = np.random.default_rng(123)

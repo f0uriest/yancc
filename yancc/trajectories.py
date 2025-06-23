@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Array, ArrayLike, Bool, Float
 
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
@@ -657,7 +658,9 @@ class DKESTrajectoriesSurface2(cola.ops.Kronecker):
         super().__init__(*Ms)
 
 
-def _parse_axorder_shape_3d(nt, nz, na, axorder):
+def _parse_axorder_shape_3d(
+    nt: int, nz: int, na: int, axorder: str
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
     shape = np.arange(3)
     shape[axorder.index("a")] = na
     shape[axorder.index("t")] = nt
@@ -666,7 +669,9 @@ def _parse_axorder_shape_3d(nt, nz, na, axorder):
     return tuple(shape), caxorder
 
 
-def dkes_w_theta(field, pitchgrid, E_psi):
+def dkes_w_theta(
+    field: Field, pitchgrid: UniformPitchAngleGrid, E_psi: Float[Array, ""]
+) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in theta direction for MDKE."""
     w = (
         field.B_sup_t / field.Bmag * pitchgrid.xi[:, None, None]
@@ -675,7 +680,9 @@ def dkes_w_theta(field, pitchgrid, E_psi):
     return w
 
 
-def dkes_w_zeta(field, pitchgrid, E_psi):
+def dkes_w_zeta(
+    field: Field, pitchgrid: UniformPitchAngleGrid, E_psi: Float[Array, ""]
+) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in zeta direction for MDKE."""
     w = (
         field.B_sup_z / field.Bmag * pitchgrid.xi[:, None, None]
@@ -684,7 +691,9 @@ def dkes_w_zeta(field, pitchgrid, E_psi):
     return w
 
 
-def dkes_w_pitch(field, pitchgrid):
+def dkes_w_pitch(
+    field: Field, pitchgrid: UniformPitchAngleGrid
+) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in xi/pitch direction for MDKE."""
     sina = jnp.sqrt(1 - pitchgrid.xi**2)
     w = (
@@ -722,21 +731,21 @@ class MDKETheta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: float
+    E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    gauge: bool
+    gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
 
     def __init__(
         self,
-        field,
-        pitchgrid,
-        E_psi,
-        p1="1a",
-        p2=2,
-        axorder="atz",
-        gauge=True,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        E_psi: Float[ArrayLike, ""],
+        p1: str = "1a",
+        p2: int = 2,
+        axorder: str = "atz",
+        gauge: Bool[ArrayLike, ""] = True,
     ):
         assert field.ntheta > fd_coeffs[1][p1].size // 2
         assert field.ntheta > fd_coeffs[2][p2].size // 2
@@ -749,8 +758,9 @@ class MDKETheta(lx.AbstractLinearOperator):
         self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
-    def mv(self, f):
+    def mv(self, vector):
         """Matrix vector product."""
+        f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -770,7 +780,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -791,7 +801,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
-    def block_diagonal(self):
+    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "a":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.nxi)))
@@ -876,21 +886,21 @@ class MDKEZeta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: float
+    E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    gauge: bool
+    gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
 
     def __init__(
         self,
-        field,
-        pitchgrid,
-        E_psi,
-        p1="1a",
-        p2=2,
-        axorder="atz",
-        gauge=True,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        E_psi: Float[ArrayLike, ""],
+        p1: str = "1a",
+        p2: int = 2,
+        axorder: str = "atz",
+        gauge: Bool[ArrayLike, ""] = True,
     ):
         assert field.nzeta > fd_coeffs[1][p1].size // 2
         assert field.nzeta > fd_coeffs[2][p2].size // 2
@@ -903,8 +913,9 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
-    def mv(self, f):
+    def mv(self, vector):
         """Matrix vector product."""
+        f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -923,7 +934,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -944,7 +955,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
-    def block_diagonal(self):
+    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "a":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.nxi)))
@@ -1029,21 +1040,21 @@ class MDKEPitch(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: float
+    E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    gauge: bool
+    gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
 
     def __init__(
         self,
-        field,
-        pitchgrid,
-        E_psi,
-        p1="1a",
-        p2=2,
-        axorder="atz",
-        gauge=True,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        E_psi: Float[ArrayLike, ""],
+        p1: str = "1a",
+        p2: int = 2,
+        axorder: str = "atz",
+        gauge: Bool[ArrayLike, ""] = True,
     ):
         assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
@@ -1056,8 +1067,9 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
-    def mv(self, f):
+    def mv(self, vector):
         """Matrix vector product."""
+        f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -1076,7 +1088,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -1097,7 +1109,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
-    def block_diagonal(self):
+    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
@@ -1182,21 +1194,21 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    nu: float
+    nu: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    gauge: bool
+    gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
 
     def __init__(
         self,
-        field,
-        pitchgrid,
-        nu,
-        p1="1a",
-        p2=2,
-        axorder="atz",
-        gauge=True,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        nu: Float[ArrayLike, ""],
+        p1: str = "1a",
+        p2: int = 2,
+        axorder: str = "atz",
+        gauge: Bool[ArrayLike, ""] = True,
     ):
         assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
@@ -1209,8 +1221,9 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
-    def mv(self, f):
+    def mv(self, vector):
         """Matrix vector product."""
+        f = vector
         sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
         cosa = -self.pitchgrid.xi
         shp = f.shape
@@ -1233,7 +1246,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
@@ -1263,7 +1276,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
-    def block_diagonal(self):
+    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
@@ -1354,24 +1367,27 @@ class MDKE(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: float
-    nu: float
+    E_psi: Float[Array, ""]
+    nu: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    gauge: bool
+    gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
-    operators: list[lx.AbstractLinearOperator]
+    _opa: MDKEPitch
+    _opt: MDKETheta
+    _opz: MDKEZeta
+    _opp: MDKEPitchAngleScattering
 
     def __init__(
         self,
-        field,
-        pitchgrid,
-        E_psi,
-        nu,
-        p1="1a",
-        p2=2,
-        axorder="atz",
-        gauge=True,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        E_psi: Float[ArrayLike, ""],
+        nu: Float[ArrayLike, ""],
+        p1: str = "1a",
+        p2: int = 2,
+        axorder: str = "atz",
+        gauge: Bool[ArrayLike, ""] = True,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -1382,37 +1398,38 @@ class MDKE(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
-        dtheta = MDKETheta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
-        dzeta = MDKEZeta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
-        dpitch = MDKEPitch(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
-        dscatter = MDKEPitchAngleScattering(
+        self._opa = MDKEPitch(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
+        self._opt = MDKETheta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
+        self._opz = MDKEZeta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
+        self._opp = MDKEPitchAngleScattering(
             field, pitchgrid, nu, p1, p2, axorder, gauge
         )
-        self.operators = [dtheta, dzeta, dpitch, dscatter]
 
     @eqx.filter_jit
-    def mv(self, x):
+    def mv(self, vector):
         """Matrix vector product."""
-        f0 = self.operators[0].mv(x)
-        f1 = self.operators[1].mv(x)
-        f2 = self.operators[2].mv(x)
-        f3 = self.operators[3].mv(x)
+        f0 = self._opa.mv(vector)
+        f1 = self._opt.mv(vector)
+        f2 = self._opz.mv(vector)
+        f3 = self._opp.mv(vector)
         return f0 + f1 + f2 + f3
 
-    def diagonal(self):
+    @eqx.filter_jit
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d0 = self.operators[0].diagonal()
-        d1 = self.operators[1].diagonal()
-        d2 = self.operators[2].diagonal()
-        d3 = self.operators[3].diagonal()
+        d0 = self._opa.diagonal()
+        d1 = self._opt.diagonal()
+        d2 = self._opz.diagonal()
+        d3 = self._opp.diagonal()
         return d0 + d1 + d2 + d3
 
-    def block_diagonal(self):
+    @eqx.filter_jit
+    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d0 = self.operators[0].block_diagonal()
-        d1 = self.operators[1].block_diagonal()
-        d2 = self.operators[2].block_diagonal()
-        d3 = self.operators[3].block_diagonal()
+        d0 = self._opa.block_diagonal()
+        d1 = self._opt.block_diagonal()
+        d2 = self._opz.block_diagonal()
+        d3 = self._opp.block_diagonal()
         return d0 + d1 + d2 + d3
 
     def as_matrix(self):

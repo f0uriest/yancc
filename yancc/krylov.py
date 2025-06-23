@@ -1,7 +1,9 @@
 """GCROT(m,k) and LGMRES krylov solvers."""
 
 import operator
+from collections.abc import Callable
 from functools import partial
+from typing import Optional
 
 import equinox as eqx
 import jax
@@ -11,6 +13,7 @@ import lineax as lx
 from jax import lax
 from jax import scipy as jsp
 from jax.tree_util import tree_leaves, tree_map, tree_reduce
+from jaxtyping import Array, ArrayLike, Float, Int, PyTree
 
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
 _vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)
@@ -158,7 +161,7 @@ def _rotate_vectors(H, i, cs, sn):
     return H
 
 
-def _givens_rotation(a, b):
+def _givens_rotation(a: jax.Array, b: jax.Array):
     b_zero = abs(b) == 0
     a_lt_b = abs(a) < abs(b)
     t = -jnp.where(a_lt_b, a, b) / jnp.where(a_lt_b, b, a)
@@ -193,25 +196,29 @@ def _apply_givens_rotations(H_row, givens, k):
 ####
 
 
-def _roll_prepend(X, y):
+def _roll_prepend(X: jax.Array, y: jax.Array) -> jax.Array:
     return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
+
+
+def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
+    return x
 
 
 @eqx.filter_jit
 def _fgmres(
-    matvec,
-    v0,
-    m,
-    k,
-    atol,
-    lpsolve=None,
-    rpsolve=None,
-    C=None,
-    lc=None,
-    outer_v=None,
-    outer_Av=None,
-    lv=None,
-):
+    matvec: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]],
+    v0: PyTree[ArrayLike],
+    m: int,
+    k: int,
+    atol: Float[ArrayLike, ""],
+    lpsolve: Optional[Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]]] = None,
+    rpsolve: Optional[Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]]] = None,
+    C: Optional[PyTree[ArrayLike]] = None,
+    lc: Optional[int] = None,
+    outer_v: Optional[PyTree[ArrayLike]] = None,
+    outer_Av: Optional[PyTree[ArrayLike]] = None,
+    lv: Optional[int] = None,
+) -> tuple[Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array]:
     """FGMRES Arnoldi process, with optional projection or augmentation
 
     Parameters
@@ -261,18 +268,17 @@ def _fgmres(
         Final residual.
     """
     nmv = 0
+    atol = jnp.asarray(atol)
 
     if lpsolve is None:
-
-        def lpsolve(x):
-            return x
+        lpsolve = _identity
 
     if rpsolve is None:
-
-        def rpsolve(x):
-            return x
+        rpsolve = _identity
 
     if outer_v is None:
+        assert lv is None, "if outer_v is None, lv must also be None"
+        assert outer_Av is None, "if outer_v is None, outer_Av must also be None"
         outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
         outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
         lv = 0
@@ -280,11 +286,14 @@ def _fgmres(
     if lv is None:
         lv = tree_leaves(outer_v)[0].shape[1]
 
+    assert lv is not None
+
     if outer_Av is None:
         outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
         nmv += lv
 
     if C is None:
+        assert lc is None, "if C is None, lc must also be None"
         C = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
         lc = 0
     else:
@@ -293,6 +302,7 @@ def _fgmres(
     if lc is None:
         lc = tree_leaves(C)[0].shape[1]
 
+    assert lc is not None
     maxiter = m + jnp.maximum(k - lc, 0) + lv
     size = m + k + tree_leaves(outer_v)[0].shape[1]
 
@@ -393,20 +403,20 @@ def _fgmres(
 
 @eqx.filter_jit
 def gcrotmk(
-    A,
-    b,
-    x0=None,
+    A: lx.AbstractLinearOperator,
+    b: PyTree[ArrayLike],
+    x0: Optional[PyTree[ArrayLike]] = None,
     *,
-    rtol=jnp.array(1e-5),
-    atol=jnp.array(0.0),
-    maxiter=jnp.array(1000),
-    ML=None,
-    MR=None,
-    m=20,
-    k=None,
-    C=None,
-    U=None,
-):
+    rtol: Float[ArrayLike, ""] = jnp.array(1e-5),
+    atol: Float[ArrayLike, ""] = jnp.array(0.0),
+    maxiter: Int[ArrayLike, ""] = jnp.array(1000),
+    ML: Optional[lx.AbstractLinearOperator] = None,
+    MR: Optional[lx.AbstractLinearOperator] = None,
+    m: int = 20,
+    k: Optional[int] = None,
+    C: Optional[PyTree[ArrayLike]] = None,
+    U: Optional[PyTree[ArrayLike]] = None,
+) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
 
@@ -514,11 +524,11 @@ def gcrotmk(
         # re-orthogonalize old vectors
         c = tree_map(lambda x: x[..., 0], C)
         unflatten = jax.flatten_util.ravel_pytree(c)[1]
-        C = jax.vmap(
+        Carr: jax.Array = jax.vmap(
             lambda x: jax.flatten_util.ravel_pytree(x)[0], in_axes=1, out_axes=1
         )(C)
 
-        Q, R, P = jsp.linalg.qr(C, mode="economic", pivoting=True)
+        Q, R, P = jsp.linalg.qr(Carr, mode="economic", pivoting=True)
         C = jax.vmap(unflatten, in_axes=1, out_axes=1)(Q)
         #   AUP = CP = Q R
         #   U' = U P R^-1
@@ -615,20 +625,20 @@ def gcrotmk(
 
 @eqx.filter_jit
 def lgmres(
-    A,
-    b,
-    x0=None,
+    A: lx.AbstractLinearOperator,
+    b: PyTree[ArrayLike],
+    x0: Optional[PyTree[ArrayLike]] = None,
     *,
-    rtol=1e-5,
-    atol=0.0,
-    maxiter=1000,
-    ML=None,
-    MR=None,
-    m=30,
-    k=3,
-    outer_v=None,
-    outer_Av=None,
-):
+    rtol: Float[ArrayLike, ""] = jnp.array(1e-5),
+    atol: Float[ArrayLike, ""] = jnp.array(0.0),
+    maxiter: Int[ArrayLike, ""] = jnp.array(1000),
+    ML: Optional[lx.AbstractLinearOperator] = None,
+    MR: Optional[lx.AbstractLinearOperator] = None,
+    m: int = 30,
+    k: int = 3,
+    outer_v: Optional[PyTree[ArrayLike]] = None,
+    outer_Av: Optional[PyTree[ArrayLike]] = None,
+) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
 

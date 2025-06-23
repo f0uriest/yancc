@@ -5,9 +5,14 @@ import jax
 import jax.numpy as jnp
 import orthax
 
+
 # save some time by precomputing this, usually only need nx <= 5-8
+def _default_weight(x: jax.Array):
+    return jnp.exp(-(x**2))
+
+
 default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
-    weight=lambda x: jnp.exp(-(x**2)),
+    weight=_default_weight,
     domain=(0, jnp.inf),
     ak=jnp.array(
         [

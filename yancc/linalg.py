@@ -1,6 +1,7 @@
 """Linear algebra helpers."""
 
 import functools
+from typing import Any
 
 import cola
 import equinox as eqx
@@ -803,16 +804,18 @@ class InverseLinearOperator(lx.AbstractLinearOperator):
     solver: lx.AbstractLinearSolver
     static_state: object = eqx.field(static=True)
     dynamic_state: object
-    options: dict
+    options: Any
     throw: bool = eqx.field(static=True)
 
     def __init__(
         self,
-        operator,
-        solver=lx.AutoLinearSolver(well_posed=True),
+        operator: lx.AbstractLinearOperator,
+        solver: lx.AbstractLinearSolver = lx.AutoLinearSolver(well_posed=True),
         options=None,
         throw=True,
     ):
+        if options is None:
+            options = {}
         self.operator = operator
         self.solver = solver
         state = solver.init(operator, options)
@@ -823,11 +826,11 @@ class InverseLinearOperator(lx.AbstractLinearOperator):
         self.options = options
         self.throw = throw
 
-    def mv(self, x):
+    def mv(self, vector):
         """Matrix vector product."""
         return lx.linear_solve(
             self.operator,
-            x,
+            vector,
             solver=self.solver,
             state=eqx.combine(self.dynamic_state, self.static_state),
             options=self.options,
@@ -1039,7 +1042,7 @@ def lu_solve_banded(p, q, lu, b):
     b = jax.lax.fori_loop(0, n, jloop, b)
 
     # now solve Ux=y, overwriting y with x
-    def jloop(k, b):
+    def kloop(k, b):
         j = n - 1 - k
         b = b.at[j].set(_safediv(b[j], lu[q, j]))
 
@@ -1049,7 +1052,7 @@ def lu_solve_banded(p, q, lu, b):
         b = jax.lax.fori_loop(jnp.maximum(0, j - q), j, iloop, b)
         return b
 
-    x = jax.lax.fori_loop(0, n, jloop, b)
+    x = jax.lax.fori_loop(0, n, kloop, b)
     return x
 
 

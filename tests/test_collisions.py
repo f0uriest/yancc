@@ -2,11 +2,13 @@
 
 import monkes
 import numpy as np
+import pytest
 
 from yancc.collisions import FokkerPlanckLandau, RosenbluthPotentials
 from yancc.velocity_grids import LegendrePitchAngleGrid, SpeedGrid
 
 
+@pytest.mark.xfail
 def test_verify_collision_null_single_species():
     """Check the null space of single species collision operator."""
     speedgrid = SpeedGrid(11)

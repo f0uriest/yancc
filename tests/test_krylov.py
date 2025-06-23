@@ -154,7 +154,7 @@ def test_fgmres():
     m = 15
     k = 5
     C = None
-    lc = 0
+    lc = None
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
         A.mv, b, m=m + k, atol=atol, cs=(), rpsolve=M.mv
@@ -187,7 +187,7 @@ def test_fgmres():
     m = 70
     k = 0
     C = None
-    lc = 0
+    lc = None
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
         A.mv, b, m=m + k, atol=atol, cs=(), rpsolve=M.mv

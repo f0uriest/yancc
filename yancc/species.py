@@ -1,29 +1,15 @@
 """Stuff for species, maxwellians, collisionalities etc."""
 
-import functools
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax.typing import ArrayLike
 from scipy.constants import Boltzmann, elementary_charge, epsilon_0, hbar, proton_mass
 
 JOULE_PER_EV = 11606 * Boltzmann
 EV_PER_JOULE = 1 / JOULE_PER_EV
-
-
-def _rescale(a):
-    def converter(f):
-        if callable(f):
-
-            @functools.wraps(f)
-            def wrapped(*args, **kwargs):
-                return a * f(*args, **kwargs)
-
-            return wrapped
-        else:
-            return a * f
-
-    return converter
 
 
 class Species(eqx.Module):
@@ -39,8 +25,12 @@ class Species(eqx.Module):
 
     """
 
-    mass: float = eqx.field(converter=_rescale(proton_mass))
-    charge: float = eqx.field(converter=_rescale(elementary_charge))
+    mass: jax.Array
+    charge: jax.Array
+
+    def __init__(self, mass: ArrayLike, charge: ArrayLike):
+        self.mass = jnp.asarray(mass * proton_mass)
+        self.charge = jnp.asarray(charge * elementary_charge)
 
 
 Electron = Species(1 / 1836.15267343, -1)
@@ -68,31 +58,31 @@ class LocalMaxwellian(eqx.Module):
     """
 
     species: Species
-    temperature: float  # in units of eV
-    density: float  # in units of particles/m^3
-    v_thermal: float  # in units of m/s
-    dndr: float
-    dTdr: float
+    temperature: jax.Array  # in units of eV
+    density: jax.Array  # in units of particles/m^3
+    v_thermal: jax.Array  # in units of m/s
+    dndr: jax.Array
+    dTdr: jax.Array
 
     def __init__(
         self,
         species: Species,
-        temperature: float,
-        density: float,
-        dndr: float,
-        dTdr: float,
+        temperature: ArrayLike,
+        density: ArrayLike,
+        dndr: ArrayLike,
+        dTdr: ArrayLike,
     ):
         self.species = species
-        self.temperature = temperature
-        self.density = density
+        self.temperature = jnp.asarray(temperature)
+        self.density = jnp.asarray(density)
         self.v_thermal = jnp.sqrt(
             2 * self.temperature * JOULE_PER_EV / self.species.mass
         )
-        self.dndr = dndr
-        self.dTdr = dTdr
+        self.dndr = jnp.asarray(dndr)
+        self.dTdr = jnp.asarray(dTdr)
 
-    def __call__(self, v: float) -> float:
-        """Evalate f at a given velocity."""
+    def __call__(self, v: ArrayLike) -> jax.Array:
+        """Evaluate f at a given velocity."""
         return (
             self.density
             / (jnp.sqrt(jnp.pi) * self.v_thermal) ** 3
@@ -115,23 +105,26 @@ class GlobalMaxwellian(eqx.Module):
     """
 
     species: Species
-    temperature: callable  # in units of eV
-    density: callable  # in units of particles/m^3
+    temperature: Callable[[jax.Array], jax.Array]  # in units of eV
+    density: Callable[[jax.Array], jax.Array]  # in units of particles/m^3
 
-    def v_thermal(self, r: float) -> float:
+    def v_thermal(self, r: ArrayLike) -> jax.Array:
         """float: Thermal speed, in m/s at a given normalized radius r."""
+        r = jnp.asarray(r)
         T = self.temperature(r) * JOULE_PER_EV
         v_thermal = jnp.sqrt(2 * T / self.species.mass)
         return v_thermal
 
-    def localize(self, r: float) -> LocalMaxwellian:
+    def localize(self, r: ArrayLike) -> LocalMaxwellian:
         """The global distribution function evaluated at a particular radius r."""
+        r = jnp.asarray(r)
         n, dndr = jax.value_and_grad(self.density)(r)
         T, dTdr = jax.value_and_grad(self.temperature)(r)
         return LocalMaxwellian(self.species, T, n, dndr, dTdr)
 
-    def __call__(self, r: float, v: float) -> float:
+    def __call__(self, r: ArrayLike, v: ArrayLike) -> jax.Array:
         """Evaluate f at a given radius and velocity."""
+        r = jnp.asarray(r)
         return (
             self.density(r)
             / (jnp.sqrt(jnp.pi) * self.v_thermal(r)) ** 3
@@ -140,8 +133,8 @@ class GlobalMaxwellian(eqx.Module):
 
 
 def collisionality(
-    maxwellian_a: LocalMaxwellian, v: float, *others: LocalMaxwellian
-) -> float:
+    maxwellian_a: LocalMaxwellian, v: ArrayLike, *others: LocalMaxwellian
+) -> jax.Array:
     """Collisionality between species a and others.
 
     Parameters
@@ -158,15 +151,15 @@ def collisionality(
     nu_a : float
         Collisionality of species a against background of others, in units of 1/s
     """
-    nu = 0.0
+    nu = jnp.array(0.0)
     for ma in others + (maxwellian_a,):
         nu += nuD_ab(maxwellian_a, ma, v)
     return nu
 
 
 def nuD_ab(
-    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: float
-) -> float:
+    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
+) -> jax.Array:
     """Pairwise collision freq. for species a colliding with species b at velocity v.
 
     Parameters
@@ -192,8 +185,8 @@ def nuD_ab(
 
 
 def gamma_ab(
-    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: float
-) -> float:
+    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
+) -> jax.Array:
     """Prefactor for pairwise collisionality."""
     lnlambda = coulomb_logarithm(maxwellian_a, maxwellian_b)
     ea, eb = maxwellian_a.species.charge, maxwellian_b.species.charge
@@ -202,8 +195,8 @@ def gamma_ab(
 
 
 def nupar_ab(
-    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: float
-) -> float:
+    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
+) -> jax.Array:
     """Parallel collisionality."""
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
@@ -214,7 +207,7 @@ def nupar_ab(
 
 def coulomb_logarithm(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
-) -> float:
+) -> jax.Array:
     """Coulomb logarithm for collisions between species a and b.
 
     Parameters
@@ -235,7 +228,7 @@ def coulomb_logarithm(
 
 def impact_parameter(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
-) -> float:
+) -> tuple[jax.Array, jax.Array]:
     """Impact parameters for classical Coulomb collision."""
     bmin = jnp.maximum(
         impact_parameter_perp(maxwellian_a, maxwellian_b),
@@ -247,7 +240,7 @@ def impact_parameter(
 
 def impact_parameter_perp(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
-) -> float:
+) -> jax.Array:
     """Distance of the closest approach for a 90° Coulomb collision."""
     m_reduced = (
         maxwellian_a.species.mass
@@ -264,7 +257,7 @@ def impact_parameter_perp(
 
 def debroglie_length(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
-) -> float:
+) -> jax.Array:
     """Thermal DeBroglie wavelength."""
     m_reduced = (
         maxwellian_a.species.mass
@@ -275,7 +268,7 @@ def debroglie_length(
     return hbar / (2 * m_reduced * v_th)
 
 
-def debye_length(*maxwellians: LocalMaxwellian) -> float:
+def debye_length(*maxwellians: LocalMaxwellian) -> jax.Array:
     """Scale length for charge screening."""
     den = 0
     for m in maxwellians:
@@ -283,12 +276,8 @@ def debye_length(*maxwellians: LocalMaxwellian) -> float:
     return jnp.sqrt(epsilon_0 / den)
 
 
-def chandrasekhar(x: jax.Array) -> jax.Array:
+def chandrasekhar(x: ArrayLike) -> jax.Array:
     """Chandrasekhar function."""
     return (
         jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
     ) / (2 * x**2)
-
-
-def _dchandrasekhar(x):
-    return 2 / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2)) - 2 / x * chandrasekhar(x)

@@ -1,6 +1,7 @@
 """Stuff for multigrid cycles."""
 
 import functools
+from typing import Union
 
 import equinox as eqx
 import interpax
@@ -140,7 +141,7 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, weights=None, verbose
             )
             for s in smoothers
         ]
-    weights = jnp.atleast_1d(weights)
+    weights = jnp.atleast_1d(jnp.array(weights))
     weights = jnp.broadcast_to(weights, (len(smoothers),))
 
     def body(k, x):
@@ -171,7 +172,7 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, weights=None, verbose=F
             )
             for s in smoothers
         ]
-    weights = jnp.atleast_1d(weights)
+    weights = jnp.atleast_1d(jnp.array(weights))
     weights = jnp.broadcast_to(weights, (len(smoothers),))
 
     def body(k, x0):
@@ -500,11 +501,11 @@ class MultigridOperator(lx.AbstractLinearOperator):
 
     operators: list[lx.AbstractLinearOperator]
     smoothers: list[list[lx.AbstractLinearOperator]]
-    x0: jax.Array
-    cycle_index: int
-    v1: int
-    v2: int
-    smooth_weights: jax.Array
+    x0: Union[None, jax.Array]
+    cycle_index: jax.Array
+    v1: jax.Array
+    v2: jax.Array
+    smooth_weights: Union[None, jax.Array]
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
     coarse_opinv: InverseLinearOperator
@@ -543,15 +544,15 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.verbose = verbose
 
     @eqx.filter_jit
-    def mv(self, x):
+    def mv(self, vector):
         """Matrix vector product."""
-        x0 = jnp.zeros_like(x)
+        x0 = jnp.zeros_like(vector)
         x = _multigrid_cycle_recursive(
             cycle_index=self.cycle_index,
             k=len(self.operators) - 1,
             x=x0,
             operators=self.operators,
-            rhs=x,
+            rhs=vector,
             smoothers=self.smoothers,
             v1=self.v1,
             v2=self.v2,
