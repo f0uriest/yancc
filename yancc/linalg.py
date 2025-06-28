@@ -198,42 +198,6 @@ class BlockOperator(cola.ops.LinearOperator):
         return jnp.concatenate(out)
 
 
-class RealOperator(cola.ops.LinearOperator):
-    """Real part of a linear operator."""
-
-    def __init__(self, op):
-        self._op = op
-        super().__init__(jnp.empty(0, dtype=op.dtype).real.dtype, op.shape)
-
-    def _matmat(self, X):
-        # assume op = R + jC, X = r + jc
-        # (R+jC)(r+jc) = Rr + jRc + jCr - Cc
-        # (R+jC)(r) = Rr + jCr
-        # (R+jC)(jc) = jRc - Cc
-        # (R)(r+jc) = Rr + jRc = real(op @ r) + j*real(op @ c)
-        # (C)(r+jc) = Cr - jCc = imag(op @ -j*r) - j*imag(op @ c)
-        r, c = X.real, X.imag
-        out = jnp.real(self._op @ r) + 1j * jnp.real(self._op @ c)
-        if jnp.iscomplexobj(X):
-            return out
-        return jnp.real(out)
-
-
-class ImagOperator(cola.ops.LinearOperator):
-    """Imaginary part of a linear operator."""
-
-    def __init__(self, op):
-        self._op = op
-        super().__init__(jnp.empty(0, dtype=op.dtype).real.dtype, op.shape)
-
-    def _matmat(self, X):
-        r, c = X.real, X.imag
-        out = jnp.real(self._op @ (-1j * r)) + 1j * jnp.imag(self._op @ c)
-        if jnp.iscomplexobj(X):
-            return out
-        return jnp.real(out)
-
-
 def make_dense_tridiag(l, d, u, l0=jnp.array(0.0), un=jnp.array(0.0)):
     """Make a dense matrix from tridiagonals.
 
