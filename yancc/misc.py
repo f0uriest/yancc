@@ -16,25 +16,25 @@ class DKESources(lx.MatrixLinearOperator):
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
     pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
 
     """
 
     field: Field
-    speedgrid: SpeedGrid
     pitchgrid: UniformPitchAngleGrid
+    speedgrid: SpeedGrid
     species: list[LocalMaxwellian]
 
     def __init__(
         self,
         field: Field,
-        speedgrid: SpeedGrid,
         pitchgrid: UniformPitchAngleGrid,
+        speedgrid: SpeedGrid,
         species: list[LocalMaxwellian],
     ):
         self.field = field
@@ -72,10 +72,10 @@ class DKEConstraint(lx.MatrixLinearOperator):
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
     pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
     normalize : bool
@@ -85,16 +85,16 @@ class DKEConstraint(lx.MatrixLinearOperator):
     """
 
     field: Field
-    speedgrid: SpeedGrid
     pitchgrid: UniformPitchAngleGrid
+    speedgrid: SpeedGrid
     species: list[LocalMaxwellian]
     normalize: bool
 
     def __init__(
         self,
         field: Field,
-        speedgrid: SpeedGrid,
         pitchgrid: UniformPitchAngleGrid,
+        speedgrid: SpeedGrid,
         species: list[LocalMaxwellian],
         normalize=True,
     ):
