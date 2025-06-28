@@ -1,6 +1,7 @@
 """Tests for linalg stuff."""
 
-import cola
+import jax.numpy as jnp
+import lineax as lx
 import numpy as np
 import pytest
 import scipy
@@ -32,19 +33,28 @@ def test_block_operator():
 def test_bordered_operator():
     """Test for BorderedOperator."""
     rng = np.random.default_rng(123)
-    A = rng.random((5, 5))
-    B = rng.random((5, 2))
-    C = rng.random((2, 5))
-    D = rng.random((2, 2))
+    A = jnp.array(rng.random((5, 5)))
+    B = jnp.array(rng.random((5, 2)))
+    C = jnp.array(rng.random((2, 5)))
+    D = jnp.array(rng.random((2, 2)))
 
-    F = yancc.linalg.BorderedOperator(A, B, C, D)
-    G = np.block([[A, B], [C, D]])
+    F = yancc.linalg.BorderedOperator(
+        lx.MatrixLinearOperator(A),
+        lx.MatrixLinearOperator(B),
+        lx.MatrixLinearOperator(C),
+        lx.MatrixLinearOperator(D),
+    )
+    G = jnp.block([[A, B], [C, D]])
 
-    np.testing.assert_allclose(F.to_dense(), G)
-    np.testing.assert_allclose(cola.linalg.inv(F).to_dense(), np.linalg.inv(G))
+    np.testing.assert_allclose(F.as_matrix(), G)
 
-    with pytest.raises(AssertionError):
-        _ = yancc.linalg.BorderedOperator(A, B, C, A)
+    Fi = yancc.linalg.InverseBorderedOperator(
+        lx.MatrixLinearOperator(jnp.linalg.inv(A)),
+        lx.MatrixLinearOperator(B),
+        lx.MatrixLinearOperator(C),
+        lx.MatrixLinearOperator(D),
+    )
+    np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(G))
 
 
 def test_tridiagonal():
