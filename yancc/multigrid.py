@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import lineax as lx
 
 from .linalg import InverseLinearOperator
-from .smoothers import MDKEJacobiSmoother, optimal_smoothing_parameter
+from .smoothers import MDKEJacobiSmoother
 from .trajectories import MDKE
 from .velocity_grids import UniformPitchAngleGrid
 
@@ -45,7 +45,9 @@ def get_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2", "smooth_solver"])
-def get_jacobi_smoothers(fields, pitchgrids, E_psi, nu, p1, p2, gauge, smooth_solver):
+def get_jacobi_smoothers(
+    fields, pitchgrids, E_psi, nu, p1, p2, gauge, smooth_solver, weight
+):
     """Get multigrid smoothers for each field, pitchgrid."""
     smoothers = []
     for field, pitchgrid in zip(fields, pitchgrids):
@@ -60,6 +62,7 @@ def get_jacobi_smoothers(fields, pitchgrids, E_psi, nu, p1, p2, gauge, smooth_so
                 p2=p2,
                 gauge=gauge,
                 smooth_solver=smooth_solver,
+                weight=weight,
             )
             for order in ["atz", "zat", "tza"]
         ]
@@ -130,28 +133,19 @@ def get_fields_grids(
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def standard_smooth(x, operator, rhs, smoothers, nsteps=1, weights=None, verbose=False):
+def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
-    if weights is None:
-        weights = [
-            optimal_smoothing_parameter(
-                operator.p1, operator.p2, operator.nu, s.axorder
-            )
-            for s in smoothers
-        ]
-    weights = jnp.atleast_1d(jnp.array(weights))
-    weights = jnp.broadcast_to(weights, (len(smoothers),))
 
     def body(k, x):
-        for Mi, wi in zip(smoothers, weights):
+        for Mi in smoothers:
             Ax = operator.mv(x)
             r = rhs - Ax
-            dx = wi * Mi.mv(r)
+            dx = Mi.mv(r)
             x += dx
             if verbose:
-                Sx = x - dx - wi * Mi.mv(Ax)
+                Sx = x - dx - Mi.mv(Ax)
                 err = high_freq_err_l2(Sx, operator) / high_freq_err_l2(x, operator)
                 jax.debug.print("high freq l2 err: {err:.3e}", err=err)
         return x
@@ -161,34 +155,25 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, weights=None, verbose
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, weights=None, verbose=False):
+def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
-    if weights is None:
-        weights = [
-            optimal_smoothing_parameter(
-                operator.p1, operator.p2, operator.nu, s.axorder
-            )
-            for s in smoothers
-        ]
-    weights = jnp.atleast_1d(jnp.array(weights))
-    weights = jnp.broadcast_to(weights, (len(smoothers),))
 
     def body(k, x0):
-        rs = jnp.empty((4, rhs.size))
-        dxs = jnp.empty((3, rhs.size))
+        rs = jnp.empty((len(smoothers) + 1, rhs.size))
+        dxs = jnp.empty((len(smoothers), rhs.size))
         x = x0
 
-        for i, (Mi, wi) in enumerate(zip(smoothers, weights)):
+        for i, Mi in enumerate(smoothers):
             Ax = operator.mv(x)
             r = rhs - Ax
             rs = rs.at[i].set(r)
-            dx = wi * Mi.mv(r)
+            dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
             x += dx
             if verbose:
-                Sx = x - dx - wi * Mi.mv(Ax)
+                Sx = x - dx - Mi.mv(Ax)
                 err = high_freq_err_l2(Sx, operator) / high_freq_err_l2(x, operator)
                 jax.debug.print("high freq l2 err: {err:.3e}", err=err)
 
@@ -272,7 +257,6 @@ def multigrid_cycle(
     cycle_index=1,
     v1=1,
     v2=1,
-    smooth_weights=None,
     interp_method="linear",
     smooth_method="standard",
     coarse_opinv=None,
@@ -299,8 +283,6 @@ def multigrid_cycle(
         cycle_index=2 is a "W" cycle etc.
     v1, v2 : int
         Number of pre- and post- smoothing iterations.
-    smooth_weights : jax.Array
-        Damping factors for smoothing.
     interp_method : str
         Method of interpolation, passed to interpax.interp3d
     smooth_method : {"standard", "krylov"}
@@ -334,7 +316,6 @@ def multigrid_cycle(
             smoothers=smoothers,
             v1=v1,
             v2=v2,
-            smooth_weights=smooth_weights,
             interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=coarse_opinv,
@@ -359,7 +340,6 @@ def _multigrid_cycle_recursive(
     smoothers,
     v1,
     v2,
-    smooth_weights,
     interp_method,
     smooth_method,
     coarse_opinv,
@@ -378,9 +358,7 @@ def _multigrid_cycle_recursive(
         jax.debug.print("level=({k}) before presmooth err: {err:.3e}", err=err, k=k)
 
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x = smooth(
-        x, Ak, rhs, Mk, nsteps=vv, weights=smooth_weights, verbose=max(verbose - 1, 0)
-    )
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
     rk = rhs - Ak.mv(x)
 
     if verbose:
@@ -412,7 +390,6 @@ def _multigrid_cycle_recursive(
                 smoothers=smoothers,
                 v1=v1,
                 v2=v2,
-                smooth_weights=smooth_weights,
                 interp_method=interp_method,
                 smooth_method=smooth_method,
                 coarse_opinv=coarse_opinv,
@@ -447,9 +424,7 @@ def _multigrid_cycle_recursive(
         jax.debug.print("level=({k}) before postsmooth err: {err:.3e}", err=err, k=k)
 
     vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-    x = smooth(
-        x, Ak, rhs, Mk, nsteps=vv, weights=smooth_weights, verbose=max(verbose - 1, 0)
-    )
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
     if verbose:
         rk = rhs - Ak.mv(x)
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
@@ -479,8 +454,6 @@ class MultigridOperator(lx.AbstractLinearOperator):
         cycle_index=2 is a "W" cycle etc.
     v1, v2 : int
         Number of pre- and post- smoothing iterations.
-    smooth_weights : jax.Array
-        Damping factors for smoothing.
     interp_method : str
         Method of interpolation, passed to interpax.interp3d
     smooth_method : {"standard", "krylov"}
@@ -505,7 +478,6 @@ class MultigridOperator(lx.AbstractLinearOperator):
     cycle_index: jax.Array
     v1: jax.Array
     v2: jax.Array
-    smooth_weights: Union[None, jax.Array]
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
     coarse_opinv: InverseLinearOperator
@@ -520,7 +492,6 @@ class MultigridOperator(lx.AbstractLinearOperator):
         cycle_index=1,
         v1=1,
         v2=1,
-        smooth_weights=None,
         interp_method="linear",
         smooth_method="standard",
         coarse_opinv=None,
@@ -534,7 +505,6 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.cycle_index = jnp.asarray(cycle_index)
         self.v1 = jnp.asarray(v1)
         self.v2 = jnp.asarray(v2)
-        self.smooth_weights = smooth_weights
         self.interp_method = interp_method
         self.smooth_method = smooth_method
         if coarse_opinv is None:
@@ -556,7 +526,6 @@ class MultigridOperator(lx.AbstractLinearOperator):
             smoothers=self.smoothers,
             v1=self.v1,
             v2=self.v2,
-            smooth_weights=self.smooth_weights,
             interp_method=self.interp_method,
             smooth_method=self.smooth_method,
             coarse_opinv=self.coarse_opinv,
@@ -683,7 +652,7 @@ def get_multigrid_preconditioner(
     )
     operators = get_operators(fields, grids, E_psi, nu, p1, p2, gauge)
     smoothers = get_jacobi_smoothers(
-        fields, grids, E_psi, nu, p1, p2, gauge, smooth_solver
+        fields, grids, E_psi, nu, p1, p2, gauge, smooth_solver, smooth_weights
     )
     Mlx = MultigridOperator(
         operators[::-1],
@@ -691,7 +660,6 @@ def get_multigrid_preconditioner(
         cycle_index=cycle_index,
         v1=v1,
         v2=v2,
-        smooth_weights=smooth_weights,
         interp_method=interp_method,
         smooth_method=smooth_method,
         coarse_overweight=coarse_overweight,
