@@ -160,21 +160,27 @@ class SpeedGrid(eqx.Module):
                 domain=(0, self.xmax),
                 n=nx + 1,
             )
+        # f at collocation points includes weight function
+        # ie we store f(x) = weight(x)*poly(x) not f(x) = poly(x)
         x, wx = orthax.orthgauss(nx, self.xrec)
         self.x = x
         self.wx = wx / self.xrec.weight(x)
+
+        # modal basis is weight(x)*poly(x). orthvander gives polynomial part,
+        # need to multiply by weight to get correct basis fn.
         self.xvander = orthax.orthvander(
             self.x, self.nx - 1, self.xrec
         ) * self.xrec.weight(self.x[:, None])
         self.xvander_inv = jnp.linalg.pinv(self.xvander)
 
-        # d/dx p(x) w(x) = p'(x) w(x) + p(x) w'(x)
+        # d/dx p(x) w(x) = p'(x) w(x) + p(x) w'(x) = D p(x) w(x) + p(x) w'(x)
         # w'(x) = k x^(k-1) exp(-x^2) - 2x^(k+1) exp(-x^2) = (k/x - 2x) w(x)
-
+        # d/dx p(x) w(x) = D p(x) w(x) + (k/x - 2x) w(x) p(x) = (D + k/x - 2x) p(x) w(x)
         def _dxfun(c):
             dc = orthax.orthder(c, self.xrec)
             dc = jnp.append(dc, jnp.array([0.0]))
             cc = 2 * orthax.orthmulx(c, self.xrec, mode="same")
+            # leave off k/x term for now since its not polynomial unless k==0
             return dc - cc
 
         self.Dx = jax.jacfwd(_dxfun)(self.x)
