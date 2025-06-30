@@ -175,8 +175,8 @@ def radial_magnetic_drift(
 
 def dke_rhs(
     field: Field,
-    speedgrid: SpeedGrid,
     pitchgrid: UniformPitchAngleGrid,
+    speedgrid: SpeedGrid,
     species: list[LocalMaxwellian],
     E_psi: float,
     include_constraints: bool = True,
@@ -188,10 +188,10 @@ def dke_rhs(
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
     pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
     E_psi : float
@@ -357,8 +357,8 @@ def compute_transport_matrix(
 def compute_fluxes(
     f: jax.Array,
     field: Field,
-    speedgrid: SpeedGrid,
     pitchgrid: UniformPitchAngleGrid,
+    speedgrid: SpeedGrid,
     species: list[LocalMaxwellian],
 ):
     """Compute output fluxes from solution of DKE.
@@ -367,10 +367,10 @@ def compute_fluxes(
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
     pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
 
