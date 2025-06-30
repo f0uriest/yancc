@@ -37,6 +37,15 @@ def test_diagonals(axorder, field, pitchgrid, speedgrid, species2):
     }
     E_psi = np.array(1e3)
 
+    # DKE
+    f = trajectories.DKE(
+        field, pitchgrid, speedgrid, species2, E_psi, "2d", 4, axorder=axorder
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+
     # speed
     f = trajectories.DKESpeed(
         field, pitchgrid, speedgrid, species2, E_psi, axorder=axorder

@@ -5,7 +5,7 @@ import itertools
 import jax
 import numpy as np
 
-from yancc.smoothers import permute_f
+from yancc.smoothers import permute_f_3d
 from yancc.trajectories import (
     MDKE,
     MDKEPitch,
@@ -119,9 +119,9 @@ def test_permutations(field, pitchgrid):
         field, pitchgrid, E_psi, nu, p1=p1, p2=p2, axorder="tza", gauge=True
     ).as_matrix()
 
-    P0f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "atz")
-    P1f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "zat")
-    P2f = jax.jacfwd(permute_f)(np.zeros(N), field, pitchgrid, "tza")
+    P0f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "atz")
+    P1f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "zat")
+    P2f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "tza")
 
     # dummy check that Ps are permutation matrices
     np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f @ P0f.T)

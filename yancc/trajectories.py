@@ -2092,6 +2092,158 @@ class DKEEnergyScattering(lx.AbstractLinearOperator):
         return lx.FunctionLinearOperator(fun, x)
 
 
+class DKE(lx.AbstractLinearOperator):
+    """Drift Kinetic Equation operator.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : SpeedGrid
+        Grid of coordinates in speed.
+    species : list[LocalMaxwellian]
+        Species being considered
+    E_psi : float
+        Normalized electric field, E_psi/v
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    p1 : int
+        Order of approximation for first derivatives.
+    p2 : int
+        Order of approximation for second derivatives.
+
+    """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: SpeedGrid
+    species: list[LocalMaxwellian]
+    E_psi: Float[Array, ""]
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    axorder: str = eqx.field(static=True)
+    _opx: DKESpeed
+    _opa: DKEPitch
+    _opt: DKETheta
+    _opz: DKEZeta
+    _opp: DKEPitchAngleScattering
+    _ope: DKEEnergyScattering
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: SpeedGrid,
+        species: list[LocalMaxwellian],
+        E_psi: Float[ArrayLike, ""],
+        p1: str = "4d",
+        p2: int = 4,
+        axorder: str = "sxatz",
+    ):
+        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        self.E_psi = jnp.array(E_psi)
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+
+        self._opx = DKESpeed(field, pitchgrid, speedgrid, species, E_psi, axorder)
+        self._opa = DKEPitch(
+            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder
+        )
+        self._opt = DKETheta(
+            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder
+        )
+        self._opz = DKEZeta(
+            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder
+        )
+        self._opp = DKEPitchAngleScattering(
+            field, pitchgrid, speedgrid, species, p2, axorder
+        )
+        self._ope = DKEEnergyScattering(field, pitchgrid, speedgrid, species, axorder)
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix vector product."""
+        f0 = self._opx.mv(vector)
+        f1 = self._opa.mv(vector)
+        f2 = self._opt.mv(vector)
+        f3 = self._opz.mv(vector)
+        f4 = self._opp.mv(vector)
+        f5 = self._ope.mv(vector)
+        return f0 + f1 + f2 + f3 + f4 + f5
+
+    @eqx.filter_jit
+    def diagonal(self) -> Float[Array, " nf"]:
+        """Diagonal of the operator as a 1d array."""
+        d0 = self._opx.diagonal()
+        d1 = self._opa.diagonal()
+        d2 = self._opt.diagonal()
+        d3 = self._opz.diagonal()
+        d4 = self._opp.diagonal()
+        d5 = self._ope.diagonal()
+        return d0 + d1 + d2 + d3 + d4 + d5
+
+    @eqx.filter_jit
+    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+        """Block diagonal of operator as (N,M,M) array."""
+        d0 = self._opx.block_diagonal()
+        d1 = self._opa.block_diagonal()
+        d2 = self._opt.block_diagonal()
+        d3 = self._opz.block_diagonal()
+        d4 = self._opp.block_diagonal()
+        d5 = self._ope.block_diagonal()
+        return d0 + d1 + d2 + d3 + d4 + d5
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
+
+
+@lx.is_symmetric.register(DKE)
+@lx.is_diagonal.register(DKE)
+@lx.is_tridiagonal.register(DKE)
 @lx.is_symmetric.register(DKEEnergyScattering)
 @lx.is_diagonal.register(DKEEnergyScattering)
 @lx.is_tridiagonal.register(DKEEnergyScattering)
