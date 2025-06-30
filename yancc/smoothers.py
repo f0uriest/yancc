@@ -73,7 +73,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         E_psi: Float[ArrayLike, ""],
         nu: Float[ArrayLike, ""],
-        p1: str = "1a",
+        p1: str = "2d",
         p2: int = 2,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,

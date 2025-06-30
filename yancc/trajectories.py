@@ -97,8 +97,8 @@ class MDKETheta(lx.AbstractLinearOperator):
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
         E_psi: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
     ):
@@ -254,8 +254,8 @@ class MDKEZeta(lx.AbstractLinearOperator):
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
         E_psi: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
     ):
@@ -410,8 +410,8 @@ class MDKEPitch(lx.AbstractLinearOperator):
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
         E_psi: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
     ):
@@ -566,8 +566,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
         nu: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
     ):
@@ -747,8 +747,8 @@ class MDKE(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         E_psi: Float[ArrayLike, ""],
         nu: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
     ):
@@ -973,8 +973,8 @@ class DKETheta(lx.AbstractLinearOperator):
         speedgrid: SpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "sxatz",
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
@@ -1173,8 +1173,8 @@ class DKEZeta(lx.AbstractLinearOperator):
         speedgrid: SpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "sxatz",
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
@@ -1373,8 +1373,8 @@ class DKEPitch(lx.AbstractLinearOperator):
         speedgrid: SpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
-        p1: str = "1a",
-        p2: int = 2,
+        p1: str = "4d",
+        p2: int = 4,
         axorder: str = "sxatz",
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
@@ -1729,7 +1729,7 @@ class DKEPitchAngleScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: SpeedGrid,
         species: list[LocalMaxwellian],
-        p2: int = 2,
+        p2: int = 4,
         axorder: str = "sxatz",
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
