@@ -400,7 +400,12 @@ def _fgmres(
         R = R.at[j, :].set(R_row)
         beta_vec = _rotate_vectors(beta_vec, j, *givens[j, :])
         res = abs(beta_vec[j + 1])
-        _maybe_print(jnp.mod(j, print_every) == 0, j, res, pre="    FGMRES  ")
+        _maybe_print(
+            jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
+            j,
+            res,
+            pre="    FGMRES  ",
+        )
         breakdown = H[j, j + 1] < eps * w_norm
 
         return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown
