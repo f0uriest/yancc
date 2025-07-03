@@ -161,14 +161,9 @@ def radial_magnetic_drift(
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
     xi = pitchgrid.xi[None, None, :, None, None]
     x = speedgrid.x[None, :, None, None, None]
+    v = x * vth
     vmadotgradpsi = -(
-        x**2
-        * vth**2
-        * (1 / 2 + xi**2 / 2)
-        * ms
-        / qs
-        / field.Bmag**2
-        * field.BxgradpsidotgradB
+        ms * v**2 / qs * (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
     )
     return vmadotgradpsi
 
@@ -213,7 +208,7 @@ def dke_rhs(
     dns = jnp.array([sp.dndr for sp in species])[:, None, None, None, None]
     Ts = jnp.array([sp.temperature for sp in species])[:, None, None, None, None]
     dTs = jnp.array([sp.dTdr for sp in species])[:, None, None, None, None]
-    Ln = dns / ns
+    Ln = dns / ns  # missing factor of psi?
     LT = dTs / Ts
     x = speedgrid.x[None, :, None, None, None]
     vmadotgradpsi = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
