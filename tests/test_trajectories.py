@@ -5,6 +5,7 @@ import pytest
 
 import yancc.trajectories as trajectories
 import yancc.trajectories_scipy as trajectories_scipy
+from yancc.collisions import EnergyScattering, PitchAngleScattering
 
 
 def extract_blocks(a, m):
@@ -39,7 +40,7 @@ def test_diagonals(axorder, field, pitchgrid, speedgrid, species2):
 
     # DKE
     f = trajectories.DKE(
-        field, pitchgrid, speedgrid, species2, E_psi, "2d", 4, axorder=axorder
+        field, pitchgrid, speedgrid, species2, E_psi, None, "2d", 4, axorder=axorder
     )
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
@@ -56,16 +57,14 @@ def test_diagonals(axorder, field, pitchgrid, speedgrid, species2):
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
     # energy scattering
-    f = trajectories.DKEEnergyScattering(
-        field, pitchgrid, speedgrid, species2, axorder=axorder
-    )
+    f = EnergyScattering(field, pitchgrid, speedgrid, species2, axorder=axorder)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
     for p2 in [2, 4, 6]:
-        f = trajectories.DKEPitchAngleScattering(
+        f = PitchAngleScattering(
             field, pitchgrid, speedgrid, species2, p2=p2, axorder=axorder
         )
         A = f.as_matrix()
