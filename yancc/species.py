@@ -179,14 +179,12 @@ def nuD_ab(
     """
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
-    prefactor = gamma_ab(maxwellian_a, maxwellian_b, v) * nb / v**3
+    prefactor = gamma_ab(maxwellian_a, maxwellian_b) * nb / v**3
     erf_part = jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb)
     return prefactor * erf_part
 
 
-def gamma_ab(
-    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
-) -> jax.Array:
+def gamma_ab(maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian) -> jax.Array:
     """Prefactor for pairwise collisionality."""
     lnlambda = coulomb_logarithm(maxwellian_a, maxwellian_b)
     ea, eb = maxwellian_a.species.charge, maxwellian_b.species.charge
@@ -200,9 +198,7 @@ def nupar_ab(
     """Parallel collisionality."""
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
-    return (
-        2 * gamma_ab(maxwellian_a, maxwellian_b, v) * nb / v**3 * chandrasekhar(v / vtb)
-    )
+    return 2 * gamma_ab(maxwellian_a, maxwellian_b) * nb / v**3 * chandrasekhar(v / vtb)
 
 
 def coulomb_logarithm(

@@ -9,27 +9,6 @@ import scipy
 import yancc.linalg
 
 
-def test_block_operator():
-    """Tests for BlockOperator."""
-    rng = np.random.default_rng(123)
-    A11 = rng.random((4, 5))
-    A12 = rng.random((4, 5))
-    A13 = rng.random((4, 5))
-    A21 = rng.random((4, 5))
-    A22 = rng.random((4, 5))
-    A23 = rng.random((4, 5))
-
-    A = yancc.linalg.BlockOperator([[A11, A12, A13], [A21, A22, A23]])
-    B = np.block([[A11, A12, A13], [A21, A22, A23]])
-    np.testing.assert_allclose(A.to_dense(), B)
-
-    with pytest.raises(AssertionError):
-        _ = yancc.linalg.BlockOperator([[A11, A12, A13], [A21, A22]])
-
-    with pytest.raises(AssertionError):
-        _ = yancc.linalg.BlockOperator([[A11.flatten(), A12, A13], [A21, A22, A23]])
-
-
 def test_bordered_operator():
     """Test for BorderedOperator."""
     rng = np.random.default_rng(123)

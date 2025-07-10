@@ -281,6 +281,7 @@ def _fgmres(
     """
     nmv = 0
     atol = jnp.asarray(atol)
+    print_every = jnp.asarray(print_every)
 
     if lpsolve is None:
         lpsolve = _identity
