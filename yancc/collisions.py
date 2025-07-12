@@ -205,8 +205,6 @@ class RosenbluthPotentials(eqx.Module):
     ----------
     speedgrid : SpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : LegendrePitchAngleGrid
-        Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
     nL : int
@@ -217,41 +215,28 @@ class RosenbluthPotentials(eqx.Module):
     """
 
     speedgrid: SpeedGrid
-    pitchgrid: UniformPitchAngleGrid
     legendregrid: LegendrePitchAngleGrid
     quad: bool = eqx.field(static=True)
     ddGxlk: jax.Array
     Hxlk: jax.Array
     dHxlk: jax.Array
-    Txi: jax.Array
-    Txi_inv: jax.Array
 
-    def __init__(self, speedgrid, pitchgrid, species, nL=4, quad=False):
+    def __init__(self, speedgrid, species, nL=4, quad=False):
         if not quad:
             assert speedgrid.k == 0
             assert speedgrid.xmax == jnp.inf
 
         self.speedgrid = speedgrid
-        self.pitchgrid = pitchgrid
         self.legendregrid = LegendrePitchAngleGrid(nL)
         self.quad = quad
-
-        self.Txi = orthax.orthvander(pitchgrid.xi, nL - 1, self.legendregrid.xirec)
-        self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
         ns = len(species)
         x = self.speedgrid.x[:, None, None]
         l = jnp.arange(nL)[None, :, None]
         k = jnp.arange(self.speedgrid.nx)[None, None, :]
-        self.ddGxlk = jnp.zeros(
-            (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
-        )
-        self.dHxlk = jnp.zeros(
-            (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
-        )
-        self.Hxlk = jnp.zeros(
-            (ns, ns, self.speedgrid.nx, self.pitchgrid.nxi, self.speedgrid.nx)
-        )
+        self.ddGxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+        self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+        self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         # arr[a,b] is potential operator from species b to species a
         for a, spa in enumerate(species):
             for b, spb in enumerate(species):
@@ -261,9 +246,9 @@ class RosenbluthPotentials(eqx.Module):
                 ddG = self._ddGlk(xb, l, k)
                 dH = self._dHlk(xb, l, k)
                 H = self._Hlk(xb, l, k)
-                self.ddGxlk = self.ddGxlk.at[a, b, :, :nL, :].set(ddG)
-                self.dHxlk = self.dHxlk.at[a, b, :, :nL, :].set(dH)
-                self.Hxlk = self.Hxlk.at[a, b, :, :nL, :].set(H)
+                self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(ddG)
+                self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(dH)
+                self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(H)
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -1110,6 +1095,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
     potentials: RosenbluthPotentials
     axorder: str = eqx.field(static=True)
     prefactor: jax.Array
+    Txi: jax.Array
+    Txi_inv: jax.Array
 
     def __init__(
         self,
@@ -1148,6 +1135,10 @@ class FieldPartCG(lx.AbstractLinearOperator):
             prefactor.append(pb)
 
         self.prefactor = jnp.array(prefactor)
+        self.Txi = orthax.orthvander(
+            pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        )
+        self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -1166,17 +1157,16 @@ class FieldPartCG(lx.AbstractLinearOperator):
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
         # G is in modal basis in legendre/xi
         # these go from nodal alpha to modal l, and back
-        f = jnp.einsum("la,sxatz->sxltz", self.potentials.Txi_inv, f)
+        f = jnp.einsum("la,sxatz->sxltz", self.Txi_inv, f)
         # convert to modal basis in x
         f = jnp.einsum("kx,sxltz->skltz", self.speedgrid.xvander_inv, f)
         # apply potential, G is effectively block diagonal in l
         Gabxlk = (
-            self.prefactor[:, :, :, None, None]
-            * self.potentials.ddGxlk[:, :, :, : self.potentials.legendregrid.nxi]
+            self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
         )
         df = jnp.einsum("psxlk,skltz->pxltz", Gabxlk, f)
         # transform back to real space in pitch angle
-        df = jnp.einsum("al,pxltz->pxatz", self.potentials.Txi, df)
+        df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return -df.reshape(shp)
 
@@ -1259,6 +1249,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
     axorder: str = eqx.field(static=True)
     prefactor_H: jax.Array
     prefactor_dH: jax.Array
+    Txi: jax.Array
+    Txi_inv: jax.Array
 
     def __init__(
         self,
@@ -1306,6 +1298,10 @@ class FieldPartCH(lx.AbstractLinearOperator):
 
         self.prefactor_H = jnp.array(prefactor_H)
         self.prefactor_dH = jnp.array(prefactor_dH)
+        self.Txi = orthax.orthvander(
+            pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        )
+        self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -1324,21 +1320,19 @@ class FieldPartCH(lx.AbstractLinearOperator):
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
         # H is in modal basis in legendre/xi
         # these go from nodal alpha to modal l, and back
-        f = jnp.einsum("la,sxatz->sxltz", self.potentials.Txi_inv, f)
+        f = jnp.einsum("la,sxatz->sxltz", self.Txi_inv, f)
         # convert to modal basis in x
         f = jnp.einsum("kx,sxltz->skltz", self.speedgrid.xvander_inv, f)
         # apply potential, H is effectively block diagonal in l
         Habxlk = (
-            self.prefactor_H[:, :, :, None, None]
-            * self.potentials.Hxlk[:, :, :, : self.potentials.legendregrid.nxi]
+            self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
         )
         dHabxlk = (
-            self.prefactor_dH[:, :, :, None, None]
-            * self.potentials.dHxlk[:, :, :, : self.potentials.legendregrid.nxi]
+            self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :]
         )
         df = jnp.einsum("psxlk,skltz->pxltz", Habxlk + dHabxlk, f)
         # transform back to real space in pitch angle
-        df = jnp.einsum("al,pxltz->pxatz", self.potentials.Txi, df)
+        df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return -df.reshape(shp)
 
@@ -1570,7 +1564,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.species = species
         if potentials is None:
-            potentials = RosenbluthPotentials(speedgrid, pitchgrid, species)
+            potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
         self.p2 = p2
         self.axorder = axorder

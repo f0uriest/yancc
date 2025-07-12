@@ -1555,7 +1555,7 @@ class DKE(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.species = species
         if potentials is None:
-            potentials = RosenbluthPotentials(speedgrid, pitchgrid, species)
+            potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
         self.E_psi = jnp.array(E_psi)
         self.p1 = p1
