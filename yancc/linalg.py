@@ -385,9 +385,9 @@ def _safediv(a, b):
     return jnp.where(mask, 0, a / b)
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q"))
-@functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=(0, 1))
-def lu_factor_banded(p, q, A):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+@functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=(0, 1, 3))
+def lu_factor_banded(p, q, A, *, unroll=True):
     """LU factorization of banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -415,26 +415,28 @@ def lu_factor_banded(p, q, A):
         def iloop(i, A):
             return A.at[q + i - k, k].set(_safediv(A[q + i - k, k], A[q, k]))
 
-        A = jax.lax.fori_loop(k + 1, jnp.minimum(k + p + 1, n), iloop, A)
+        A = jax.lax.fori_loop(k + 1, jnp.minimum(k + p + 1, n), iloop, A, unroll=unroll)
 
         def jloop(j, A):
 
             def mloop(m, A):
                 return A.at[q + m - j, j].add(-A[q + m - k, k] * A[q + k - j, j])
 
-            A = jax.lax.fori_loop(k + 1, jnp.minimum(k + p + 1, n), mloop, A)
+            A = jax.lax.fori_loop(
+                k + 1, jnp.minimum(k + p + 1, n), mloop, A, unroll=unroll
+            )
             return A
 
-        A = jax.lax.fori_loop(k + 1, jnp.minimum(k + q + 1, n), jloop, A)
+        A = jax.lax.fori_loop(k + 1, jnp.minimum(k + q + 1, n), jloop, A, unroll=unroll)
         return A
 
-    A = jax.lax.fori_loop(0, n - 1, kloop, A)
+    A = jax.lax.fori_loop(0, n - 1, kloop, A, unroll=unroll)
     return A
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q"))
-@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1))
-def lu_solve_banded(p, q, lu, b):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, 4))
+def lu_solve_banded(p, q, lu, b, *, unroll=True):
     """Solve a linear system with a pre-factored banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -463,10 +465,10 @@ def lu_solve_banded(p, q, lu, b):
         def iloop(i, b):
             return b.at[i].add(-lu[q + i - j, j] * b[j])
 
-        b = jax.lax.fori_loop(j + 1, jnp.minimum(j + p + 1, n), iloop, b)
+        b = jax.lax.fori_loop(j + 1, jnp.minimum(j + p + 1, n), iloop, b, unroll=unroll)
         return b
 
-    b = jax.lax.fori_loop(0, n, jloop, b)
+    b = jax.lax.fori_loop(0, n, jloop, b, unroll=unroll)
 
     # now solve Ux=y, overwriting y with x
     def kloop(k, b):
@@ -476,16 +478,16 @@ def lu_solve_banded(p, q, lu, b):
         def iloop(i, b):
             return b.at[i].add(-lu[q + i - j, j] * b[j])
 
-        b = jax.lax.fori_loop(jnp.maximum(0, j - q), j, iloop, b)
+        b = jax.lax.fori_loop(jnp.maximum(0, j - q), j, iloop, b, unroll=unroll)
         return b
 
-    x = jax.lax.fori_loop(0, n, kloop, b)
+    x = jax.lax.fori_loop(0, n, kloop, b, unroll=unroll)
     return x
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q"))
-@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1))
-def solve_banded(p, q, A, b):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, 4))
+def solve_banded(p, q, A, b, *, unroll=True):
     """Solve a linear system with a banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -504,15 +506,15 @@ def solve_banded(p, q, A, b):
     x : jax.Array, shape(...,N)
         Solution to linear system.
     """
-    lu = lu_factor_banded(p, q, A)
-    return lu_solve_banded(p, q, lu, b)
+    lu = lu_factor_banded(p, q, A, unroll=unroll)
+    return lu_solve_banded(p, q, lu, b, unroll=unroll)
 
 
-@functools.partial(jax.jit, static_argnames=("r",))
+@functools.partial(jax.jit, static_argnames=("r", "unroll"))
 @functools.partial(
-    jnp.vectorize, signature="(n,n)->(k,n),(n),(n,m),(m,n)", excluded=(0,)
+    jnp.vectorize, signature="(n,n)->(k,n),(n),(n,m),(m,n)", excluded=(0, 2)
 )
-def lu_factor_banded_periodic(r, A):
+def lu_factor_banded_periodic(r, A, *, unroll=True):
     """LU factorization of periodic banded matrix in dense storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -549,16 +551,16 @@ def lu_factor_banded_periodic(r, A):
     U = jnp.concatenate([U0, jnp.zeros((nn - 2 * r, r)), Un], axis=0)
     V = jnp.concatenate([V0, jnp.zeros((r, nn - 2 * r)), Vn], axis=1)
     B = dense_to_banded(r, r, A - U @ V)
-    lu = lu_factor_banded(r, r, B)
-    BinvU = lu_solve_banded(r, r, lu, U.T).T
+    lu = lu_factor_banded(r, r, B, unroll=unroll)
+    BinvU = lu_solve_banded(r, r, lu, U.T, unroll=unroll).T
     schur = jnp.linalg.inv(C + V @ BinvU)
     BUschur = BinvU @ schur
     piv = jnp.arange(nn)  # dummy pivots for now
     return lu, piv, BUschur, V
 
 
-@functools.partial(jax.jit, static_argnames=("r",))
-def lu_solve_banded_periodic(r, lu_schur_v, b):
+@functools.partial(jax.jit, static_argnames=("r", "unroll"))
+def lu_solve_banded_periodic(r, lu_schur_v, b, *, unroll=True):
     """Solve a periodic banded linear system with matrix pre-factored.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -579,23 +581,23 @@ def lu_solve_banded_periodic(r, lu_schur_v, b):
         Solution to linear system.
     """
     Blu, piv, BUschur, V = lu_schur_v
-    return _lu_solve_banded_periodic(r, Blu, piv, BUschur, V, b)
+    return _lu_solve_banded_periodic(r, Blu, piv, BUschur, V, b, unroll)
 
 
 @functools.partial(
-    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n)->(n)", excluded=(0,)
+    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n)->(n)", excluded=(0, 6)
 )
-def _lu_solve_banded_periodic(r, lu, piv, BUschur, V, b):
+def _lu_solve_banded_periodic(r, lu, piv, BUschur, V, b, unroll):
     nn = b.shape[-1]
     if (nn <= 2 * r) or (r == 0):
         return jax.scipy.linalg.lu_solve((lu, piv), b)
-    Binvb = lu_solve_banded(r, r, lu, b)
+    Binvb = lu_solve_banded(r, r, lu, b, unroll=unroll)
     return Binvb - BUschur @ (V @ Binvb)
 
 
-@functools.partial(jax.jit, static_argnames=("r",))
-@functools.partial(jnp.vectorize, signature="(n,n),(n)->(n)", excluded=(0,))
-def solve_banded_periodic(r, A, b):
+@functools.partial(jax.jit, static_argnames=("r", "unroll"))
+@functools.partial(jnp.vectorize, signature="(n,n),(n)->(n)", excluded=(0, 3))
+def solve_banded_periodic(r, A, b, *, unroll=True):
     """Solve a periodic banded linear system.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -615,5 +617,5 @@ def solve_banded_periodic(r, A, b):
     x : jax.Array, shape(...,N)
         Solution to linear system.
     """
-    lu_schur_v = lu_factor_banded_periodic(r, A)
-    return lu_solve_banded_periodic(r, lu_schur_v, b)
+    lu_schur_v = lu_factor_banded_periodic(r, A, unroll=unroll)
+    return lu_solve_banded_periodic(r, lu_schur_v, b, unroll=unroll)
