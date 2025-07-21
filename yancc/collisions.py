@@ -20,7 +20,12 @@ from .utils import (
     lGammainc,
     lGammaincc,
 )
-from .velocity_grids import LegendrePitchAngleGrid, SpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import (
+    AbstractSpeedGrid,
+    LegendrePitchAngleGrid,
+    MaxwellSpeedGrid,
+    UniformPitchAngleGrid,
+)
 
 
 class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
@@ -203,7 +208,7 @@ class RosenbluthPotentials(eqx.Module):
 
     Parameters
     ----------
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -214,7 +219,7 @@ class RosenbluthPotentials(eqx.Module):
         functions (fast)
     """
 
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     legendregrid: LegendrePitchAngleGrid
     quad: bool = eqx.field(static=True)
     ddGxlk: jax.Array
@@ -538,7 +543,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -550,7 +555,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -560,7 +565,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         p2: int = 4,
         axorder: str = "sxatz",
@@ -730,7 +735,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -740,7 +745,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     axorder: str = eqx.field(static=True)
     coeff0: jax.Array
@@ -751,7 +756,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         axorder: str = "sxatz",
     ):
@@ -932,7 +937,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         Magnetic field information
     pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -945,7 +950,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     axorder: str = eqx.field(static=True)
@@ -955,7 +960,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
@@ -1079,7 +1084,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         Magnetic field information
     pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1090,7 +1095,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     axorder: str = eqx.field(static=True)
@@ -1102,7 +1107,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
@@ -1230,7 +1235,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         Magnetic field information
     pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1243,7 +1248,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     axorder: str = eqx.field(static=True)
@@ -1256,7 +1261,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
@@ -1396,7 +1401,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         Magnetic field information
     pitchgrid : LegendrePitchAngleGrid
         Grid of coordinates in pitch angle.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1408,7 +1413,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
     """
 
     field: Field
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     pitchgrid: UniformPitchAngleGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1421,7 +1426,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
@@ -1524,7 +1529,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         Magnetic field information
     pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1539,7 +1544,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     p2: int = eqx.field(static=True)
@@ -1552,7 +1557,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: Optional[RosenbluthPotentials] = None,
         p2: int = 4,

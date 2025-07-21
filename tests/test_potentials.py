@@ -10,7 +10,7 @@ import sympy
 from yancc.collisions import RosenbluthPotentials
 from yancc.species import GlobalMaxwellian, Hydrogen
 from yancc.utils import Gammainc, Gammaincc
-from yancc.velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import _compute_G_sympy, _compute_H_sympy
 
@@ -20,7 +20,7 @@ mpmath.mp.dps = 100
 @pytest.fixture
 def xgrid():
     """Speed grid for testing."""
-    return SpeedGrid(10)
+    return MaxwellSpeedGrid(10)
 
 
 @pytest.fixture

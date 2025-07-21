@@ -6,7 +6,7 @@ import sympy
 
 from yancc.field import Field
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen
-from yancc.velocity_grids import LegendrePitchAngleGrid, SpeedGrid
+from yancc.velocity_grids import LegendrePitchAngleGrid, MaxwellSpeedGrid
 
 
 @pytest.fixture(scope="session")
@@ -26,7 +26,7 @@ def pitchgrid():
 @pytest.fixture(scope="session")
 def speedgrid():
     """Pitch angle grid for testing"""
-    return SpeedGrid(5)
+    return MaxwellSpeedGrid(5)
 
 
 @pytest.fixture(scope="session")

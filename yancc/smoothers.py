@@ -15,7 +15,7 @@ from .finite_diff import fd_coeffs
 from .linalg import lu_factor_banded_periodic, lu_solve_banded_periodic
 from .species import LocalMaxwellian, nuD_ab
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def permute_f_3d(
@@ -34,7 +34,7 @@ def permute_f_4d(
     f: jax.Array,
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: SpeedGrid,
+    speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
 ) -> jax.Array:
@@ -179,7 +179,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : PitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -202,7 +202,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -216,7 +216,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1="2d",

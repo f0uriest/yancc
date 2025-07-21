@@ -18,7 +18,12 @@ from .field import Field
 from .finite_diff import fd_coeffs, fdbwd, fdfwd
 from .species import LocalMaxwellian
 from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import (
+    AbstractSpeedGrid,
+    MaxwellSpeedGrid,
+    MonoenergeticSpeedGrid,
+    UniformPitchAngleGrid,
+)
 
 
 def dkes_w_theta(
@@ -552,6 +557,7 @@ class MDKE(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
+    speedgrid: AbstractSpeedGrid
     E_psi: Float[Array, ""]
     nu: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -576,6 +582,7 @@ class MDKE(lx.AbstractLinearOperator):
     ):
         self.field = field
         self.pitchgrid = pitchgrid
+        self.speedgrid = MonoenergeticSpeedGrid(jnp.array(1.0))
         self.E_psi = jnp.array(E_psi)
         self.nu = jnp.array(nu)
         self.p1 = p1
@@ -740,7 +747,7 @@ class DKETheta(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -759,7 +766,7 @@ class DKETheta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -770,7 +777,7 @@ class DKETheta(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -940,7 +947,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -959,7 +966,7 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -970,7 +977,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -1140,7 +1147,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1159,7 +1166,7 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -1170,7 +1177,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -1340,7 +1347,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1352,7 +1359,7 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     axorder: str = eqx.field(static=True)
@@ -1361,7 +1368,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         axorder: str = "sxatz",
@@ -1505,7 +1512,7 @@ class DKE(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1524,7 +1531,7 @@ class DKE(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     E_psi: Float[Array, ""]
@@ -1541,7 +1548,7 @@ class DKE(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         potentials: Optional[RosenbluthPotentials] = None,

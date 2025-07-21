@@ -16,7 +16,7 @@ from yancc.collisions import (
 )
 from yancc.field import Field
 from yancc.species import GlobalMaxwellian, Hydrogen, gamma_ab
-from yancc.velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import (
     _compute_CD_sympy,
@@ -64,7 +64,7 @@ def test_CE_single_species_vs_sympy():
         R_major=10.0,
         a_minor=1.0,
     )
-    speedgrid = SpeedGrid(10)
+    speedgrid = MaxwellSpeedGrid(10)
     pitchgrid = UniformPitchAngleGrid(11)
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
     gamma_aa_jax = gamma_ab(species[0], species[0])
@@ -136,7 +136,7 @@ def test_CF_single_species_vs_sympy(l):
         R_major=10.0,
         a_minor=1.0,
     )
-    speedgrid = SpeedGrid(10)
+    speedgrid = MaxwellSpeedGrid(10)
     pitchgrid = UniformPitchAngleGrid(11)
     potentials = RosenbluthPotentials(speedgrid, species, nL=6)
     gamma_aa_jax = gamma_ab(species[0], species[0])
@@ -231,7 +231,7 @@ def test_CF_single_species_vs_sympy(l):
 
 def test_verify_collision_null_single_species():
     """Check the null space of single species collision operator."""
-    speedgrid = SpeedGrid(5)
+    speedgrid = MaxwellSpeedGrid(5)
     pitchgrid = UniformPitchAngleGrid(129)
 
     # just need a dummy field for this

@@ -9,7 +9,7 @@ from jaxtyping import Array, ArrayLike, Float
 from .field import Field
 from .multigrid import MultigridOperator, get_multigrid_preconditioner
 from .species import LocalMaxwellian, collisionality
-from .velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
 class DKEPreconditioner(lx.AbstractLinearOperator):
@@ -17,7 +17,7 @@ class DKEPreconditioner(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     M: MultigridOperator
@@ -27,7 +27,7 @@ class DKEPreconditioner(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         **options
