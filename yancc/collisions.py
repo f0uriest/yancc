@@ -679,6 +679,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             None, None, :, None, None, :
         ]
         df = f1 + f2
+        df *= -self.nus[:, :, None, None, None, None] / 2
+
         df = jnp.tile(df, (1, 1, 1, self.field.ntheta, self.field.nzeta, 1))
 
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1027,12 +1029,65 @@ class FieldPartCD(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        raise NotImplementedError
+        shape, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nxi,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        diag = jnp.einsum("iijj->ij", self.C)
+        df = jnp.tile(
+            diag[:, :, None, None, None],
+            (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta),
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return -df.flatten()
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        raise NotImplementedError
+        if self.axorder[-1] == "s":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            diag = jnp.einsum("ikjj->ijk", self.C)
+            df = jnp.tile(
+                diag[:, :, None, None, None, :],
+                (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, len(self.species), len(self.species)))
+            return -df
+        if self.axorder[-1] == "x":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            diag = jnp.einsum("iijk->ijk", self.C)
+            df = jnp.tile(
+                diag[:, :, None, None, None, :],
+                (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, self.speedgrid.nx, self.speedgrid.nx))
+            return -df
+        if self.axorder[-1] == "a":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.nxi)))
+        if self.axorder[-1] == "t":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+        if self.axorder[-1] == "z":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1178,12 +1233,111 @@ class FieldPartCG(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        raise NotImplementedError
+        shape, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nxi,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        Gabxlk = (
+            self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
+        )
+        Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
+        Gabxliy = (
+            Gabxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
+        )
+        Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
+        G = jnp.einsum("aaxix->axi", Gabxiy)
+        df = jnp.tile(
+            G[:, :, :, None, None], (1, 1, 1, self.field.ntheta, self.field.nzeta)
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return -df.flatten()
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        raise NotImplementedError
+        if self.axorder[-1] == "s":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            Gabxlk = (
+                self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
+            )
+            Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
+            Gabxliy = (
+                Gabxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
+            )
+            Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
+            G = jnp.einsum("abxix->axib", Gabxiy)
+            df = jnp.tile(
+                G[:, :, :, None, None, :],
+                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, len(self.species), len(self.species)))
+            return -df
+        if self.axorder[-1] == "x":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            Gabxlk = (
+                self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
+            )
+            Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
+            Gabxliy = (
+                Gabxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
+            )
+            Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
+            G = jnp.einsum("aaxiy->axiy", Gabxiy)
+            df = jnp.tile(
+                G[:, :, :, None, None, :],
+                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, self.speedgrid.nx, self.speedgrid.nx))
+            return -df
+        if self.axorder[-1] == "a":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            Gabxlk = (
+                self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
+            )
+            Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
+            Gsxl = jnp.einsum("aaxlx->axl", Gabxly)
+            Gsxlj = jax.vmap(jax.vmap(jnp.diag))(Gsxl)
+            Gsxij = jnp.einsum("il,sxlj->sxij", self.Txi, Gsxlj)
+            Gsxia = jnp.einsum("ja,sxij->sxia", self.Txi_inv, Gsxij)
+            df = jnp.tile(
+                Gsxia[:, :, :, None, None, :],
+                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+            return -df
+
+        if self.axorder[-1] == "t":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+        if self.axorder[-1] == "z":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1344,12 +1498,120 @@ class FieldPartCH(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        raise NotImplementedError
+        shape, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nxi,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        Habxlk = (
+            self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
+        ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
+        Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
+        Habxliy = (
+            Habxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
+        )
+        Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
+        H = jnp.einsum("aaxix->axi", Habxiy)
+        df = jnp.tile(
+            H[:, :, :, None, None], (1, 1, 1, self.field.ntheta, self.field.nzeta)
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return -df.flatten()
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        raise NotImplementedError
+        if self.axorder[-1] == "s":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            Habxlk = (
+                self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
+            ) + (
+                self.prefactor_dH[:, :, :, None, None]
+                * self.potentials.dHxlk[:, :, :, :]
+            )
+            Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
+            Habxliy = (
+                Habxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
+            )
+            Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
+            H = jnp.einsum("abxix->axib", Habxiy)
+            df = jnp.tile(
+                H[:, :, :, None, None, :],
+                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, len(self.species), len(self.species)))
+            return -df
+        if self.axorder[-1] == "x":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            Habxlk = (
+                self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
+            ) + (
+                self.prefactor_dH[:, :, :, None, None]
+                * self.potentials.dHxlk[:, :, :, :]
+            )
+            Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
+            Habxliy = (
+                Habxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
+            )
+            Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
+            H = jnp.einsum("aaxiy->axiy", Habxiy)
+            df = jnp.tile(
+                H[:, :, :, None, None, :],
+                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, self.speedgrid.nx, self.speedgrid.nx))
+            return -df
+        if self.axorder[-1] == "a":
+            shape, caxorder = _parse_axorder_shape_4d(
+                self.field.ntheta,
+                self.field.nzeta,
+                self.pitchgrid.nxi,
+                self.speedgrid.nx,
+                len(self.species),
+                self.axorder,
+            )
+            Habxlk = (
+                self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
+            ) + (
+                self.prefactor_dH[:, :, :, None, None]
+                * self.potentials.dHxlk[:, :, :, :]
+            )
+            Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
+            Hsxl = jnp.einsum("aaxlx->axl", Habxly)
+            Hsxlj = jax.vmap(jax.vmap(jnp.diag))(Hsxl)
+            Hsxij = jnp.einsum("il,sxlj->sxij", self.Txi, Hsxlj)
+            Hsxia = jnp.einsum("ja,sxij->sxia", self.Txi_inv, Hsxij)
+            df = jnp.tile(
+                Hsxia[:, :, :, None, None, :],
+                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+            )
+            df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+            df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+            return -df
+
+        if self.axorder[-1] == "t":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+        if self.axorder[-1] == "z":
+            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1445,6 +1707,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             speedgrid,
             species,
             potentials,
+            axorder,
         )
         self.CH = FieldPartCH(
             field,
@@ -1452,6 +1715,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             speedgrid,
             species,
             potentials,
+            axorder,
         )
         self.CD = FieldPartCD(
             field,
@@ -1459,6 +1723,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             speedgrid,
             species,
             potentials,
+            axorder,
         )
 
     @eqx.filter_jit
@@ -1472,12 +1737,18 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        raise NotImplementedError
+        d1 = self.CD.diagonal()
+        d2 = self.CG.diagonal()
+        d3 = self.CH.diagonal()
+        return d1 + d2 + d3
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        raise NotImplementedError
+        d1 = self.CD.block_diagonal()
+        d2 = self.CG.block_diagonal()
+        d3 = self.CH.block_diagonal()
+        return d1 + d2 + d3
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1595,16 +1866,16 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         """Diagonal of the operator as a 1d array."""
         d1 = self.CL.diagonal()
         d2 = self.CE.diagonal()
-        # TODO: add field part terms
-        return d1 + d2
+        d3 = self.CF.diagonal()
+        return d1 + d2 + d3
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d1 = self.CL.block_diagonal()
         d2 = self.CE.block_diagonal()
-        # TODO: add field part terms
-        return d1 + d2
+        d3 = self.CF.block_diagonal()
+        return d1 + d2 + d3
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
