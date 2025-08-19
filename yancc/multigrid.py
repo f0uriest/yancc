@@ -10,32 +10,13 @@ import jax.numpy as jnp
 import lineax as lx
 
 from .linalg import InverseLinearOperator
-from .smoothers import MDKEJacobiSmoother
-from .trajectories import MDKE
+from .smoothers import DKEJacobiSmoother, MDKEJacobiSmoother
+from .trajectories import DKE, MDKE
 from .velocity_grids import UniformPitchAngleGrid
 
 
-def high_freq_err_l2(r, operator):
-    """Compute the high frequency component of a residual."""
-    shape = (operator.pitchgrid.nxi, operator.field.ntheta, operator.field.nzeta)
-    r = r.reshape(shape)
-    r = jnp.fft.fftn(r, norm="ortho")
-    nxi, nt, nz = r.shape
-    ka = jnp.fft.fftfreq(nxi, 1 / nxi)
-    kt = jnp.fft.fftfreq(nt, 1 / nt)
-    kz = jnp.fft.fftfreq(nz, 1 / nz)
-    ka, kt, kz = jnp.meshgrid(ka, kt, kz, indexing="ij")
-    low_freq = (
-        (jnp.abs(ka) <= jnp.abs(ka).max() // 2)
-        & (jnp.abs(kt) <= jnp.abs(kt).max() // 2)
-        & (jnp.abs(kz) <= jnp.abs(kz).max() // 2)
-    )
-    mask = ~low_freq
-    return jnp.linalg.norm((r * mask).flatten())
-
-
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
-def get_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
+def get_mdke_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
     """Get multigrid operators for each field, pitchgrid."""
     operators = []
     for field, pitchgrid in zip(fields, pitchgrids):
@@ -44,8 +25,20 @@ def get_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
     return operators
 
 
+@functools.partial(jax.jit, static_argnames=["p1", "p2"])
+def get_dke_operators(
+    fields, pitchgrids, speedgrid, species, E_psi, potentials, p1, p2
+):
+    """Get multigrid operators for each field, pitchgrid."""
+    operators = []
+    for field, pitchgrid in zip(fields, pitchgrids):
+        op = DKE(field, pitchgrid, speedgrid, species, E_psi, potentials, p1=p1, p2=p2)
+        operators.append(op)
+    return operators
+
+
 @functools.partial(jax.jit, static_argnames=["p1", "p2", "smooth_solver"])
-def get_jacobi_smoothers(
+def get_mdke_jacobi_smoothers(
     fields, pitchgrids, E_psi, nu, p1, p2, gauge, smooth_solver, weight
 ):
     """Get multigrid smoothers for each field, pitchgrid."""
@@ -65,6 +58,42 @@ def get_jacobi_smoothers(
                 weight=weight,
             )
             for order in ["atz", "zat", "tza"]
+        ]
+        smoothers.append(smooth)
+    return smoothers
+
+
+@functools.partial(jax.jit, static_argnames=["p1", "p2", "smooth_solver"])
+def get_dke_jacobi_smoothers(
+    fields,
+    pitchgrids,
+    speedgrid,
+    species,
+    E_psi,
+    potentials,
+    p1,
+    p2,
+    smooth_solver,
+    weight,
+):
+    """Get multigrid smoothers for each field, pitchgrid."""
+    smoothers = []
+    for field, pitchgrid in zip(fields, pitchgrids):
+        smooth = [
+            DKEJacobiSmoother(
+                field,
+                pitchgrid,
+                speedgrid,
+                species,
+                E_psi,
+                potentials,
+                p1=p1,
+                p2=p2,
+                axorder=order,
+                smooth_solver=smooth_solver,
+                weight=weight,
+            )
+            for order in ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"]
         ]
         smoothers.append(smooth)
     return smoothers
@@ -90,7 +119,17 @@ def _half_next_odd(k, m=2):
 
 @eqx.filter_jit
 def get_fields_grids(
-    field, nt, nz, nx, coarsening_factor=2, min_N=1000, min_nt=7, min_nz=7, min_nx=7
+    field,
+    nt,
+    nz,
+    na,
+    coarsening_factor=2,
+    min_N=8000,
+    min_nt=5,
+    min_nz=5,
+    min_na=5,
+    nx=1,
+    ns=1,
 ):
     """Get fields and grids for multigrid problem.
 
@@ -98,10 +137,16 @@ def get_fields_grids(
     ----------
     field : Field
         Field at sufficient resolution to represent B.
-    nt, nz, nx : int
-        Desired resolution of finest grid in theta, zeta, xi.
-    nlevels : int, optional
-        Number of levels. Defaults to log2(max(nt,nz,nx))
+    nt, nz, na : int
+        Desired resolution of finest grid in theta, zeta, alpha.
+    coarsening_factor : int, float
+        Amount to coarsen resolution at each level in each direction.
+    min_N : int
+        Desired maximum size of the coarsest grid.
+    min_nt, min_nz, min_na : int
+        Minimum resolution in theta, zeta, alpha coordinates.
+    nx, ns : int
+        Number of speed grid points and species.
 
     Returns
     -------
@@ -111,29 +156,29 @@ def get_fields_grids(
         grids at each resolution level
 
     """
-    min_N = max(min_N, min_nt * min_nz * min_nx)
+    min_N = max(min_N, nx * ns * min_nt * min_nz * min_na)
     fields = []
     grids = []
     fields.append(field.resample(nt, nz))
-    grids.append(UniformPitchAngleGrid(nx))
+    grids.append(UniformPitchAngleGrid(na))
     nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
     nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
-    nx = max(_half_next_odd(nx, coarsening_factor), min_nx)
-    N = nt * nz * nx
+    na = max(_half_next_odd(na, coarsening_factor), min_na)
+    N = nt * nz * na * ns * nx
     while N > min_N:
         fields.append(field.resample(nt, nz))
-        grids.append(UniformPitchAngleGrid(nx))
+        grids.append(UniformPitchAngleGrid(na))
         nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
         nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
-        nx = max(_half_next_odd(nx, coarsening_factor), min_nx)
-        N = nt * nz * nx
+        na = max(_half_next_odd(na, coarsening_factor), min_na)
+        N = nt * nz * na * ns * nx
     fields.append(field.resample(nt, nz))
-    grids.append(UniformPitchAngleGrid(nx))
+    grids.append(UniformPitchAngleGrid(na))
     return fields, grids
 
 
-@functools.partial(jax.jit, static_argnames=["verbose"])
-def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+@jax.jit
+def standard_smooth(x, operator, rhs, smoothers, nsteps=1):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
@@ -144,18 +189,14 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
             r = rhs - Ax
             dx = Mi.mv(r)
             x += dx
-            if verbose:
-                Sx = x - dx - Mi.mv(Ax)
-                err = high_freq_err_l2(Sx, operator) / high_freq_err_l2(x, operator)
-                jax.debug.print("high freq l2 err: {err:.3e}", err=err)
         return x
 
     x = jax.lax.fori_loop(0, nsteps, body, x)
     return x
 
 
-@functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+@jax.jit
+def krylov_smooth(x, operator, rhs, smoothers, nsteps=1):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
@@ -172,10 +213,6 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
             dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
             x += dx
-            if verbose:
-                Sx = x - dx - Mi.mv(Ax)
-                err = high_freq_err_l2(Sx, operator) / high_freq_err_l2(x, operator)
-                jax.debug.print("high freq l2 err: {err:.3e}", err=err)
 
         Ax = operator.mv(x)
         r = rhs - Ax
@@ -194,26 +231,28 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 @eqx.filter_jit
 def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
     """Prolongation/restriction between grids via (transposed) interpolation."""
-    nt1, nz1, nx1 = field1.ntheta, field1.nzeta, pitchgrid1.nxi
-    nt2, nz2, nx2 = field2.ntheta, field2.nzeta, pitchgrid2.nxi
+    nt1, nz1, na1 = field1.ntheta, field1.nzeta, pitchgrid1.nxi
+    nt2, nz2, na2 = field2.ntheta, field2.nzeta, pitchgrid2.nxi
     t1, t2 = field1.theta, field2.theta
     z1, z2 = field1.zeta, field2.zeta
-    x1, x2 = pitchgrid1.xi, pitchgrid2.xi
+    a1, a2 = pitchgrid1.xi, pitchgrid2.xi
 
-    N1 = nt1 * nz1 * nx1
-    N2 = nt2 * nz2 * nx2
+    N1 = nt1 * nz1 * na1
+    nx = f.size // N1
+    N2 = nt2 * nz2 * na2
 
     if N2 > N1:
-        xq, tq, zq = jnp.meshgrid(x2, t2, z2, indexing="ij")
-        xq = xq.flatten()
+        aq, tq, zq = jnp.meshgrid(a2, t2, z2, indexing="ij")
+        aq = aq.flatten()
         tq = tq.flatten()
         zq = zq.flatten()
-        f = f.reshape((nx1, nt1, nz1))
+        f = f.reshape((nx, na1, nt1, nz1))
+        f = jnp.moveaxis(f, 0, -1)
         interp = lambda g: interpax.interp3d(
-            xq,
+            aq,
             tq,
             zq,
-            x1,
+            a1,
             t1,
             z1,
             g,
@@ -222,27 +261,30 @@ def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
             period=(None, 2 * jnp.pi, 2 * jnp.pi / field1.NFP),
         )
         f2 = interp(f)
-        return f2
+        f2 = f2.reshape((na2, nt2, nz2, nx))
+        return jnp.moveaxis(f2, -1, 0).flatten()
     else:
-        xq, tq, zq = jnp.meshgrid(x1, t1, z1, indexing="ij")
-        xq = xq.flatten()
+        aq, tq, zq = jnp.meshgrid(a1, t1, z1, indexing="ij")
+        aq = aq.flatten()
         tq = tq.flatten()
         zq = zq.flatten()
         interp = lambda g: interpax.interp3d(
-            xq,
+            aq,
             tq,
             zq,
-            x2,
+            a2,
             t2,
             z2,
-            g.reshape((nx2, nt2, nz2)),
+            jnp.moveaxis(g.reshape((nx, na2, nt2, nz2)), 0, -1),
             method,
             extrap=True,
             period=(None, 2 * jnp.pi, 2 * jnp.pi / field1.NFP),
         )
-        g = jnp.zeros(N2)
-        f2 = jax.linear_transpose(interp, g)(f)[0]
-        return f2 * N2 / N1
+        g = jnp.zeros(nx * N2)
+        f2 = jax.linear_transpose(interp, g)(jnp.moveaxis(f.reshape((nx, N1)), 0, -1))[
+            0
+        ]
+        return jnp.moveaxis(f2, -1, 0).flatten() * N2 / N1
 
 
 @functools.partial(
@@ -358,7 +400,7 @@ def _multigrid_cycle_recursive(
         jax.debug.print("level=({k}) before presmooth err: {err:.3e}", err=err, k=k)
 
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv)
     rk = rhs - Ak.mv(x)
 
     if verbose:
@@ -424,7 +466,7 @@ def _multigrid_cycle_recursive(
         jax.debug.print("level=({k}) before postsmooth err: {err:.3e}", err=err, k=k)
 
     vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv)
     if verbose:
         rk = rhs - Ak.mv(x)
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
@@ -648,10 +690,10 @@ def get_multigrid_preconditioner(
         min_N=coarse_N,
         min_nt=5,
         min_nz=5,
-        min_nx=5,
+        min_na=5,
     )
-    operators = get_operators(fields, grids, E_psi, nu, p1, p2, gauge)
-    smoothers = get_jacobi_smoothers(
+    operators = get_mdke_operators(fields, grids, E_psi, nu, p1, p2, gauge)
+    smoothers = get_mdke_jacobi_smoothers(
         fields, grids, E_psi, nu, p1, p2, gauge, smooth_solver, smooth_weights
     )
     Mlx = MultigridOperator(
