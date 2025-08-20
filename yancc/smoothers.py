@@ -246,7 +246,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             for spa in species:
                 nu = 0.0
                 for spb in species:
-                    nu += nuD_ab(spa, spb, x * spa.v_thermal) / spa.v_thermal
+                    v = x * spa.v_thermal
+                    nu += nuD_ab(spa, spb, v) / v
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter(p1, p2, y, axorder)
