@@ -3,6 +3,7 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import orthax
 
 
@@ -177,6 +178,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     xvander_inv: jax.Array
     Dx: jax.Array
     Dx_pseudospectral: jax.Array
+    gauge_idx: jax.Array
 
     def __init__(self, nx, k=0, xmax=jnp.inf):
         # need to check derivative matrix and rosenbluth potentials for these
@@ -218,6 +220,11 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
         self.Dx = jax.jacfwd(_dxfun)(self.x)
         self.Dx_pseudospectral = self.xvander @ self.Dx @ self.xvander_inv
+        gauge_idx = jnp.atleast_1d(np.where(self.x < 1)[0].max())
+        if self.nx > 1:
+            gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
+            gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
+        self.gauge_idx = gauge_idx
 
     def _dfdx(self, f):
         # this only knows about a single species,

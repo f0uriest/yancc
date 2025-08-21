@@ -27,12 +27,22 @@ def get_mdke_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
 def get_dke_operators(
-    fields, pitchgrids, speedgrid, species, E_psi, potentials, p1, p2
+    fields, pitchgrids, speedgrid, species, E_psi, potentials, p1, p2, gauge
 ):
     """Get multigrid operators for each field, pitchgrid."""
     operators = []
     for field, pitchgrid in zip(fields, pitchgrids):
-        op = DKE(field, pitchgrid, speedgrid, species, E_psi, potentials, p1=p1, p2=p2)
+        op = DKE(
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            E_psi,
+            potentials,
+            p1=p1,
+            p2=p2,
+            gauge=gauge,
+        )
         operators.append(op)
     return operators
 
@@ -73,6 +83,7 @@ def get_dke_jacobi_smoothers(
     potentials,
     p1,
     p2,
+    gauge,
     smooth_solver,
     weight,
 ):
@@ -90,6 +101,7 @@ def get_dke_jacobi_smoothers(
                 p1=p1,
                 p2=p2,
                 axorder=order,
+                gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=weight,
             )

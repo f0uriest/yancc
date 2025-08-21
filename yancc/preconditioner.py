@@ -75,10 +75,10 @@ class MDKEPreconditioner(MultigridOperator):
         assert len(options) == 0, "got unknown option " + str(options)
 
         fields, grids = get_fields_grids(
-            field,
-            field.ntheta,
-            field.nzeta,
-            pitchgrid.nxi,
+            field=field,
+            nt=field.ntheta,
+            nz=field.nzeta,
+            na=pitchgrid.nxi,
             coarsening_factor=coarsening,
             min_N=coarse_N,
             min_nt=min_nt,
@@ -87,18 +87,24 @@ class MDKEPreconditioner(MultigridOperator):
         )
 
         operators = get_mdke_operators(
-            fields, grids, E_psi, nu, self.p1, self.p2, gauge
+            fields=fields,
+            pitchgrids=grids,
+            E_psi=E_psi,
+            nu=nu,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
         )
         smoothers = get_mdke_jacobi_smoothers(
-            fields,
-            grids,
-            E_psi,
-            nu,
-            self.p1,
-            self.p2,
-            gauge,
-            smooth_solver,
-            smooth_weights,
+            fields=fields,
+            pitchgrids=grids,
+            E_psi=E_psi,
+            nu=nu,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            smooth_solver=smooth_solver,
+            weight=smooth_weights,
         )
 
         super().__init__(
@@ -153,6 +159,7 @@ class DKEPreconditioner(MultigridOperator):
 
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
+        gauge = options.pop("gauge", True)
         smooth_solver = options.pop("smooth_solver", "dense")
         smooth_weights = options.pop("smooth_weights", None)
         coarsening = options.pop("coarsening", 2)
@@ -171,10 +178,10 @@ class DKEPreconditioner(MultigridOperator):
         assert len(options) == 0, "got unknown option " + str(options)
 
         fields, grids = get_fields_grids(
-            field,
-            field.ntheta,
-            field.nzeta,
-            pitchgrid.nxi,
+            field=field,
+            nt=field.ntheta,
+            nz=field.nzeta,
+            na=pitchgrid.nxi,
             coarsening_factor=coarsening,
             min_N=coarse_N,
             min_nt=min_nt,
@@ -185,19 +192,28 @@ class DKEPreconditioner(MultigridOperator):
         )
 
         operators = get_dke_operators(
-            fields, grids, speedgrid, species, E_psi, potentials, self.p1, self.p2
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            E_psi=E_psi,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
         )
         smoothers = get_dke_jacobi_smoothers(
-            fields,
-            grids,
-            speedgrid,
-            species,
-            E_psi,
-            potentials,
-            self.p1,
-            self.p2,
-            smooth_solver,
-            smooth_weights,
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            E_psi=E_psi,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            smooth_solver=smooth_solver,
+            weight=smooth_weights,
         )
 
         super().__init__(

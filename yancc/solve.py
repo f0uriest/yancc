@@ -53,6 +53,7 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
         nu,
         p1=p1a,
         p2=p2a,
+        gauge=True,
     )
     rhs = mdke_rhs(field, pitchgrid)
 

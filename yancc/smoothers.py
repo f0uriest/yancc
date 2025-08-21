@@ -192,6 +192,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         Order of approximation for second derivatives.
     axorder : {"atz", "zat", "tza"}
         Ordering for variables in f, eg how the 3d array is flattened
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
     smooth_solver : {"banded", "dense"}
         Solver to use for inverting the smoother. "banded" is significantly faster in
         most cases but may be numerically unstable in some edge cases. "dense" is
@@ -224,6 +226,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         p1="2d",
         p2=2,
         axorder="sxatz",
+        gauge: Bool[ArrayLike, ""] = True,
         smooth_solver="banded",
         weight: Optional[jax.Array] = None,
     ):
@@ -265,6 +268,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             p1=p1,
             p2=p2,
             axorder=axorder,
+            gauge=gauge,
         ).block_diagonal()
 
         if self.smooth_solver == "banded":
