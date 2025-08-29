@@ -16,7 +16,7 @@ from yancc.collisions import (
 )
 from yancc.field import Field
 from yancc.species import GlobalMaxwellian, Hydrogen, gamma_ab
-from yancc.velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import (
     _compute_CD_sympy,
@@ -64,7 +64,7 @@ def test_CE_single_species_vs_sympy():
         R_major=10.0,
         a_minor=1.0,
     )
-    speedgrid = SpeedGrid(10)
+    speedgrid = MaxwellSpeedGrid(10)
     pitchgrid = UniformPitchAngleGrid(11)
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
     gamma_aa_jax = gamma_ab(species[0], species[0])
@@ -136,9 +136,9 @@ def test_CF_single_species_vs_sympy(l):
         R_major=10.0,
         a_minor=1.0,
     )
-    speedgrid = SpeedGrid(10)
+    speedgrid = MaxwellSpeedGrid(10)
     pitchgrid = UniformPitchAngleGrid(11)
-    potentials = RosenbluthPotentials(speedgrid, pitchgrid, species, nL=6)
+    potentials = RosenbluthPotentials(speedgrid, species, nL=6)
     gamma_aa_jax = gamma_ab(species[0], species[0])
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
     CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
@@ -212,9 +212,9 @@ def test_CF_single_species_vs_sympy(l):
     cg = -CG.mv(f)
     cd = -CD.mv(f)
 
-    ch = jnp.einsum("la,sxatz->sxltz", potentials.Txi_inv, ch)[0]
-    cg = jnp.einsum("la,sxatz->sxltz", potentials.Txi_inv, cg)[0]
-    cd = jnp.einsum("la,sxatz->sxltz", potentials.Txi_inv, cd)[0]
+    ch = jnp.einsum("la,sxatz->sxltz", CG.Txi_inv, ch)[0]
+    cg = jnp.einsum("la,sxatz->sxltz", CG.Txi_inv, cg)[0]
+    cd = jnp.einsum("la,sxatz->sxltz", CG.Txi_inv, cd)[0]
 
     # potentials are diagonal in legendre index, so outputs for idx != l should be 0
     np.testing.assert_allclose(ch[:, :l, :, :], 0, atol=1e-10)
@@ -231,7 +231,7 @@ def test_CF_single_species_vs_sympy(l):
 
 def test_verify_collision_null_single_species():
     """Check the null space of single species collision operator."""
-    speedgrid = SpeedGrid(5)
+    speedgrid = MaxwellSpeedGrid(5)
     pitchgrid = UniformPitchAngleGrid(129)
 
     # just need a dummy field for this
@@ -256,7 +256,7 @@ def test_verify_collision_null_single_species():
         Hydrogen, lambda x: ti * (1 - x**2), lambda x: ni * (1 - x**4)
     ).localize(0.5)
 
-    R = RosenbluthPotentials(speedgrid, pitchgrid, [ions1], quad=False)
+    R = RosenbluthPotentials(speedgrid, [ions1], quad=False)
     C = FokkerPlanckLandau(field, pitchgrid, speedgrid, [ions1], R)
     shape = (1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
     x = speedgrid.x

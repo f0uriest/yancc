@@ -18,7 +18,12 @@ from .field import Field
 from .finite_diff import fd_coeffs, fdbwd, fdfwd
 from .species import LocalMaxwellian
 from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import (
+    AbstractSpeedGrid,
+    MaxwellSpeedGrid,
+    MonoenergeticSpeedGrid,
+    UniformPitchAngleGrid,
+)
 
 
 def dkes_w_theta(
@@ -97,7 +102,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
-        gauge: Bool[ArrayLike, ""] = True,
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert field.ntheta > fd_coeffs[1][p1].size // 2
         assert field.ntheta > fd_coeffs[2][p2].size // 2
@@ -254,7 +259,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
-        gauge: Bool[ArrayLike, ""] = True,
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert field.nzeta > fd_coeffs[1][p1].size // 2
         assert field.nzeta > fd_coeffs[2][p2].size // 2
@@ -410,7 +415,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
-        gauge: Bool[ArrayLike, ""] = True,
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
@@ -552,6 +557,7 @@ class MDKE(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
+    speedgrid: AbstractSpeedGrid
     E_psi: Float[Array, ""]
     nu: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -572,10 +578,11 @@ class MDKE(lx.AbstractLinearOperator):
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
-        gauge: Bool[ArrayLike, ""] = True,
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
+        self.speedgrid = MonoenergeticSpeedGrid(jnp.array(1.0))
         self.E_psi = jnp.array(E_psi)
         self.nu = jnp.array(nu)
         self.p1 = p1
@@ -740,7 +747,7 @@ class DKETheta(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -759,23 +766,25 @@ class DKETheta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
+    gauge: Bool[Array, ""]
 
     def __init__(
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         assert field.ntheta > fd_coeffs[1][p1].size // 2
@@ -788,6 +797,7 @@ class DKETheta(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
+        self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -816,6 +826,14 @@ class DKETheta(lx.AbstractLinearOperator):
         fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=3)
         bd = fdbwd(f, self.p1, h=h, bc="periodic", axis=3)
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
@@ -846,6 +864,10 @@ class DKETheta(lx.AbstractLinearOperator):
             None, None, None, :, None
         ]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -886,6 +908,14 @@ class DKETheta(lx.AbstractLinearOperator):
         ]
         w = w[:, :, :, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :].set(0).at[:, idxx, idxa, 0, 0, 0].set(scale),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
         return df
@@ -940,7 +970,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -959,23 +989,25 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
+    gauge: Bool[Array, ""]
 
     def __init__(
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         assert field.nzeta > fd_coeffs[1][p1].size // 2
@@ -988,6 +1020,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
+        self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -1016,6 +1049,14 @@ class DKEZeta(lx.AbstractLinearOperator):
         fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=4)
         bd = fdbwd(f, self.p1, h=h, bc="periodic", axis=4)
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
@@ -1046,6 +1087,10 @@ class DKEZeta(lx.AbstractLinearOperator):
             None, None, None, None, :
         ]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -1086,6 +1131,14 @@ class DKEZeta(lx.AbstractLinearOperator):
         ]
         w = w[:, :, :, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :].set(0).at[:, idxx, idxa, 0, 0, 0].set(scale),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
         return df
@@ -1140,7 +1193,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1159,23 +1212,25 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
+    gauge: Bool[Array, ""]
 
     def __init__(
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
@@ -1188,6 +1243,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
+        self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -1216,6 +1272,14 @@ class DKEPitch(lx.AbstractLinearOperator):
         fd = fdfwd(f, self.p1, h=h, bc="symmetric", axis=2)
         bd = fdbwd(f, self.p1, h=h, bc="symmetric", axis=2)
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
@@ -1246,6 +1310,10 @@ class DKEPitch(lx.AbstractLinearOperator):
             None, None, :, None, None
         ]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -1286,6 +1354,17 @@ class DKEPitch(lx.AbstractLinearOperator):
         ]
         w = w[:, :, :, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :]
+            .set(0)
+            .at[:, idxx, idxa, 0, 0, idxa]
+            .set(scale),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
         return df
@@ -1340,7 +1419,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1352,19 +1431,21 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     E_psi: Float[Array, ""]
     axorder: str = eqx.field(static=True)
+    gauge: Bool[Array, ""]
 
     def __init__(
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         axorder: str = "sxatz",
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -1373,6 +1454,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         self.species = species
         self.E_psi = jnp.array(E_psi)
         self.axorder = axorder
+        self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -1397,6 +1479,14 @@ class DKESpeed(lx.AbstractLinearOperator):
         )
         df = jnp.einsum("yx,sxatz->syatz", self.speedgrid.Dx_pseudospectral, f)
         df = w * df
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
@@ -1419,6 +1509,10 @@ class DKESpeed(lx.AbstractLinearOperator):
         )
         df = jnp.diag(self.speedgrid.Dx_pseudospectral)[None, :, None, None, None]
         df = w * df
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
+        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -1451,6 +1545,17 @@ class DKESpeed(lx.AbstractLinearOperator):
         df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
         w = w[:, :, :, :, :, None]
         df = w * df
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :]
+            .set(0)
+            .at[:, idxx, idxa, 0, 0, idxx]
+            .set(scale),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, self.speedgrid.nx, self.speedgrid.nx))
         return df
@@ -1505,7 +1610,7 @@ class DKE(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : SpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -1524,13 +1629,14 @@ class DKE(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: SpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     E_psi: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
+    gauge: Bool[Array, ""]
     _opx: DKESpeed
     _opa: DKEPitch
     _opt: DKETheta
@@ -1541,13 +1647,14 @@ class DKE(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: SpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         E_psi: Float[ArrayLike, ""],
         potentials: Optional[RosenbluthPotentials] = None,
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
+        gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -1555,25 +1662,28 @@ class DKE(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.species = species
         if potentials is None:
-            potentials = RosenbluthPotentials(speedgrid, pitchgrid, species)
+            potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
         self.E_psi = jnp.array(E_psi)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
+        self.gauge = jnp.array(gauge)
 
-        self._opx = DKESpeed(field, pitchgrid, speedgrid, species, E_psi, axorder)
+        self._opx = DKESpeed(
+            field, pitchgrid, speedgrid, species, E_psi, axorder, gauge
+        )
         self._opa = DKEPitch(
-            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder
+            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
         )
         self._opt = DKETheta(
-            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder
+            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
         )
         self._opz = DKEZeta(
-            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder
+            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
         )
         self._C = FokkerPlanckLandau(
-            field, pitchgrid, speedgrid, species, potentials, p2, axorder
+            field, pitchgrid, speedgrid, species, potentials, p2, axorder, gauge
         )
 
     @eqx.filter_jit

@@ -32,7 +32,7 @@ def _exp1(x):
             e1 += r
             return e1, r
 
-        e1, r = jax.lax.fori_loop(1, 30, body, (e1, r), unroll=20)
+        e1, r = jax.lax.fori_loop(1, 30, body, (e1, r), unroll=True)
         return -jnp.euler_gamma - jnp.log(x) + x * e1
 
     def xgt2():
@@ -44,7 +44,7 @@ def _exp1(x):
             t0 = k / (1.0 + k / (x + t0))
             return t0
 
-        t0 = jax.lax.fori_loop(0, m, body, t0, unroll=20)
+        t0 = jax.lax.fori_loop(0, m, body, t0, unroll=True)
         t = 1.0 / (x + t0)
         return jnp.exp(-x) * t
 

@@ -6,12 +6,12 @@ import numpy as np
 import orthax
 import quadax
 
-from yancc.velocity_grids import SpeedGrid
+from yancc.velocity_grids import MaxwellSpeedGrid
 
 
 def test_speed_quadrature():
     """Test that speedgrid.wx properly integrates functions."""
-    grid = SpeedGrid(10)
+    grid = MaxwellSpeedGrid(10)
     p = np.random.random(10)
     weight = grid.xrec.weight
 
@@ -19,13 +19,13 @@ def test_speed_quadrature():
         return weight(x) * orthax.orthval(x, p, grid.xrec)
 
     np.testing.assert_allclose(
-        quadax.quadgk(foo, (0, np.inf))[0], (foo(grid.x) * grid.wx).sum()
+        quadax.quadgk(foo, jnp.array((0, np.inf)))[0], (foo(grid.x) * grid.wx).sum()
     )
 
 
 def test_speed_fit():
     """Test that speedgrid.xvander properly recovers basis function coefficients."""
-    grid = SpeedGrid(10)
+    grid = MaxwellSpeedGrid(10)
     p = np.random.random(10)
     weight = grid.xrec.weight
 
@@ -39,7 +39,7 @@ def test_speed_fit():
 
 def test_speed_derivatives():
     """Test that derivative matrix properly differentiates basis functions."""
-    grid = SpeedGrid(10)
+    grid = MaxwellSpeedGrid(10)
     p = np.random.random(10)
     weight = grid.xrec.weight
 

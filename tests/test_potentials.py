@@ -10,7 +10,7 @@ import sympy
 from yancc.collisions import RosenbluthPotentials
 from yancc.species import GlobalMaxwellian, Hydrogen
 from yancc.utils import Gammainc, Gammaincc
-from yancc.velocity_grids import SpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import _compute_G_sympy, _compute_H_sympy
 
@@ -20,7 +20,7 @@ mpmath.mp.dps = 100
 @pytest.fixture
 def xgrid():
     """Speed grid for testing."""
-    return SpeedGrid(10)
+    return MaxwellSpeedGrid(10)
 
 
 @pytest.fixture
@@ -40,11 +40,10 @@ def species():
 
 
 @pytest.fixture
-def potential_quad(xgrid, xigrid, species):
+def potential_quad(xgrid, species):
     """Single species potentials with quadrature."""
     return RosenbluthPotentials(
         xgrid,
-        xigrid,
         species,
         nL=6,
         quad=True,
@@ -52,11 +51,10 @@ def potential_quad(xgrid, xigrid, species):
 
 
 @pytest.fixture
-def potential_gamma(xgrid, xigrid, species):
+def potential_gamma(xgrid, species):
     """Single species potential without quadrature."""
     return RosenbluthPotentials(
         xgrid,
-        xigrid,
         species,
         nL=6,
         quad=False,
@@ -120,7 +118,7 @@ def test_upper_Gamma(x0, l, k):
 def test_single_species_potentials_vs_sympy(l, potential_gamma):
     potentials = potential_gamma
     speedgrid = potentials.speedgrid
-    pitchgrid = potentials.pitchgrid
+    pitchgrid = UniformPitchAngleGrid(11)
 
     x = sympy.symbols("x", real=True)
     va = sympy.symbols("v_a", real=True)
@@ -152,10 +150,15 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
         )[None, :, None, None]
     )
 
+    Txi = orthax.orthvander(
+        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+    )
+    Txi_inv = jnp.linalg.pinv(Txi)
+
     def rosenbluth_ddG_jax(f, a, b):
         assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
         # convert nodal alpha -> legendre l
-        f = jnp.einsum("la,xatz->xltz", potentials.Txi_inv, f)
+        f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
         # convert nodal x -> speed k
         f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
         Gabxlk = potentials.ddGxlk[a, b, :, : potentials.legendregrid.nxi]
@@ -165,7 +168,7 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     def rosenbluth_dH_jax(f, a, b):
         assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
         # convert nodal alpha -> legendre l
-        f = jnp.einsum("la,xatz->xltz", potentials.Txi_inv, f)
+        f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
         # convert nodal x -> speed k
         f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
         Gabxlk = potentials.dHxlk[a, b, :, : potentials.legendregrid.nxi]
@@ -175,7 +178,7 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     def rosenbluth_H_jax(f, a, b):
         assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
         # convert nodal alpha -> legendre l
-        f = jnp.einsum("la,xatz->xltz", potentials.Txi_inv, f)
+        f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
         # convert nodal x -> speed k
         f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
         Gabxlk = potentials.Hxlk[a, b, :, : potentials.legendregrid.nxi]

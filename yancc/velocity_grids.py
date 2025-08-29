@@ -3,6 +3,7 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 import orthax
 
 
@@ -117,7 +118,40 @@ default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
 )
 
 
-class SpeedGrid(eqx.Module):
+class AbstractSpeedGrid(eqx.Module):
+    """Abstract base class for speed grids."""
+
+    nx: int = eqx.field(static=True)
+    x: jax.Array
+    wx: jax.Array
+    xvander: jax.Array
+    xvander_inv: jax.Array
+    Dx: jax.Array
+    Dx_pseudospectral: jax.Array
+
+
+class MonoenergeticSpeedGrid(AbstractSpeedGrid):
+    """Speed grid for monoenergetic problem, ie single speed.
+
+    Parameters
+    ----------
+    x : float
+        Normalized speed being considered.
+    """
+
+    def __init__(self, x: jax.Array):
+        x = jnp.asarray(x)
+        assert x.size == 1
+        self.nx = 1
+        self.x = x
+        self.wx = jnp.ones(1)
+        self.xvander = jnp.ones((1, 1))
+        self.xvander_inv = jnp.ones((1, 1))
+        self.Dx = jnp.zeros((1, 1))
+        self.Dx_pseudospectral = jnp.zeros((1, 1))
+
+
+class MaxwellSpeedGrid(AbstractSpeedGrid):
     """Grid for speed variable x=v/vth.
 
     Uses Maxwell Polynomials, which are orthogonal on (0, xmax) with the weight
@@ -144,6 +178,7 @@ class SpeedGrid(eqx.Module):
     xvander_inv: jax.Array
     Dx: jax.Array
     Dx_pseudospectral: jax.Array
+    gauge_idx: jax.Array
 
     def __init__(self, nx, k=0, xmax=jnp.inf):
         # need to check derivative matrix and rosenbluth potentials for these
@@ -185,6 +220,11 @@ class SpeedGrid(eqx.Module):
 
         self.Dx = jax.jacfwd(_dxfun)(self.x)
         self.Dx_pseudospectral = self.xvander @ self.Dx @ self.xvander_inv
+        gauge_idx = jnp.atleast_1d(np.where(self.x < 1)[0].max())
+        if self.nx > 1:
+            gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
+            gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
+        self.gauge_idx = gauge_idx
 
     def _dfdx(self, f):
         # this only knows about a single species,

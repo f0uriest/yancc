@@ -4,9 +4,10 @@ import desc
 import pytest
 import sympy
 
+from yancc.collisions import RosenbluthPotentials
 from yancc.field import Field
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen
-from yancc.velocity_grids import LegendrePitchAngleGrid, SpeedGrid
+from yancc.velocity_grids import LegendrePitchAngleGrid, MaxwellSpeedGrid
 
 
 @pytest.fixture(scope="session")
@@ -26,7 +27,7 @@ def pitchgrid():
 @pytest.fixture(scope="session")
 def speedgrid():
     """Pitch angle grid for testing"""
-    return SpeedGrid(5)
+    return MaxwellSpeedGrid(5)
 
 
 @pytest.fixture(scope="session")
@@ -54,6 +55,16 @@ def species2():
             lambda x: 5e19 * (1 - x**4),
         ).localize(0.5),
     ]
+
+
+@pytest.fixture(scope="session")
+def potentials1(speedgrid, species1):
+    return RosenbluthPotentials(speedgrid, species1)
+
+
+@pytest.fixture(scope="session")
+def potentials2(speedgrid, species2):
+    return RosenbluthPotentials(speedgrid, species2)
 
 
 def _compute_H_sympy(f, x, l, v):
