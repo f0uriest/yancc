@@ -277,3 +277,57 @@ def chandrasekhar(x: ArrayLike) -> jax.Array:
     return (
         jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
     ) / (2 * x**2)
+
+
+def rhostar(species, field, x=1):
+    """Normalized gyroradius ρ* = ρ/a.
+
+    Parameters
+    ----------
+    species: LocalMaxwellian
+        Species being considered.
+    field: Field
+        Magnetic field information.
+    x : float
+        Normalized speed being considered. x=v/vth
+    """
+    v = x * species.v_thermal
+    rho = species.species.mass / jnp.abs(species.species.charge) * v / field.Bmag_fsa
+    rhostar = rho / field.a_minor
+    return rhostar
+
+
+def Estar(species, field, E_psi, x=1):
+    """Normalized electric field E* = E_r /(v <B>).
+
+    Parameters
+    ----------
+    species: LocalMaxwellian
+        Species being considered.
+    field: Field
+        Magnetic field information.
+    E_psi : float
+        Electric field being considered. E_psi = -∂Φ /∂ψ
+    x : float
+        Normalized speed being considered. x=v/vth
+    """
+    v = x * species.v_thermal
+    return E_psi * jnp.abs(field.psi_r) / v / field.Bmag_fsa
+
+
+def nustar(species, field, x=1):
+    """Normalized collisionality ν* = ν * R₀ /(v ι).
+
+    Parameters
+    ----------
+    species: LocalMaxwellian
+        Species being considered.
+    field: Field
+        Magnetic field information.
+    x : float
+        Normalized speed being considered. x=v/vth
+    """
+    v = x * species.v_thermal
+    nu = collisionality(species, v)
+    nustar = field.R_major * nu / v / jnp.abs(field.iota)
+    return nustar

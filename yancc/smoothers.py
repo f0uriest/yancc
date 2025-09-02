@@ -14,7 +14,7 @@ from .collisions import RosenbluthPotentials
 from .field import Field
 from .finite_diff import fd_coeffs
 from .linalg import lu_factor_banded_periodic, lu_solve_banded_periodic
-from .species import LocalMaxwellian, nuD_ab
+from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -112,7 +112,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
         if weight is None:
-            weight = optimal_smoothing_parameter(p1, p2, nu, axorder)
+            weight = optimal_smoothing_parameter_3d(p1, p2, nu, axorder)
         self.weight = jnp.atleast_1d(jnp.array(weight))
 
         mats = MDKE(
@@ -247,13 +247,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             x = speedgrid.x
             nus = []
             for spa in species:
-                nu = 0.0
-                for spb in species:
-                    v = x * spa.v_thermal
-                    nu += nuD_ab(spa, spb, v) / v
+                nu = nustar(spa, field, x)
                 nus.append(nu)
             nus = jnp.asarray(nus)
-            _fun = lambda y: optimal_smoothing_parameter(p1, p2, y, axorder)
+            _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder)
             weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             weight = weight * jnp.ones((1, 1, pitchgrid.nxi, field.ntheta, field.nzeta))
         self.weight = jnp.asarray(weight).flatten()
@@ -347,153 +344,150 @@ def _(operator):
     return False
 
 
-def optimal_smoothing_parameter(p1, p2, nuhat, axorder):
+def optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder):
     """Approximate best relaxation parameter for block jacobi smoother for MDKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
     nus = jnp.array([-6, -4, -2, 0, 2])
     nu = jnp.log10(nuhat)
-    if method not in OPTIMAL_SMOOTHING_COEFFS:
+    if method not in OPTIMAL_SMOOTHING_COEFFS_3D:
         warnings.warn(
             f"No optimal smoothing parameter for stencil={method}, using "
             "conservative default of w=0.1"
         )
         return jnp.array(0.1)  # conservative guess
-    if axorder[-1] not in OPTIMAL_SMOOTHING_COEFFS[method]:
+    if axorder[-1] not in OPTIMAL_SMOOTHING_COEFFS_3D[method]:
         warnings.warn(
             f"No optimal smoothing parameter for axorder={axorder}, using "
             "conservative default of w=0.1"
         )
         return jnp.array(0.1)  # conservative guess
-    c = OPTIMAL_SMOOTHING_COEFFS[method][axorder[-1]]
+    c = OPTIMAL_SMOOTHING_COEFFS_3D[method][axorder[-1]]
     w = interpax.interp1d(nu, nus, c, method="linear", extrap=(c[0], c[-1]))
     return jnp.clip(w, 0.1, 1.0)
 
 
-OPTIMAL_SMOOTHING_COEFFS = {
+def optimal_smoothing_parameter_4d(p1, p2, nuhat, axorder):
+    """Approximate best relaxation parameter for block jacobi smoother for DKE."""
+    method = p1  # smoothing seems to be the same for any p2 so ignore that
+    nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
+    nu = jnp.log10(nuhat)
+    if method not in OPTIMAL_SMOOTHING_COEFFS_4D:
+        warnings.warn(
+            f"No optimal smoothing parameter for stencil={method}, using "
+            "conservative default of w=0.01"
+        )
+        return jnp.array(0.01)  # conservative guess
+    if axorder[-1] not in OPTIMAL_SMOOTHING_COEFFS_4D[method]:
+        warnings.warn(
+            f"No optimal smoothing parameter for axorder={axorder}, using "
+            "conservative default of w=0.01"
+        )
+        return jnp.array(0.01)  # conservative guess
+    c = OPTIMAL_SMOOTHING_COEFFS_4D[method][axorder[-1]]
+    w = interpax.interp1d(nu, nus, c, method="linear", extrap=(c[0], c[-1]))
+    return jnp.clip(w, 0.01, 1.0)
+
+
+OPTIMAL_SMOOTHING_COEFFS_3D = {
     "1a": {
         "z": jnp.array([0.73684211, 0.73684211, 0.68421053, 0.63157895, 0.63157895]),
         "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
         "a": jnp.array([0.52631579, 0.57894737, 0.68421053, 0.94736842, 1.00000000]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "1b": {
         "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.63157895, 0.63157895]),
         "t": jnp.array([0.21052632, 0.21052632, 0.52631579, 0.63157895, 0.63157895]),
         "a": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.89473684, 0.89473684]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.40000000, 0.40000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "2a": {
         "z": jnp.array([0.57894737, 0.57894737, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.57894737, 0.57894737]),
         "a": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.89473684, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "2b": {
         "z": jnp.array([0.52631579, 0.52631579, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
         "a": jnp.array([0.31578947, 0.31578947, 0.52631579, 0.89473684, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "2c": {
         "z": jnp.array([0.42105263, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.57894737, 0.57894737]),
         "a": jnp.array([0.21052632, 0.21052632, 0.42105263, 0.89473684, 0.89473684]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.40000000, 0.40000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "2d": {
         "z": jnp.array([0.52631579, 0.57894737, 0.63157895, 0.63157895, 0.63157895]),
         "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
         "a": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.68421053, 0.78947368]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "3a": {
         "z": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.52631579, 0.52631579]),
         "t": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.52631579, 0.52631579]),
         "a": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.84210526, 0.94736842]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.40000000, 0.50000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "3b": {
         "z": jnp.array([0.47368421, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
         "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.89473684]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.40000000, 0.40000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "3c": {
         "z": jnp.array([0.63157895, 0.63157895, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
         "a": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.89473684, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "3d": {
         "z": jnp.array([0.68421053, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
         "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "3e": {
         "z": jnp.array([0.73684211, 0.73684211, 0.73684211, 0.63157895, 0.57894737]),
         "t": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
         "a": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.84210526, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "4a": {
         "z": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.47368421, 0.47368421]),
         "t": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.47368421, 0.47368421]),
         "a": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.73684211, 0.84210526]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.10000000, 0.30000000, 0.40000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.10000000, 0.20000000, 0.20000000]),
     },
     "4b": {
         "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
         "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
         "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.94736842]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.40000000, 0.50000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "4d": {
         "z": jnp.array([0.63157895, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
         "t": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.57894737, 0.57894737]),
         "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "5a": {
         "z": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.42105263, 0.42105263]),
         "t": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.42105263, 0.42105263]),
         "a": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.57894737, 0.73684211]),
-        "x": jnp.array([0.05000000, 0.05000000, 0.10000000, 0.20000000, 0.30000000]),
-        "s": jnp.array([0.05000000, 0.05000000, 0.10000000, 0.20000000, 0.20000000]),
     },
     "5b": {
         "z": jnp.array([0.31578947, 0.31578947, 0.63157895, 0.57894737, 0.57894737]),
         "t": jnp.array([0.10526316, 0.10526316, 0.36842105, 0.57894737, 0.57894737]),
         "a": jnp.array([0.10526316, 0.10526316, 0.31578947, 0.78947368, 0.78947368]),
-        "x": jnp.array([0.05000000, 0.05000000, 0.10000000, 0.40000000, 0.40000000]),
-        "s": jnp.array([0.05000000, 0.05000000, 0.10000000, 0.20000000, 0.20000000]),
     },
     "5c": {
         "z": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.57894737, 0.57894737]),
         "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
         "a": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.89473684, 0.94736842]),
-        "x": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.40000000, 0.50000000]),
-        "s": jnp.array([0.10000000, 0.10000000, 0.20000000, 0.20000000, 0.20000000]),
     },
     "5d": {
         "z": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
         "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
         "a": jnp.array([0.42105263, 0.42105263, 0.63157895, 0.94736842, 0.94736842]),
-        "x": jnp.array([0.20000000, 0.20000000, 0.30000000, 0.50000000, 0.50000000]),
-        "s": jnp.array([0.20000000, 0.20000000, 0.20000000, 0.20000000, 0.20000000]),
     },
+}
+
+
+OPTIMAL_SMOOTHING_COEFFS_4D = {
+    "2d": {
+        "z": jnp.array([0.0100, 0.6506, 0.3022, 0.0100, 0.0100, 0.1663, 1.0000]),
+        "t": jnp.array([0.0587, 0.3347, 0.2815, 0.0312, 0.0100, 0.1663, 0.7049]),
+        "a": jnp.array([0.0101, 0.5607, 0.0306, 0.0100, 0.0100, 0.1637, 0.9958]),
+        "x": jnp.array([0.0133, 0.7168, 0.2457, 0.1416, 0.1869, 0.4645, 0.6944]),
+        "s": jnp.array([0.4454, 0.0100, 0.3571, 0.0119, 0.0100, 0.1663, 0.7114]),
+    }
 }
