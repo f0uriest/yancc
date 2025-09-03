@@ -216,7 +216,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     smooth_solver: str = eqx.field(static=True)
     mats: jax.Array
     weight: jax.Array
-    operator_weights: jax.Array
 
     def __init__(
         self,
