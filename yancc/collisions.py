@@ -2060,6 +2060,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
+    operator_weights: jax.Array
     CL: PitchAngleScattering
     CE: EnergyScattering
     CF: FieldParticleScattering
@@ -2074,6 +2075,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        operator_weights: Optional[jax.Array] = None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -2086,6 +2088,9 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
+        if operator_weights is None:
+            operator_weights = jnp.ones(3)
+        self.operator_weights = jnp.asarray(operator_weights)
 
         self.CL = PitchAngleScattering(
             field, pitchgrid, speedgrid, species, p2, axorder, gauge
@@ -2101,7 +2106,11 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         out1 = self.CL.mv(vector)
         out2 = self.CE.mv(vector)
         out3 = self.CF.mv(vector)
-        return out1 + out2 + out3
+        return (
+            self.operator_weights[0] * out1
+            + self.operator_weights[1] * out2
+            + self.operator_weights[2] * out3
+        )
 
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
@@ -2109,7 +2118,11 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         d1 = self.CL.diagonal()
         d2 = self.CE.diagonal()
         d3 = self.CF.diagonal()
-        return d1 + d2 + d3
+        return (
+            self.operator_weights[0] * d1
+            + self.operator_weights[1] * d2
+            + self.operator_weights[2] * d3
+        )
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
@@ -2117,7 +2130,11 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         d1 = self.CL.block_diagonal()
         d2 = self.CE.block_diagonal()
         d3 = self.CF.block_diagonal()
-        return d1 + d2 + d3
+        return (
+            self.operator_weights[0] * d1
+            + self.operator_weights[1] * d2
+            + self.operator_weights[2] * d3
+        )
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

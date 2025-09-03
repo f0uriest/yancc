@@ -1637,6 +1637,7 @@ class DKE(lx.AbstractLinearOperator):
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
+    operator_weights: jax.Array
     _opx: DKESpeed
     _opa: DKEPitch
     _opt: DKETheta
@@ -1655,6 +1656,7 @@ class DKE(lx.AbstractLinearOperator):
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        operator_weights: Optional[jax.Array] = None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -1670,6 +1672,10 @@ class DKE(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
+        if operator_weights is None:
+            operator_weights = jnp.ones(8).at[-1].set(0)
+        self.operator_weights = jnp.asarray(operator_weights)
+
         self._opx = DKESpeed(
             field, pitchgrid, speedgrid, species, E_psi, axorder, gauge
         )
@@ -1683,7 +1689,15 @@ class DKE(lx.AbstractLinearOperator):
             field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
         )
         self._C = FokkerPlanckLandau(
-            field, pitchgrid, speedgrid, species, potentials, p2, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            potentials,
+            p2,
+            axorder,
+            gauge,
+            operator_weights=self.operator_weights[4:7],
         )
 
     @eqx.filter_jit
@@ -1694,7 +1708,14 @@ class DKE(lx.AbstractLinearOperator):
         f2 = self._opt.mv(vector)
         f3 = self._opz.mv(vector)
         f4 = self._C.mv(vector)
-        return f0 + f1 + f2 + f3 + f4
+        return (
+            self.operator_weights[0] * f0
+            + self.operator_weights[1] * f1
+            + self.operator_weights[2] * f2
+            + self.operator_weights[3] * f3
+            + f4
+            + self.operator_weights[-1] * vector
+        )
 
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
@@ -1704,7 +1725,14 @@ class DKE(lx.AbstractLinearOperator):
         d2 = self._opt.diagonal()
         d3 = self._opz.diagonal()
         d4 = self._C.diagonal()
-        return d0 + d1 + d2 + d3 + d4
+        return (
+            self.operator_weights[0] * d0
+            + self.operator_weights[1] * d1
+            + self.operator_weights[2] * d2
+            + self.operator_weights[3] * d3
+            + d4
+            + self.operator_weights[-1] * jnp.ones_like(d0)
+        )
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
@@ -1714,7 +1742,15 @@ class DKE(lx.AbstractLinearOperator):
         d2 = self._opt.block_diagonal()
         d3 = self._opz.block_diagonal()
         d4 = self._C.block_diagonal()
-        return d0 + d1 + d2 + d3 + d4
+        eye = jnp.broadcast_to(jnp.identity(d0.shape[1]), d0.shape)
+        return (
+            self.operator_weights[0] * d0
+            + self.operator_weights[1] * d1
+            + self.operator_weights[2] * d2
+            + self.operator_weights[3] * d3
+            + d4
+            + self.operator_weights[-1] * eye
+        )
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

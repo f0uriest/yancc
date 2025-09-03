@@ -200,6 +200,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         slower but more robust.
     weight : array-like, optional
         Under-relaxation parameter.
+    operator_weights : array-like, optional
+
 
     """
 
@@ -214,6 +216,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     smooth_solver: str = eqx.field(static=True)
     mats: jax.Array
     weight: jax.Array
+    operator_weights: jax.Array
 
     def __init__(
         self,
@@ -229,6 +232,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         gauge: Bool[ArrayLike, ""] = True,
         smooth_solver="banded",
         weight: Optional[jax.Array] = None,
+        operator_weights: Optional[jax.Array] = None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -266,6 +270,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             p2=p2,
             axorder=axorder,
             gauge=gauge,
+            operator_weights=operator_weights,
         ).block_diagonal()
 
         if self.smooth_solver == "banded":
