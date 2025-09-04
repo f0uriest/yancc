@@ -227,33 +227,42 @@ class RosenbluthPotentials(eqx.Module):
     dHxlk: jax.Array
 
     def __init__(self, speedgrid, species, nL=4, quad=False):
-        if not quad:
-            assert speedgrid.k == 0
-            assert speedgrid.xmax == jnp.inf
+        if isinstance(speedgrid, MaxwellSpeedGrid):
+            if not quad:
+                assert speedgrid.k == 0
+                assert speedgrid.xmax == jnp.inf
 
-        self.speedgrid = speedgrid
-        self.legendregrid = LegendrePitchAngleGrid(nL)
-        self.quad = quad
+            self.speedgrid = speedgrid
+            self.legendregrid = LegendrePitchAngleGrid(nL)
+            self.quad = quad
 
-        ns = len(species)
-        x = self.speedgrid.x[:, None, None]
-        l = jnp.arange(nL)[None, :, None]
-        k = jnp.arange(self.speedgrid.nx)[None, None, :]
-        self.ddGxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
-        self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
-        self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
-        # arr[a,b] is potential operator from species b to species a
-        for a, spa in enumerate(species):
-            for b, spb in enumerate(species):
-                va, vb = spa.v_thermal, spb.v_thermal
-                v = x * va  # speed on a grid
-                xb = v / vb  # on b grid
-                ddG = self._ddGlk(xb, l, k)
-                dH = self._dHlk(xb, l, k)
-                H = self._Hlk(xb, l, k)
-                self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(ddG)
-                self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(dH)
-                self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(H)
+            ns = len(species)
+            x = self.speedgrid.x[:, None, None]
+            l = jnp.arange(nL)[None, :, None]
+            k = jnp.arange(self.speedgrid.nx)[None, None, :]
+            self.ddGxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+            self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+            self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+            # arr[a,b] is potential operator from species b to species a
+            for a, spa in enumerate(species):
+                for b, spb in enumerate(species):
+                    va, vb = spa.v_thermal, spb.v_thermal
+                    v = x * va  # speed on a grid
+                    xb = v / vb  # on b grid
+                    ddG = self._ddGlk(xb, l, k)
+                    dH = self._dHlk(xb, l, k)
+                    H = self._Hlk(xb, l, k)
+                    self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(ddG)
+                    self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(dH)
+                    self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(H)
+        else:
+            self.speedgrid = speedgrid
+            self.legendregrid = LegendrePitchAngleGrid(nL)
+            self.quad = quad
+            ns = len(species)
+            self.ddGxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+            self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+            self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
