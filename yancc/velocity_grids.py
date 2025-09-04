@@ -178,6 +178,8 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     xvander_inv: jax.Array
     Dx: jax.Array
     Dx_pseudospectral: jax.Array
+    D2x: jax.Array
+    D2x_pseudospectral: jax.Array
     gauge_idx: jax.Array
 
     def __init__(self, nx, k=0, xmax=jnp.inf):
@@ -218,9 +220,34 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
             # leave off k/x term for now since its not polynomial unless k==0
             return dc - cc
 
+        # d2/dx2 p(x) w(x) = d/dx (p'(x) w(x) + p(x) w'(x)) = p'' w + 2 p' w' + p w''
+        # w'(x) = k x^(k-1) exp(-x^2) - 2x^(k+1) exp(-x^2) = (k/x - 2x) w(x)
+        # w'' = (-k/x^2 - 2) w + (k/x - 2x) w'
+        #     = (-k/x^2 - 2) w + (k/x - 2x) (k/x - 2x) w(x)
+        #     = (-k/x^2 - 2 + k^2/x^2 - 2k - 2k + 4x^2) w
+        #     = ((k^2-k)/x^2 + 4x^2 - 4k - 2) w
+        # p'' = D^2 p
+        # d2/dx2 p w = [D^2 + 2 D (k/x - 2x) + ((k^2-k)/x^2 + 4x^2 - 4k - 2)] p w
+        # when k=0, = [D^2 - 4 D x + 4x^2 - 2)] p w
+
+        def _d2xfun(p):
+            D = orthax.orthder(p, self.xrec)
+            Dx = orthax.orthmulx(D, self.xrec, mode="full")
+            D2 = orthax.orthder(p, self.xrec, m=2)
+            D2 = jnp.append(D2, jnp.array([0.0, 0.0]))
+            x2 = orthax.orthmulx(
+                orthax.orthmulx(p, self.xrec, mode="same"), self.xrec, mode="same"
+            )
+            # leave off k/x term for now since its not polynomial unless k==0
+            return D2 - 4 * Dx + 4 * x2 - 2 * p
+
         self.Dx = jax.jacfwd(_dxfun)(self.x)
         self.Dx_pseudospectral = self.xvander @ self.Dx @ self.xvander_inv
-        gauge_idx = jnp.atleast_1d(np.where(self.x < 1)[0].max())
+
+        self.D2x = jax.jacfwd(_d2xfun)(self.x)
+        self.D2x_pseudospectral = self.xvander @ self.D2x @ self.xvander_inv
+
+        gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[0])
         if self.nx > 1:
             gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
             gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
