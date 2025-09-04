@@ -229,7 +229,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         p2=2,
         axorder="sxatz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver="banded",
+        smooth_solver="dense",
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
     ):
@@ -488,10 +488,10 @@ OPTIMAL_SMOOTHING_COEFFS_3D = {
 
 OPTIMAL_SMOOTHING_COEFFS_4D = {
     "2d": {
-        "z": jnp.array([0.0100, 0.6506, 0.3022, 0.0100, 0.0100, 0.1663, 1.0000]),
-        "t": jnp.array([0.0587, 0.3347, 0.2815, 0.0312, 0.0100, 0.1663, 0.7049]),
-        "a": jnp.array([0.0101, 0.5607, 0.0306, 0.0100, 0.0100, 0.1637, 0.9958]),
-        "x": jnp.array([0.0133, 0.7168, 0.2457, 0.1416, 0.1869, 0.4645, 0.6944]),
-        "s": jnp.array([0.4454, 0.0100, 0.3571, 0.0119, 0.0100, 0.1663, 0.7114]),
+        "z": jnp.array([0.3456, 0.7818, 0.6856, 0.7294, 0.6506, 0.5000, 0.6335]),
+        "t": jnp.array([0.1962, 0.5219, 0.5338, 0.5514, 0.6170, 0.5053, 0.6260]),
+        "a": jnp.array([0.4418, 0.5479, 0.5318, 0.3574, 0.3098, 0.0352, 0.9998]),
+        "x": jnp.array([0.4088, 0.5394, 0.5159, 0.5210, 0.6574, 0.5978, 0.6168]),
+        "s": jnp.array([0.4319, 0.5291, 0.5256, 0.5168, 0.6084, 0.5030, 0.6307]),
     }
 }
