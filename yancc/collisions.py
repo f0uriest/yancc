@@ -1078,7 +1078,10 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 Ca.append(CDab)
             C.append(Ca)
             Ca = []
-        self.C = jnp.asarray(C)
+        C = jnp.asarray(C)
+        if not isinstance(speedgrid, MaxwellSpeedGrid):
+            C = C.at[:].set(0.0)
+        self.C = C
 
     @eqx.filter_jit
     def mv(self, vector):
