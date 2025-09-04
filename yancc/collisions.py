@@ -847,8 +847,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
         Dx = self.speedgrid.Dx_pseudospectral
+        D2x = self.speedgrid.D2x_pseudospectral
         df = jnp.einsum("yx,sxatz->syatz", Dx, f)
-        ddf = jnp.einsum("yx,sxatz->syatz", Dx, df)
+        ddf = jnp.einsum("yx,sxatz->syatz", D2x, f)
 
         out = (
             self.coeff2[:, :, None, None, None] * ddf
@@ -884,9 +885,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
 
         f = jnp.ones(self.speedgrid.nx)[None, :, None, None, None]
         df = jnp.diag(self.speedgrid.Dx_pseudospectral)[None, :, None, None, None]
-        ddf = jnp.diag(
-            self.speedgrid.Dx_pseudospectral @ self.speedgrid.Dx_pseudospectral
-        )[None, :, None, None, None]
+        ddf = jnp.diag(self.speedgrid.D2x_pseudospectral)[None, :, None, None, None]
         out = (
             self.coeff2[:, :, None, None, None] * ddf
             + self.coeff1[:, :, None, None, None] * df
@@ -929,9 +928,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
 
         f = jnp.eye(self.speedgrid.nx)[None, :, None, None, None, :]
         df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
-        ddf = (self.speedgrid.Dx_pseudospectral @ self.speedgrid.Dx_pseudospectral)[
-            None, :, None, None, None, :
-        ]
+        ddf = self.speedgrid.D2x_pseudospectral[None, :, None, None, None, :]
         out = (
             self.coeff2[:, :, None, None, None, None] * ddf
             + self.coeff1[:, :, None, None, None, None] * df

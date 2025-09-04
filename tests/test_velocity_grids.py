@@ -50,3 +50,8 @@ def test_speed_derivatives():
     df1 = jnp.vectorize(jax.grad(foo))(grid.x)
     df2 = grid.Dx_pseudospectral @ f
     np.testing.assert_allclose(df1, df2)
+
+    f = foo(grid.x)
+    ddf1 = jnp.vectorize(jax.grad(jax.grad(foo)))(grid.x)
+    ddf2 = grid.D2x_pseudospectral @ f
+    np.testing.assert_allclose(ddf1, ddf2)
