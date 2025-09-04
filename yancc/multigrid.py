@@ -16,18 +16,27 @@ from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
-def get_mdke_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge):
+def get_mdke_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge, **options):
     """Get multigrid operators for each field, pitchgrid."""
     operators = []
     for field, pitchgrid in zip(fields, pitchgrids):
-        op = MDKE(field, pitchgrid, E_psi, nu, p1=p1, p2=p2, gauge=gauge)
+        op = MDKE(field, pitchgrid, E_psi, nu, p1=p1, p2=p2, gauge=gauge, **options)
         operators.append(op)
     return operators
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
 def get_dke_operators(
-    fields, pitchgrids, speedgrid, species, E_psi, potentials, p1, p2, gauge
+    fields,
+    pitchgrids,
+    speedgrid,
+    species,
+    E_psi,
+    potentials,
+    p1,
+    p2,
+    gauge,
+    **options,
 ):
     """Get multigrid operators for each field, pitchgrid."""
     operators = []
@@ -42,6 +51,7 @@ def get_dke_operators(
             p1=p1,
             p2=p2,
             gauge=gauge,
+            **options,
         )
         operators.append(op)
     return operators
@@ -49,7 +59,16 @@ def get_dke_operators(
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2", "smooth_solver"])
 def get_mdke_jacobi_smoothers(
-    fields, pitchgrids, E_psi, nu, p1, p2, gauge, smooth_solver, weight
+    fields,
+    pitchgrids,
+    E_psi,
+    nu,
+    p1,
+    p2,
+    gauge,
+    smooth_solver,
+    weight,
+    **options,
 ):
     """Get multigrid smoothers for each field, pitchgrid."""
     smoothers = []
@@ -66,6 +85,7 @@ def get_mdke_jacobi_smoothers(
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=weight,
+                **options,
             )
             for order in ["atz", "zat", "tza"]
         ]
@@ -86,6 +106,7 @@ def get_dke_jacobi_smoothers(
     gauge,
     smooth_solver,
     weight,
+    **options,
 ):
     """Get multigrid smoothers for each field, pitchgrid."""
     smoothers = []
@@ -104,6 +125,7 @@ def get_dke_jacobi_smoothers(
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=weight,
+                **options,
             )
             for order in ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"]
         ]

@@ -176,8 +176,6 @@ class DKEPreconditioner(MultigridOperator):
         v2 = options.pop("v2", 3)
         cycle_index = options.pop("cycle_index", 3)
 
-        assert len(options) == 0, "got unknown option " + str(options)
-
         fields, grids = get_fields_grids(
             field=field,
             nt=field.ntheta,
@@ -202,6 +200,7 @@ class DKEPreconditioner(MultigridOperator):
             p1=self.p1,
             p2=self.p2,
             gauge=gauge,
+            **options,
         )
         smoothers = get_dke_jacobi_smoothers(
             fields=fields,
@@ -215,6 +214,7 @@ class DKEPreconditioner(MultigridOperator):
             gauge=gauge,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
+            **options,
         )
 
         super().__init__(
