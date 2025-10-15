@@ -262,6 +262,107 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1):
     return x
 
 
+def _prolongate_a(f, a1, a2, method="linear"):
+    assert len(a2) >= len(a1)
+    f2 = jnp.moveaxis(
+        interpax.interp1d(
+            a2, a1, jnp.moveaxis(f, -3, 0), method=method, period=None, extrap=True
+        ),
+        0,
+        -3,
+    )
+    return f2
+
+
+def _prolongate_t(f, t1, t2, method="linear"):
+    assert len(t2) >= len(t1)
+    f2 = jnp.moveaxis(
+        interpax.interp1d(
+            t2,
+            t1,
+            jnp.moveaxis(f, -2, 0),
+            method=method,
+            period=2 * jnp.pi,
+            extrap=True,
+        ),
+        0,
+        -2,
+    )
+    return f2
+
+
+def _prolongate_z(f, z1, z2, NFP=1, method="linear"):
+    assert len(z2) >= len(z1)
+    f2 = jnp.moveaxis(
+        interpax.interp1d(
+            z2,
+            z1,
+            jnp.moveaxis(f, -1, 0),
+            method=method,
+            period=2 * jnp.pi / NFP,
+            extrap=True,
+        ),
+        0,
+        -1,
+    )
+    return f2
+
+
+def _restrict_a(f, a1, a2, method="linear"):
+    interp = lambda f: jnp.moveaxis(
+        interpax.interp1d(
+            a1, a2, jnp.moveaxis(f, -3, 0), method=method, period=None, extrap=True
+        ),
+        0,
+        -3,
+    )
+    shp = list(f.shape)
+    shp[-3] = len(a2)
+    g = jnp.zeros(shp)
+    f2 = jax.linear_transpose(interp, g)(f)[0]
+    return f2 * len(a2) / len(a1)
+
+
+def _restrict_t(f, t1, t2, method="linear"):
+    interp = lambda f: jnp.moveaxis(
+        interpax.interp1d(
+            t1,
+            t2,
+            jnp.moveaxis(f, -2, 0),
+            method=method,
+            period=2 * jnp.pi,
+            extrap=True,
+        ),
+        0,
+        -2,
+    )
+    shp = list(f.shape)
+    shp[-2] = len(t2)
+    g = jnp.zeros(shp)
+    f2 = jax.linear_transpose(interp, g)(f)[0]
+    return f2 * len(t2) / len(t1)
+
+
+def _restrict_z(f, z1, z2, NFP=1, method="linear"):
+    interp = lambda f: jnp.moveaxis(
+        interpax.interp1d(
+            z1,
+            z2,
+            jnp.moveaxis(f, -1, 0),
+            method=method,
+            period=2 * jnp.pi / NFP,
+            extrap=True,
+        ),
+        0,
+        -1,
+    )
+    shp = list(f.shape)
+    shp[-1] = len(z2)
+    g = jnp.zeros(shp)
+    f2 = jax.linear_transpose(interp, g)(f)[0]
+    return f2 * len(z2) / len(z1)
+
+
 @eqx.filter_jit
 def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
     """Prolongation/restriction between grids via (transposed) interpolation."""
@@ -273,52 +374,24 @@ def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
 
     N1 = nt1 * nz1 * na1
     nx = f.size // N1
-    N2 = nt2 * nz2 * na2
+    f = f.reshape((nx, na1, nt1, nz1))
 
-    if N2 > N1:
-        aq, tq, zq = jnp.meshgrid(a2, t2, z2, indexing="ij")
-        aq = aq.flatten()
-        tq = tq.flatten()
-        zq = zq.flatten()
-        f = f.reshape((nx, na1, nt1, nz1))
-        f = jnp.moveaxis(f, 0, -1)
-        interp = lambda g: interpax.interp3d(
-            aq,
-            tq,
-            zq,
-            a1,
-            t1,
-            z1,
-            g,
-            method,
-            extrap=True,
-            period=(None, 2 * jnp.pi, 2 * jnp.pi / field1.NFP),
-        )
-        f2 = interp(f)
-        f2 = f2.reshape((na2, nt2, nz2, nx))
-        return jnp.moveaxis(f2, -1, 0).flatten()
+    if na2 >= na1:
+        f = _prolongate_a(f, a1, a2, method)
     else:
-        aq, tq, zq = jnp.meshgrid(a1, t1, z1, indexing="ij")
-        aq = aq.flatten()
-        tq = tq.flatten()
-        zq = zq.flatten()
-        interp = lambda g: interpax.interp3d(
-            aq,
-            tq,
-            zq,
-            a2,
-            t2,
-            z2,
-            jnp.moveaxis(g.reshape((nx, na2, nt2, nz2)), 0, -1),
-            method,
-            extrap=True,
-            period=(None, 2 * jnp.pi, 2 * jnp.pi / field1.NFP),
-        )
-        g = jnp.zeros(nx * N2)
-        f2 = jax.linear_transpose(interp, g)(jnp.moveaxis(f.reshape((nx, N1)), 0, -1))[
-            0
-        ]
-        return jnp.moveaxis(f2, -1, 0).flatten() * N2 / N1
+        f = _restrict_a(f, a1, a2, method)
+
+    if nt2 >= nt1:
+        f = _prolongate_t(f, t1, t2, method)
+    else:
+        f = _restrict_t(f, t1, t2, method)
+
+    if nz2 >= nz1:
+        f = _prolongate_z(f, z1, z2, field1.NFP, method)
+    else:
+        f = _restrict_z(f, z1, z2, field1.NFP, method)
+
+    return f.flatten()
 
 
 @functools.partial(
