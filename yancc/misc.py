@@ -1,34 +1,40 @@
 """Constraints, sources, RHS, etc."""
 
-import cola
 import jax
 import jax.numpy as jnp
-from monkes import Field, LocalMaxwellian
+import lineax as lx
 
-from .velocity_grids import PitchAngleGrid, SpeedGrid
+from .field import Field
+from .species import LocalMaxwellian
+from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
-class DKESources(cola.ops.Dense):
+class DKESources(lx.MatrixLinearOperator):
     """Fake sources of particles and heat to ensure solvability
 
     Parameters
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : AbstractSpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
 
     """
 
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: AbstractSpeedGrid
+    species: list[LocalMaxwellian]
+
     def __init__(
         self,
         field: Field,
-        speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
     ):
         self.field = field
@@ -59,17 +65,17 @@ class DKESources(cola.ops.Dense):
         super().__init__(jax.scipy.linalg.block_diag(*sa))
 
 
-class DKEConstraint(cola.ops.Dense):
+class DKEConstraint(lx.MatrixLinearOperator):
     """Constraints to fix gauge freedom in density and energy.
 
     Parameters
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : AbstractSpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
     normalize : bool
@@ -78,11 +84,17 @@ class DKEConstraint(cola.ops.Dense):
 
     """
 
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: AbstractSpeedGrid
+    species: list[LocalMaxwellian]
+    normalize: bool
+
     def __init__(
         self,
         field: Field,
-        speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         normalize=True,
     ):
@@ -90,14 +102,14 @@ class DKEConstraint(cola.ops.Dense):
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
+        self.normalize = normalize
 
         if normalize:
             vth = jnp.ones((len(species), 1, 1))
         else:
             vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
-        # xvander goes from modal -> nodal
-        dx = ((speedgrid.x**2 * speedgrid.wx) @ speedgrid.xvander)[None, :, None]
-        x2dx = ((speedgrid.x**4 * speedgrid.wx) @ speedgrid.xvander)[None, :, None]
+        dx = (speedgrid.x**2 * speedgrid.wx)[None, :, None]
+        x2dx = (speedgrid.x**4 * speedgrid.wx)[None, :, None]
         dxi = pitchgrid.wxi[None, None, :]
         # int f d3v, for particle conservation, shape(ns, nx, nxi)
         d3v = vth**3 * dx * dxi
@@ -118,86 +130,10 @@ class DKEConstraint(cola.ops.Dense):
         super().__init__(jax.scipy.linalg.block_diag(*Ia))
 
 
-class MDKESources(cola.ops.Dense):
-    """Fake sources of particles to ensure solvability of monoenergetic DKE.
-
-    Parameters
-    ----------
-    field : Field
-        Magnetic field information
-    pitchgrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
-    species : LocalMaxwellian
-        Species being considered
-    v : float
-        Speed being considered.
-
-    """
-
-    def __init__(
-        self,
-        field: Field,
-        pitchgrid: PitchAngleGrid,
-        species: LocalMaxwellian,
-        v: float,
-    ):
-        self.field = field
-        self.pitchgrid = pitchgrid
-        self.species = species
-        self.v = v
-        F = species(v)
-        x = v / species.v_thermal
-        s1 = (x**2 - 5 / 2) * F
-        N = pitchgrid.nxi * field.ntheta * field.nzeta
-        s1 = s1 * jnp.ones((N, 1))
-        super().__init__(s1)
-
-
-class MDKEConstraint(cola.ops.Dense):
-    """Constraints to fix gauge freedom in density for monoenergetic DKE.
-
-    Parameters
-    ----------
-    field : Field
-        Magnetic field information
-    pitchgrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
-    species : LocalMaxwellian
-        Species being considered
-    v : float
-        Speed being considered.
-
-    """
-
-    def __init__(
-        self,
-        field: Field,
-        pitchgrid: PitchAngleGrid,
-        species: LocalMaxwellian,
-        v: float,
-    ):
-        self.field = field
-        self.pitchgrid = pitchgrid
-        self.species = species
-        self.v = v
-
-        # enforcing that int(f d3v dr) = 0
-        d3v = pitchgrid.wxi
-
-        # flux surface average operator
-        dt = field.wtheta[:, None]
-        dz = field.wzeta[None, :]
-        dr = (field.sqrtg * dt * dz) / (field.sqrtg * dt * dz).sum()
-        dr = dr.flatten()
-
-        Ip = 2 * jnp.pi * (d3v[:, None] * dr[None, :]).reshape((1, -1))
-        super().__init__(Ip)
-
-
 def radial_magnetic_drift(
     field: Field,
-    speedgrid: SpeedGrid,
-    pitchgrid: PitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    pitchgrid: UniformPitchAngleGrid,
     species: list[LocalMaxwellian],
 ) -> jax.Array:
     """Radial magnetic drift 𝐯ₘ ⋅ ∇ ψ
@@ -206,9 +142,9 @@ def radial_magnetic_drift(
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -225,22 +161,17 @@ def radial_magnetic_drift(
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
     xi = pitchgrid.xi[None, None, :, None, None]
     x = speedgrid.x[None, :, None, None, None]
+    v = x * vth
     vmadotgradpsi = -(
-        x**2
-        * vth**2
-        * (1 / 2 + xi**2 / 2)
-        * ms
-        / qs
-        / field.Bmag**2
-        * field.BxgradpsidotgradB
+        ms * v**2 / qs * (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
     )
     return vmadotgradpsi
 
 
 def dke_rhs(
     field: Field,
-    speedgrid: SpeedGrid,
-    pitchgrid: PitchAngleGrid,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     E_psi: float,
     include_constraints: bool = True,
@@ -252,10 +183,10 @@ def dke_rhs(
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : AbstractSpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
     E_psi : float
@@ -277,7 +208,7 @@ def dke_rhs(
     dns = jnp.array([sp.dndr for sp in species])[:, None, None, None, None]
     Ts = jnp.array([sp.temperature for sp in species])[:, None, None, None, None]
     dTs = jnp.array([sp.dTdr for sp in species])[:, None, None, None, None]
-    Ln = dns / ns
+    Ln = dns / ns  # missing factor of psi?
     LT = dTs / Ts
     x = speedgrid.x[None, :, None, None, None]
     vmadotgradpsi = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
@@ -294,10 +225,7 @@ def dke_rhs(
 
 def mdke_rhs(
     field: Field,
-    pitchgrid: PitchAngleGrid,
-    v: float,
-    include_constraints: bool = True,
-    normalize: bool = False,
+    pitchgrid: UniformPitchAngleGrid,
 ) -> jax.Array:
     """RHS of monoenergetic DKE.
 
@@ -305,39 +233,28 @@ def mdke_rhs(
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
-    v : float
-        Speed being considered.
-    include_constraints : bool
-        Whether to append zeros to the rhs for constraint equations.
-    normalize : bool
-        Whether to divide equations by speed to non-dimensionalize
 
     Returns
     -------
     f : jax.Array, shape(N,3)
         RHS of linear monoenergetic DKE.
     """
-    xi = pitchgrid.xi[None, None, :, None, None]
+    xi = pitchgrid.xi[:, None, None]
     s1 = (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
     s2 = s1
     s3 = xi * field.Bmag
-    rhs = jnp.array([s1 * v, s2 * v, s3 * v]).reshape((3, -1)).T
-    if normalize:
-        rhs /= v
-    if include_constraints:
-        rhs = jnp.concatenate([rhs, jnp.zeros((1, 3))])
+    rhs = jnp.array([s1, s2, s3]).reshape((3, -1)).T
     return rhs
 
 
 @jax.jit
 def compute_monoenergetic_coefficients(
     f: jax.Array,
-    s: jax.Array,
     field: Field,
-    pitchgrid: PitchAngleGrid,
-    v: float,
+    pitchgrid: UniformPitchAngleGrid,
+    v: float = 1.0,
 ) -> jax.Array:
     """Compute D_ij coefficients from solution for distribution function f.
 
@@ -347,7 +264,7 @@ def compute_monoenergetic_coefficients(
         Solution to monoenergetic drift kinetic equation.
     field : Field
         Magnetic field information
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
     v : float
         Speed being considered.
@@ -367,7 +284,7 @@ def compute_monoenergetic_coefficients(
     # slice out source/constraint terms if present
     f = f[:N]
 
-    s = mdke_rhs(field, pitchgrid, v, False, False)
+    s = mdke_rhs(field, pitchgrid)
     s = s.reshape((-1, 3))
 
     # form monoenergetic coefficients
@@ -387,7 +304,7 @@ def compute_monoenergetic_coefficients(
 
 def compute_transport_matrix(
     Dij: jax.Array,
-    speedgrid: SpeedGrid,
+    speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
 ):
     """Compute the transport matrix for each species from monoenergetic coefficients.
@@ -396,7 +313,7 @@ def compute_transport_matrix(
     ----------
     Dij : jax.Array, shape(nspecies, nx, 3, 3)
         Monoenergetic transport coefficient for each species and each speed.
-    speedgrid : SpeedGrid
+    speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -432,17 +349,23 @@ def compute_transport_matrix(
     return integrand.sum(axis=1)
 
 
-def compute_fluxes(f, field, speedgrid, pitchgrid, species):
+def compute_fluxes(
+    f: jax.Array,
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    species: list[LocalMaxwellian],
+):
     """Compute output fluxes from solution of DKE.
 
     Parameters
     ----------
     field : Field
         Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
+    pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
+    speedgrid : AbstractSpeedGrid
+        Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
 

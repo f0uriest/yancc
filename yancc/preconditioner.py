@@ -1,105 +1,357 @@
-"""Preconditioner for DKE."""
+"""Stuff for preconditioners."""
 
-import functools
-
-import cola
+import equinox as eqx
+import jax
 import jax.numpy as jnp
-import monkes
-from monkes import Field, LocalMaxwellian
+import lineax as lx
+from jaxtyping import Array, ArrayLike, Float
 
-from .velocity_grids import PitchAngleGrid, SpeedGrid
+from .collisions import RosenbluthPotentials
+from .field import Field
+from .multigrid import (
+    MultigridOperator,
+    get_dke_jacobi_smoothers,
+    get_dke_operators,
+    get_fields_grids,
+    get_mdke_jacobi_smoothers,
+    get_mdke_operators,
+)
+from .species import LocalMaxwellian, collisionality
+from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
-class MONKESPreconditioner(cola.ops.LinearOperator):
-    """Preconditioner for full DKE based on monoenergetic approximation using MONKES.
+class MDKEPreconditioner(MultigridOperator):
+    """Preconditioner for the MDKE.
 
     Parameters
     ----------
-    field : Field
-        Magnetic field information
-    speedgrid : SpeedGrid
-        Grid of coordinates in speed.
-    pitchgrid : PitchAngleGrid
-        Grid of coordinates in pitch angle.
-    species : list[LocalMaxwellian]
-        Species being considered
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
     E_psi : float
-        Radial electric field.
-
+        Normalized radial electric field.
+    nu : float
+        Normalized collisionality.
     """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    E_psi: Float[Array, ""]
+    nu: Float[Array, ""]
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
 
     def __init__(
         self,
         field: Field,
-        speedgrid: SpeedGrid,
-        pitchgrid: PitchAngleGrid,
-        species: list[LocalMaxwellian],
-        E_psi: float,
+        pitchgrid: UniformPitchAngleGrid,
+        E_psi: Float[ArrayLike, ""],
+        nu: Float[ArrayLike, ""],
+        **options
     ):
 
         self.field = field
-        self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
-        self.species = species
-        self.E_psi = E_psi
-        self.operators = []
-        self._Clus = []
+        self.E_psi = jnp.asarray(E_psi)
+        self.nu = jnp.asarray(nu)
+        self.p1 = options.pop("p1m", "2d")
+        self.p2 = options.pop("p2m", 2)
+        gauge = options.pop("gauge", True)
+        smooth_solver = options.pop("smooth_solver", "dense")
+        smooth_weights = options.pop("smooth_weights", None)
+        coarsening = options.pop("coarsening", 2)
+        coarse_N = options.pop("coarse_N", 8000)
+        min_nt = options.pop("min_nt", 5)
+        min_nz = options.pop("min_nz", 5)
+        min_na = options.pop("min_na", 5)
+        coarse_overweight = options.pop("coarse_overweight", 1)
+        interp_method = options.pop("interp_method", "linear")
+        smooth_method = options.pop("smooth_method", "standard")
+        verbose = options.pop("verbose", False)
+        v1 = options.pop("v1", 3)
+        v2 = options.pop("v2", 3)
+        cycle_index = options.pop("cycle_index", 3)
 
+        assert len(options) == 0, "got unknown option " + str(options)
+
+        fields, grids = get_fields_grids(
+            field=field,
+            nt=field.ntheta,
+            nz=field.nzeta,
+            na=pitchgrid.nxi,
+            coarsening_factor=coarsening,
+            min_N=coarse_N,
+            min_nt=min_nt,
+            min_nz=min_nz,
+            min_na=min_na,
+        )
+
+        operators = get_mdke_operators(
+            fields=fields,
+            pitchgrids=grids,
+            E_psi=E_psi,
+            nu=nu,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+        )
+        smoothers = get_mdke_jacobi_smoothers(
+            fields=fields,
+            pitchgrids=grids,
+            E_psi=E_psi,
+            nu=nu,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            smooth_solver=smooth_solver,
+            weight=smooth_weights,
+        )
+
+        super().__init__(
+            operators=operators[::-1],
+            smoothers=smoothers[::-1],
+            x0=None,
+            cycle_index=cycle_index,
+            v1=v1,
+            v2=v2,
+            interp_method=interp_method,
+            smooth_method=smooth_method,
+            coarse_opinv=None,
+            coarse_overweight=coarse_overweight,
+            verbose=verbose,
+        )
+
+
+@lx.is_symmetric.register(MDKEPreconditioner)
+@lx.is_diagonal.register(MDKEPreconditioner)
+@lx.is_tridiagonal.register(MDKEPreconditioner)
+def _(operator):
+    return False
+
+
+class DKEPreconditioner(MultigridOperator):
+    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: AbstractSpeedGrid
+    species: list[LocalMaxwellian]
+    E_psi: Float[Array, ""]
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: AbstractSpeedGrid,
+        species: list[LocalMaxwellian],
+        E_psi: Float[ArrayLike, ""],
+        potentials: RosenbluthPotentials,
+        **options
+    ):
+
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        self.E_psi = jnp.asarray(E_psi)
+
+        self.p1 = options.pop("p1", "2d")
+        self.p2 = options.pop("p2", 2)
+        gauge = options.pop("gauge", True)
+        smooth_solver = options.pop("smooth_solver", "dense")
+        smooth_weights = options.pop("smooth_weights", None)
+        coarsening = options.pop("coarsening", 2)
+        coarse_N = options.pop("coarse_N", 8000)
+        min_nt = options.pop("min_nt", 5)
+        min_nz = options.pop("min_nz", 5)
+        min_na = options.pop("min_na", 5)
+        coarse_overweight = options.pop("coarse_overweight", 1)
+        interp_method = options.pop("interp_method", "linear")
+        smooth_method = options.pop("smooth_method", "standard")
+        verbose = options.pop("verbose", False)
+        v1 = options.pop("v1", 3)
+        v2 = options.pop("v2", 3)
+        cycle_index = options.pop("cycle_index", 3)
+
+        fields, grids = get_fields_grids(
+            field=field,
+            nt=field.ntheta,
+            nz=field.nzeta,
+            na=pitchgrid.nxi,
+            coarsening_factor=coarsening,
+            min_N=coarse_N,
+            min_nt=min_nt,
+            min_nz=min_nz,
+            min_na=min_na,
+            nx=speedgrid.nx,
+            ns=len(species),
+        )
+
+        operators = get_dke_operators(
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            E_psi=E_psi,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            **options,
+        )
+        smoothers = get_dke_jacobi_smoothers(
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            E_psi=E_psi,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            smooth_solver=smooth_solver,
+            weight=smooth_weights,
+            **options,
+        )
+
+        super().__init__(
+            operators=operators[::-1],
+            smoothers=smoothers[::-1],
+            x0=None,
+            cycle_index=cycle_index,
+            v1=v1,
+            v2=v2,
+            interp_method=interp_method,
+            smooth_method=smooth_method,
+            coarse_opinv=None,
+            coarse_overweight=coarse_overweight,
+            verbose=verbose,
+        )
+
+
+@lx.is_symmetric.register(DKEPreconditioner)
+@lx.is_diagonal.register(DKEPreconditioner)
+@lx.is_tridiagonal.register(DKEPreconditioner)
+def _(operator):
+    return False
+
+
+class DKEMPreconditioner(lx.AbstractLinearOperator):
+    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: AbstractSpeedGrid
+    species: list[LocalMaxwellian]
+    E_psi: Float[Array, ""]
+    M: MultigridOperator
+    vs: jax.Array
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: AbstractSpeedGrid,
+        species: list[LocalMaxwellian],
+        E_psi: Float[ArrayLike, ""],
+        **options
+    ):
+
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        self.E_psi = jnp.asarray(E_psi)
+
+        Ers = []
+        nus = []
+        vs = []
         for spec in species:
-            operators = []
-            Clus = []
+            temp_nu = []
+            temp_Er = []
+            temp_vs = []
             for x in speedgrid.x:
                 v = x * spec.v_thermal
-                nu = monkes._species.collisionality(spec, v, *species)
+                nu = collisionality(spec, v, *species)
                 Erhat = E_psi / v
                 nuhat = nu / v
-                op = monkes._core.MonoenergeticDKOperator(
-                    field, pitchgrid.nxi, Erhat, nuhat
-                )
-                Clu = monkes._linalg.block_tridiagonal_factor(
-                    op.D, op.L, op.U, reverse=True
-                )
-                operators.append(op)
-                Clus.append(Clu)
+                temp_Er.append(Erhat)
+                temp_nu.append(nuhat)
+                temp_vs.append(v)
 
-            self.operators.append(operators)
-            self._Clus.append(Clus)
+            Ers.append(temp_Er)
+            nus.append(temp_nu)
+            vs.append(temp_vs)
 
-    @functools.partial(jnp.vectorize, excluded=[0], signature="(n)->(n)")
-    def _matmat(self, x):
-        f = x[
-            : len(self.species)
-            * self.field.ntheta
-            * self.field.nzeta
-            * self.speedgrid.nx
-            * self.pitchgrid.nxi
-        ]
-        rest = x[len(f) :]
-        f = f.reshape(
-            (
-                len(self.species),
-                self.speedgrid.nx,
-                self.pitchgrid.nxi,
-                self.field.ntheta,
-                self.field.nzeta,
+        Ers = jnp.array(Ers)
+        nus = jnp.array(nus)
+        self.vs = jnp.array(vs)
+
+        def get_mdke_precond(nu, E_psi):
+            return MDKEPreconditioner(
+                field=field, pitchgrid=pitchgrid, E_psi=E_psi, nu=nu, **options
             )
+
+        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nus, Ers)
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix-vector product."""
+        vector = vector.reshape((len(self.species), self.speedgrid.nx, -1))
+
+        def _mv(M, v):
+            return M.mv(v)
+
+        out = jax.vmap(jax.vmap(_mv))(self.M, vector)
+        out = out / self.vs[:, :, None]
+        return out.flatten()
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
         )
-        # convert to modal in xi and nodal in x
-        f = jnp.einsum("li, skitz->skltz", self.pitchgrid.xivander_inv, f)
-        f = jnp.einsum("xk, skltz->sxltz", self.speedgrid.xvander, f)
-        # multiply by mono-energetic DK operator inverse
-        # for each species and velocity
-        out = jnp.zeros_like(f)
-        for i in range(self.ns):
-            for j in range(self.nx):
-                Cluij = self._Clus[i][j]
-                fij = f[i, j].flatten()
-                outij = monkes._linalg.block_tridiagonal_solve(Cluij, fij)
-                # make f have mean 0.
-                fsa = self.field.flux_surface_average(outij[:, 0])
-                outij = outij.at[:, 0].add(-fsa[:, None, None])
-                out = out.at[i, j].set(outij.reshape(*f[i, j].shape))
-        # convert modal back to nodal
-        out = jnp.einsum("il, sxltz->sxitz", self.pitchgrid.xivander, out)
-        out = jnp.concatenate([out.flatten(), rest])
-        return out
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
+
+
+@lx.is_symmetric.register(DKEMPreconditioner)
+@lx.is_diagonal.register(DKEMPreconditioner)
+@lx.is_tridiagonal.register(DKEMPreconditioner)
+def _(operator):
+    return False

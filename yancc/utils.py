@@ -1,39 +1,8 @@
 """Simple utility functions."""
 
-import functools
-
 import jax
 import jax.numpy as jnp
-
-
-@functools.partial(jnp.vectorize, signature="()->(n)", excluded=(1,))
-def _onehot(i, N):
-    return jnp.zeros(N).at[i].set(1.0)
-
-
-def getslice(operator, rows, cols):
-    """Get rows and cols from a given linear operator."""
-    if isinstance(rows, slice):
-        rows = _slice_to_range(rows, operator.shape[0])
-
-    if isinstance(cols, slice):
-        cols = _slice_to_range(cols, operator.shape[1])
-
-    @jax.jit
-    def bar(c):
-        return operator.mv(_onehot(c, operator.shape[0]))[rows]
-
-    return jax.lax.map(bar, cols, batch_size=100)
-
-
-def _slice_to_range(s, N):
-    start = s.start if s.start is not None else 0
-    stop = s.stop if s.stop is not None else N
-    step = s.step if s.step is not None else 1
-    start = start % N
-    stop = stop & N
-    step = step % N
-    return jnp.arange(start, stop, step)
+import numpy as np
 
 
 def _lgammastar(s, z, kmax=60):
@@ -63,7 +32,7 @@ def _exp1(x):
             e1 += r
             return e1, r
 
-        e1, r = jax.lax.fori_loop(1, 30, body, (e1, r), unroll=20)
+        e1, r = jax.lax.fori_loop(1, 30, body, (e1, r), unroll=True)
         return -jnp.euler_gamma - jnp.log(x) + x * e1
 
     def xgt2():
@@ -75,7 +44,7 @@ def _exp1(x):
             t0 = k / (1.0 + k / (x + t0))
             return t0
 
-        t0 = jax.lax.fori_loop(0, m, body, t0, unroll=20)
+        t0 = jax.lax.fori_loop(0, m, body, t0, unroll=True)
         t = 1.0 / (x + t0)
         return jnp.exp(-x) * t
 
@@ -159,3 +128,33 @@ def Gammaincc(s, x):
     """Upper incomplete gamma function."""
     sgn, gammarg = lGammaincc(s, x)
     return sgn * jnp.exp(gammarg)
+
+
+def _parse_axorder_shape_3d(
+    nt: int, nz: int, na: int, axorder: str
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    shape = np.empty(3, dtype=int)
+    shape[axorder.index("a")] = na
+    shape[axorder.index("t")] = nt
+    shape[axorder.index("z")] = nz
+    caxorder = (axorder.index("a"), axorder.index("t"), axorder.index("z"))
+    return tuple(shape), caxorder
+
+
+def _parse_axorder_shape_4d(
+    nt: int, nz: int, na: int, nx: int, ns: int, axorder: str
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    shape = np.empty(5, dtype=int)
+    shape[axorder.index("a")] = na
+    shape[axorder.index("t")] = nt
+    shape[axorder.index("z")] = nz
+    shape[axorder.index("x")] = nx
+    shape[axorder.index("s")] = ns
+    caxorder = (
+        axorder.index("s"),
+        axorder.index("x"),
+        axorder.index("a"),
+        axorder.index("t"),
+        axorder.index("z"),
+    )
+    return tuple(shape), caxorder

@@ -1,6 +1,5 @@
 __pycache__/
 build/
-data/
 dist/
 docs/generated
 docs/_build
