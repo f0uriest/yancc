@@ -302,6 +302,9 @@ class UniformSpeedGrid(AbstractSpeedGrid):
         self.Dx_pseudospectral = jax.jacfwd(fdfwd)(self.x, "2z", h, "speed")
         self.Dx = self.Dx_pseudospectral  # remove
 
+        self.D2x_pseudospectral = self.Dx @ self.Dx
+        self.D2x = self.D2x_pseudospectral  # remove
+
         gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(self.x - 1))[0])
         if self.nx > 1:
             gauge_idx2 = jnp.atleast_1d(jnp.argsort(jnp.abs(self.x - 1))[1])

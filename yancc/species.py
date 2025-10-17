@@ -8,6 +8,8 @@ import jax.numpy as jnp
 from jax.typing import ArrayLike
 from scipy.constants import Boltzmann, elementary_charge, epsilon_0, hbar, proton_mass
 
+from .field import Field
+
 JOULE_PER_EV = 11606 * Boltzmann
 EV_PER_JOULE = 1 / JOULE_PER_EV
 
@@ -151,6 +153,7 @@ def collisionality(
     nu_a : float
         Collisionality of species a against background of others, in units of 1/s
     """
+    v = jnp.asarray(v)
     nu = jnp.array(0.0)
     for ma in others + (maxwellian_a,):
         nu += nuD_ab(maxwellian_a, ma, v)
@@ -177,6 +180,7 @@ def nuD_ab(
         Collisionality of species a against background of b, in units of 1/s
 
     """
+    v = jnp.asarray(v)
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
     prefactor = gamma_ab(maxwellian_a, maxwellian_b) * nb / v**3
@@ -196,6 +200,7 @@ def nupar_ab(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
 ) -> jax.Array:
     """Parallel collisionality."""
+    v = jnp.asarray(v)
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
     return 2 * gamma_ab(maxwellian_a, maxwellian_b) * nb / v**3 * chandrasekhar(v / vtb)
@@ -274,12 +279,13 @@ def debye_length(*maxwellians: LocalMaxwellian) -> jax.Array:
 
 def chandrasekhar(x: ArrayLike) -> jax.Array:
     """Chandrasekhar function."""
+    x = jnp.asarray(x)
     return (
         jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
     ) / (2 * x**2)
 
 
-def rhostar(species, field, x=1):
+def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     """Normalized gyroradius ρ* = ρ/a.
 
     Parameters
@@ -291,13 +297,14 @@ def rhostar(species, field, x=1):
     x : float
         Normalized speed being considered. x=v/vth
     """
+    x = jnp.asarray(x)
     v = x * species.v_thermal
     rho = species.species.mass / jnp.abs(species.species.charge) * v / field.Bmag_fsa
     rhostar = rho / field.a_minor
     return rhostar
 
 
-def Estar(species, field, E_psi, x=1):
+def Estar(species: LocalMaxwellian, field: Field, E_psi: ArrayLike, x: ArrayLike = 1.0):
     """Normalized electric field E* = E_r /(v <B>).
 
     Parameters
@@ -311,11 +318,13 @@ def Estar(species, field, E_psi, x=1):
     x : float
         Normalized speed being considered. x=v/vth
     """
+    x = jnp.asarray(x)
+    E_psi = jnp.asarray(E_psi)
     v = x * species.v_thermal
     return E_psi * jnp.abs(field.psi_r) / v / field.Bmag_fsa
 
 
-def nustar(species, field, x=1):
+def nustar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     """Normalized collisionality ν* = ν * R₀ /(v ι).
 
     Parameters
@@ -327,6 +336,7 @@ def nustar(species, field, x=1):
     x : float
         Normalized speed being considered. x=v/vth
     """
+    x = jnp.asarray(x)
     v = x * species.v_thermal
     nu = collisionality(species, v)
     nustar = field.R_major * nu / v / jnp.abs(field.iota)
