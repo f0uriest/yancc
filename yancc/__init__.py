@@ -12,3 +12,4 @@ from . import (
     trajectories,
     velocity_grids,
 )
+from .solve import solve_mdke

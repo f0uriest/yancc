@@ -29,6 +29,8 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
         Monoenergetic transport coefficients
     f : jax.Array, shape(N,3)
         Solution of DKE for each right hand side.
+    rhs : jax.Array, shape(N,3)
+        Source terms for DKE.
     info : dict
         Info about the solve, such as number of iterations, number of matrix-vector
         products, final residual etc.
@@ -58,7 +60,7 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
     rhs = mdke_rhs(field, pitchgrid)
 
     x0 = jnp.zeros_like(rhs[:, 0])
-    x1, j1, nmv1, res1, _, _ = gcrotmk(
+    f1, j1, nmv1, res1, _, _ = gcrotmk(
         A,
         rhs[:, 0],
         x0=x0,
@@ -70,7 +72,7 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
         maxiter=maxiter,
         print_every=print_every,
     )
-    x3, j3, nmv3, res3, _, _ = gcrotmk(
+    f3, j3, nmv3, res3, _, _ = gcrotmk(
         A,
         rhs[:, 3],
         x0=x0,
@@ -82,12 +84,12 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
         maxiter=maxiter,
         print_every=print_every,
     )
-    x2 = x1.copy()
-    x = jnp.array([x1, x2, x3]).T
-    Dij = compute_monoenergetic_coefficients(x, field, pitchgrid, 1.0)
+    f2 = f1.copy()
+    f = jnp.array([f1, f2, f3]).T
+    Dij = compute_monoenergetic_coefficients(f, field, pitchgrid, 1.0)
     return (
         Dij,
-        x,
+        f,
         rhs,
         {
             "j1": j1,
