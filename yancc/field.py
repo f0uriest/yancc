@@ -8,18 +8,20 @@ import interpax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Float, Int
+from scipy.constants import mu_0
 
 
 class Field(eqx.Module):
     """Magnetic field on a flux surface.
 
     Field is given as 2D arrays uniformly spaced in arbitrary
-    poloidal and toroidal angles.
+    poloidal and toroidal angles. The radial coordinate is assumed to be psi = toroidal
+    flux, divided by 2pi, in Webers
 
     Parameters
     ----------
     rho : float
-        Flux surface label.
+        Normalized surface label = sqrt(s).
     B_sup_t : jax.Array, shape(ntheta, nzeta)
         B^theta, contravariant poloidal component of field.
     B_sup_z : jax.Array, shape(ntheta, nzeta)
@@ -31,15 +33,22 @@ class Field(eqx.Module):
     Bmag : jax.Array, shape(ntheta, nzeta)
         Magnetic field magnitude.
     sqrtg : jax.Array, shape(ntheta, nzeta)
-        Coordinate jacobian determinant from (psi, theta, zeta) to (R, phi, Z).
-    psi_r : float
-        Derivative of toroidal flux wrt minor radius (rho*a_minor)
+        Coordinate jacobian determinant from (psi, theta, zeta) to (R, phi, Z). Units
+        of m/T
+    Psi : float
+        Total toroidal flux within the LCFS (in Webers, not divided by 2pi).
+    iota : float
+        Rotational transform.
     R_major : float
         Major radius.
     a_minor : float
         Minor radius.
     NFP : int
         Number of field periods.
+    dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
+        Derivative of Bmag with respect to theta/zeta. Default is to compute with fft.
+    B0 : float, optional
+        Characteristic scale for magnetic field. Default is surface average of B.
     """
 
     # note: assumes (psi, theta, zeta) coordinates, not (rho, theta, zeta)
@@ -61,6 +70,7 @@ class Field(eqx.Module):
     Bmag_fsa: Float[Array, ""]
     B2mag_fsa: Float[Array, ""]
     psi_r: Float[Array, ""]
+    Psi: Float[Array, ""]
     R_major: Float[Array, ""]
     a_minor: Float[Array, ""]
     iota: Float[Array, ""]
@@ -78,7 +88,7 @@ class Field(eqx.Module):
         B_sub_z: Float[ArrayLike, "ntheta nzeta"],
         Bmag: Float[ArrayLike, "ntheta nzeta"],
         sqrtg: Float[ArrayLike, "ntheta nzeta"],
-        psi_r: Float[ArrayLike, ""],
+        Psi: Float[ArrayLike, ""],
         iota: Float[ArrayLike, ""],
         R_major: Float[ArrayLike, ""],
         a_minor: Float[ArrayLike, ""],
@@ -118,10 +128,11 @@ class Field(eqx.Module):
         ) / self.sqrtg
         self.Bmag_fsa = self.flux_surface_average(self.Bmag)
         self.B2mag_fsa = self.flux_surface_average(self.Bmag**2)
-        self.psi_r = jnp.asarray(psi_r)
+        self.Psi = jnp.asarray(Psi)
         self.iota = jnp.asarray(iota)
         self.R_major = jnp.asarray(R_major)
         self.a_minor = jnp.asarray(a_minor)
+        self.psi_r = jnp.asarray(self.Psi / np.pi * self.rho / self.a_minor)
         self.theta = jnp.linspace(0, 2 * np.pi, self.ntheta, endpoint=False)
         self.zeta = jnp.linspace(0, 2 * np.pi / NFP, self.nzeta, endpoint=False)
         self.wtheta = jnp.diff(self.theta, append=jnp.array([2 * jnp.pi]))
@@ -142,14 +153,14 @@ class Field(eqx.Module):
         eq : desc.equilibrium.Equilibrium
             DESC Equilibrium.
         rho : float
-            Flux surface label.
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
             Both must be odd.
         """
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
 
-        from desc.grid import LinearGrid
+        from desc.grid import LinearGrid  # pyright: ignore[reportMissingImports]
 
         grid = LinearGrid(rho=rho, theta=ntheta, zeta=nzeta, endpoint=False, NFP=eq.NFP)
         keys = [
@@ -176,19 +187,21 @@ class Field(eqx.Module):
             "Bmag": desc_data["|B|"],
             "dBdt": desc_data["|B|_t"],
             "dBdz": desc_data["|B|_z"],
-            "sqrtg": desc_data["sqrt(g)"] / desc_data["psi_r"],
+            "sqrtg": desc_data["sqrt(g)"] / (desc_data["psi_r"]),
         }
 
         data = {
             key: val.reshape((grid.num_theta, grid.num_zeta), order="F")
             for key, val in data.items()
         }
+
+        data["Psi"] = eq.Psi
+        data["a_minor"] = desc_data["a"]
+        data["R_major"] = desc_data["R0"]
+        data["iota"] = desc_data["iota"][0]
+
         return cls(
             rho=rho,
-            psi_r=desc_data["psi_r"][0] / desc_data["a"],
-            iota=desc_data["iota"][0],
-            R_major=desc_data["R0"],
-            a_minor=desc_data["a"],
             **data,
             NFP=eq.NFP,
         )
@@ -202,16 +215,92 @@ class Field(eqx.Module):
         wout : path-like
             Path to vmec wout file.
         s : float
-            Flux surface label.
+            Normalized surface label.
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         """
-        raise NotImplementedError
+        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
+        from netCDF4 import Dataset
+
+        file = Dataset(wout, mode="r")
+
+        ns = file.variables["ns"][:].filled()
+        nfp = file.variables["nfp"][:].filled()
+        theta = 2 * np.pi - jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+        zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
+        assert "bmns" not in file.variables, "non-symmetric vmec not supported"
+
+        s_full = jnp.linspace(0, 1, ns)
+        hs = 1 / (ns - 1)
+        s_half = s_full[0:-1] + hs / 2
+
+        a_minor = file.variables["Aminor_p"][:].filled()
+        R_major = file.variables["Rmajor_p"][:].filled()
+        g_mnc = file.variables["gmnc"][:].filled()
+        b_mnc = file.variables["bmnc"][:].filled()
+        bsupu_mnc = file.variables["bsupumnc"][:].filled()
+        bsupv_mnc = file.variables["bsupvmnc"][:].filled()
+        bsubu_mnc = file.variables["bsubumnc"][:].filled()
+        bsubv_mnc = file.variables["bsubvmnc"][:].filled()
+
+        nfp = file.variables["nfp"][:].filled()
+        iota = file.variables["iotaf"][:].filled()
+        phi = file.variables["phi"][:].filled()[-1]  # total flux
+
+        # assuming the field is only over a single flux surface s
+        g_mnc = interpax.interp1d(s, s_half, g_mnc[1:, :])
+        b_mnc = interpax.interp1d(s, s_half, b_mnc[1:, :])
+        bsupu_mnc = interpax.interp1d(s, s_half, bsupu_mnc[1:, :])
+        bsupv_mnc = interpax.interp1d(s, s_half, bsupv_mnc[1:, :])
+        bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :])
+        bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :])
+        iota = interpax.interp1d(s, s_full, iota)
+
+        xm = file.variables["xm_nyq"][:].filled()
+        xn = file.variables["xn_nyq"][:].filled()
+
+        sqrtg = (
+            vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn) / phi * 2 * np.pi
+        )
+        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
+        B_sub_t = vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
+        B_sub_z = vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
+        B_sup_t = vmec_eval(theta[:, None], zeta[None, :], bsupu_mnc, 0, xm, xn)
+        B_sup_z = vmec_eval(theta[:, None], zeta[None, :], bsupv_mnc, 0, xm, xn)
+
+        B0 = jnp.abs(b_mnc).max()
+        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dt=1)
+        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dz=1)
+
+        sign = file.variables["signgs"][:].filled()
+        sqrtg *= sign
+        # theta is in opposite direction
+        B_sub_t *= sign
+        B_sup_t *= sign
+        dBdt *= sign
+        iota *= sign
+
+        data = {}
+        data["sqrtg"] = sqrtg
+        data["Bmag"] = Bmag
+        data["dBdt"] = dBdt
+        data["dBdz"] = dBdz
+        data["B_sub_t"] = B_sub_t
+        data["B_sub_z"] = B_sub_z
+        data["B_sup_t"] = B_sup_t
+        data["B_sup_z"] = B_sup_z
+        data["Psi"] = phi
+        data["iota"] = iota
+        data["B0"] = B0
+        data["R_major"] = R_major
+        data["a_minor"] = a_minor
+
+        return cls(rho=jnp.sqrt(s), **data, NFP=nfp)
 
     @classmethod
     def from_booz_xform(
         cls,
-        booz,
+        booz: str,
         s: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
@@ -224,7 +313,7 @@ class Field(eqx.Module):
         booz : path-like
             Path to booz_xform wout file.
         s : float
-            Flux surface label.
+            Normalized surface label.
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         cutoff : float
@@ -280,27 +369,157 @@ class Field(eqx.Module):
         dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
         dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
 
+        # make jacobian positive
         sign = jnp.sign(bvco + iota * buco)
         buco *= sign
         bvco *= sign
-        sqrtg = (bvco + iota * buco) / Bmag**2
+
+        return cls.from_boozer(
+            rho=jnp.sqrt(s),
+            Bmag=Bmag,
+            I=buco,
+            G=bvco,
+            iota=iota,
+            Psi=Psi,
+            a_minor=a_minor,
+            R_major=R0,
+            NFP=nfp,
+            dBdt=dBdt,
+            dBdz=dBdz,
+            B0=B0,
+        )
+
+    @classmethod
+    def from_ipp_bc(
+        cls,
+        path: str,
+        s: Float[ArrayLike, ""],
+        ntheta: int,
+        nzeta: int,
+        cutoff: Float[ArrayLike, ""] = 0.0,
+    ) -> "Field":
+        """Construct Field from IPP format bc file.
+
+        Parameters
+        ----------
+        path : path-like
+            Path to input bc file.
+        s : float
+            Normalized surface label.
+        ntheta, nzeta : int
+            Number of points on a surface in poloidal and toroidal directions.
+        cutoff : float
+            Modes with abs(b_mn) < cutoff * abs(b_00) will be excluded.
+        """
+        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
+
+        data = read_bc(path)
+        nfp = data["nfp"]
+        theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+        zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
+
+        s_grid = data["s"]
+
+        R0 = data["R"]
+        a_minor = data["a"]
+
+        b_mnc = interpax.interp1d(s, s_grid, data["Bmn"])
+        I = interpax.interp1d(s, s_grid, data["I"])
+        G = interpax.interp1d(s, s_grid, data["G"])
+        iota = interpax.interp1d(s, s_grid, data["iota"])
+
+        xm, xn = np.meshgrid(data["m"], data["n"], indexing="ij")
+        xm, xn = xm.flatten(), xn.flatten()
+
+        B0 = jnp.abs(b_mnc).max()
+        mask = jnp.abs(b_mnc) > cutoff * B0
+
+        b_mnc = b_mnc.flatten()
+        mask = mask.flatten()
+        # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
+        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
+        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
+        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
+
+        # make jacobian positive
+        sign = jnp.sign(G + iota * I)
+        I *= sign
+        G *= sign
+
+        return cls.from_boozer(
+            rho=jnp.sqrt(s),
+            Bmag=Bmag,
+            I=I,
+            G=G,
+            iota=iota,
+            Psi=data["Psi"],
+            a_minor=a_minor,
+            R_major=R0,
+            NFP=nfp,
+            dBdt=dBdt,
+            dBdz=dBdz,
+            B0=B0,
+        )
+
+    @classmethod
+    def from_boozer(
+        cls,
+        rho: Float[ArrayLike, ""],
+        Bmag: Float[ArrayLike, "ntheta nzeta"],
+        I: Float[ArrayLike, ""],
+        G: Float[ArrayLike, ""],
+        iota: Float[ArrayLike, ""],
+        Psi: Float[ArrayLike, ""],
+        R_major: Float[ArrayLike, ""],
+        a_minor: Float[ArrayLike, ""],
+        NFP: Int[ArrayLike, ""] = 1,
+        *,
+        dBdt: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
+        dBdz: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
+        B0: Optional[Float[ArrayLike, ""]] = None,
+    ):
+        """Construct a field in Boozer coordinates.
+
+        Parameters
+        ----------
+        rho : float
+            Normalized surface label = sqrt(s).
+        Bmag : jax.Array, shape(ntheta, nzeta)
+            Magnetic field magnitude in uniformly spaced Boozer angles.
+        I, G : float
+            Boozer toroidal and poloidal currents, in T*m.
+        iota : float
+            Rotational transform.
+        Psi : float
+            Total flux through LCFS in webers.
+        R_major : float
+            Major radius.
+        a_minor : float
+            Minor radius.
+        NFP : int
+            Number of field periods.
+        dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
+            Derivative of Bmag with respect to theta/zeta. Default is to compute with
+            fft.
+        B0 : float, optional
+            Characteristic scale for magnetic field. Default is surface average of B.
+        """
+        sqrtg = (G + iota * I) / Bmag**2
         data = {}
         data["sqrtg"] = sqrtg
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
-        data["B_sub_t"] = buco * jnp.ones((ntheta, nzeta))
-        data["B_sub_z"] = bvco * jnp.ones((ntheta, nzeta))
+        data["B_sub_t"] = I * jnp.ones_like(Bmag)
+        data["B_sub_z"] = G * jnp.ones_like(Bmag)
         data["B_sup_t"] = iota / sqrtg
         data["B_sup_z"] = 1 / sqrtg
-        # d psi/drho = d Psi rho^2 / drho = 2 Psi rho;  r = rho*a
-        # d psi / dr = d psi / drho / a
-        data["psi_r"] = 2 * Psi * jnp.sqrt(s) / a_minor
+        data["Psi"] = Psi
         data["iota"] = iota
         data["B0"] = B0
-        data["R_major"] = R0
+        data["R_major"] = R_major
         data["a_minor"] = a_minor
-        return cls(rho=jnp.sqrt(s), **data, NFP=nfp)
+        return cls(rho=rho, **data, NFP=NFP)
 
     @functools.partial(jnp.vectorize, signature="(m,n)->()", excluded=[0])
     def flux_surface_average(self, f: Float[Array, "ntheta nzeta"]) -> Float[Array, ""]:
@@ -358,7 +577,7 @@ class Field(eqx.Module):
         return Field(
             rho=self.rho,
             **out,
-            psi_r=self.psi_r,
+            Psi=self.Psi,
             B0=self.B0,
             iota=self.iota,
             R_major=self.R_major,
@@ -403,3 +622,143 @@ def _vmec_eval(t, z, xc, xs, m, n, dt, dz):
     c = (xc * jnp.cos(arg)).sum()
     s = (xs * jnp.sin(arg)).sum()
     return c + s
+
+
+def _strip_comments(lines):
+    lines = lines.copy()
+    idxs = []
+    for i, line in enumerate(lines):
+        if line.startswith("CC"):
+            idxs.append(i)
+    for i in idxs[::-1]:  # iterate backwards here so we don't mess up idxs as we delete
+        del lines[i]
+    return lines
+
+
+def _read_globals(lines):
+    assert (
+        lines[0].strip().startswith("m0b")
+    ), "Error in reading global parameters of bc file"
+    lines = lines.copy()
+    dat = np.genfromtxt(lines[:2], skip_header=1)
+    data = {}
+    data["M"] = int(dat[0])
+    data["N"] = int(dat[1])
+    data["ns"] = int(dat[2])
+    data["nfp"] = int(dat[3])
+    data["Psi"] = -float(dat[4])
+    data["a"] = float(dat[5])
+    data["R"] = float(dat[6])
+    if len(dat) > 7:
+        data["avol"] = float(dat[7])
+        data["Rvol"] = float(dat[8])
+    else:
+        data["avol"] = data["a"]
+        data["Rvol"] = data["R"]
+    return data, lines[2:]
+
+
+def _split_by_surface(lines):
+    lines = lines.copy()
+    assert lines[0].replace(" ", "").startswith("siota")
+
+    blocks = []
+    thisblock = []
+    for line in lines:
+        if line.replace(" ", "").startswith("siota"):
+            # start of new block
+            if len(thisblock):
+                blocks.append(thisblock)
+            thisblock = [line]
+        else:
+            thisblock.append(line)
+    if len(thisblock):
+        blocks.append(thisblock)
+    for block in blocks:
+        assert len(block) > 0
+        assert block[0].replace(" ", "").startswith("siota")
+    return blocks
+
+
+def _parse_surface(block):
+    surf_dat = np.genfromtxt(block[:3], skip_header=2)
+    surf_data = {}
+    surf_data["s"] = surf_dat[0]
+    surf_data["iota"] = -surf_dat[1]
+    surf_data["G"] = surf_dat[2]
+    surf_data["I"] = -surf_dat[3]
+    surf_data["pprime"] = surf_dat[4]
+    surf_data["dV/ds"] = surf_dat[5]
+
+    surf_dat = np.genfromtxt(block[3:], skip_header=1)
+    surf_data["m"] = surf_dat[:, 0].astype(int)
+    surf_data["n"] = surf_dat[:, 1].astype(int)
+    surf_data["Rmn"] = surf_dat[:, 2]
+    surf_data["Zmn"] = surf_dat[:, 3]
+    surf_data["numn"] = surf_dat[:, 4]
+    surf_data["Bmn"] = surf_dat[:, 5]
+    return surf_data
+
+
+def _combine_surf_data(surf_data, global_data):
+    assert len(surf_data) == global_data["ns"]
+
+    all_data = {
+        "s": np.zeros(global_data["ns"]),
+        "iota": np.zeros(global_data["ns"]),
+        "I": np.zeros(global_data["ns"]),
+        "G": np.zeros(global_data["ns"]),
+        "pprime": np.zeros(global_data["ns"]),
+        "dV/ds": np.zeros(global_data["ns"]),
+        "m": np.arange(0, global_data["M"] + 1),
+        "n": np.fft.ifftshift(np.arange(-global_data["N"], global_data["N"] + 1))
+        * global_data["nfp"],
+        "Bmn": np.zeros(
+            (global_data["ns"], global_data["M"] + 1, 2 * global_data["N"] + 1)
+        ),
+        "Rmn": np.zeros(
+            (global_data["ns"], global_data["M"] + 1, 2 * global_data["N"] + 1)
+        ),
+        "Zmn": np.zeros(
+            (global_data["ns"], global_data["M"] + 1, 2 * global_data["N"] + 1)
+        ),
+        "numn": np.zeros(
+            (global_data["ns"], global_data["M"] + 1, 2 * global_data["N"] + 1)
+        ),
+    }
+    for i, surf in enumerate(surf_data):
+        all_data["s"][i] = surf["s"]
+        all_data["iota"][i] = surf["iota"]
+        all_data["I"][i] = surf["I"]
+        all_data["G"][i] = surf["G"]
+        all_data["pprime"][i] = surf["pprime"]
+        all_data["dV/ds"][i] = surf["dV/ds"]
+        all_data["Bmn"][i][surf["m"], surf["n"]] = surf["Bmn"]
+        all_data["Rmn"][i][surf["m"], surf["n"]] = surf["Rmn"]
+        all_data["Zmn"][i][surf["m"], surf["n"]] = surf["Zmn"]
+        all_data["numn"][i][surf["m"], surf["n"]] = surf["numn"]
+
+    # ensure its sorted in case we screwed something up
+    idx = np.argsort(all_data["s"])
+    all_data["s"] = all_data["s"][idx]
+    all_data["iota"] = all_data["iota"][idx]
+    all_data["I"] = all_data["I"][idx] * mu_0 / (2 * np.pi)
+    all_data["G"] = all_data["G"][idx] * mu_0 / (2 * np.pi) * global_data["nfp"]
+    all_data["Bmn"] = all_data["Bmn"][idx]
+    all_data["Rmn"] = all_data["Rmn"][idx]
+    all_data["Zmn"] = all_data["Zmn"][idx]
+    all_data["numn"] = all_data["numn"][idx]
+
+    all_data.update(global_data)
+    return all_data
+
+
+def read_bc(path):
+    """Read an IPP boozer.bc file as a dict of ndarray."""
+    lines = open(path).readlines()
+    lines = _strip_comments(lines)
+    global_data, lines = _read_globals(lines)
+    surf_data = _split_by_surface(lines)
+    surf_data = [_parse_surface(block) for block in surf_data]
+    all_data = _combine_surf_data(surf_data, global_data)
+    return all_data
