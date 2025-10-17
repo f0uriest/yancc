@@ -128,6 +128,8 @@ class AbstractSpeedGrid(eqx.Module):
     xvander_inv: jax.Array
     Dx: jax.Array
     Dx_pseudospectral: jax.Array
+    D2x_pseudospectral: jax.Array
+    gauge_idx: jax.Array
 
 
 class MonoenergeticSpeedGrid(AbstractSpeedGrid):
@@ -149,6 +151,8 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
         self.xvander_inv = jnp.ones((1, 1))
         self.Dx = jnp.zeros((1, 1))
         self.Dx_pseudospectral = jnp.zeros((1, 1))
+        self.D2x_pseudospectral = jnp.zeros((1, 1))
+        self.gauge_idx = jnp.array([0])
 
 
 class MaxwellSpeedGrid(AbstractSpeedGrid):
