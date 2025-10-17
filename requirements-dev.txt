@@ -1,6 +1,10 @@
 # standard install requirements
 -r ./requirements.txt
 
+sympy
+desc-opt
+mpmath
+
 # building the docs
 sphinx >= 3.0.0, <= 8.2.3
 sphinx_copybutton <= 0.5.2
