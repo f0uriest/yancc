@@ -1192,6 +1192,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
+        else:
+            raise NotImplementedError()
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1508,6 +1510,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
+        else:
+            raise NotImplementedError()
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1842,6 +1846,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
+        else:
+            raise NotImplementedError()
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

@@ -149,7 +149,7 @@ class Field(eqx.Module):
         """
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
 
-        from desc.grid import LinearGrid
+        from desc.grid import LinearGrid  # pyright: ignore[reportMissingImports]
 
         grid = LinearGrid(rho=rho, theta=ntheta, zeta=nzeta, endpoint=False, NFP=eq.NFP)
         keys = [

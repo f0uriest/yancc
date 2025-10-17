@@ -133,6 +133,7 @@ def fd2(f, p, h=1, bc="periodic", axis=0):
 def _fdctr(f, dx, bc="periodic"):
     assert bc in {"periodic", "symmetric"}
     m = len(dx)
+    f1 = f2 = jnp.zeros(m)
     if bc == "symmetric":
         f1 = f[:m][::-1]
         f2 = f[-m:][::-1]
