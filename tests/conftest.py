@@ -14,20 +14,20 @@ from yancc.velocity_grids import LegendrePitchAngleGrid, MaxwellSpeedGrid
 def field():
     """Field for testing."""
     eq = desc.examples.get("W7-X")
-    field = Field.from_desc(eq, 0.5, 7, 9)
+    field = Field.from_desc(eq, 0.5, 5, 7)
     return field
 
 
 @pytest.fixture(scope="session")
 def pitchgrid():
     """Pitch angle grid for testing"""
-    return LegendrePitchAngleGrid(11)
+    return LegendrePitchAngleGrid(9)
 
 
 @pytest.fixture(scope="session")
 def speedgrid():
     """Pitch angle grid for testing"""
-    return MaxwellSpeedGrid(5)
+    return MaxwellSpeedGrid(3)
 
 
 @pytest.fixture(scope="session")
