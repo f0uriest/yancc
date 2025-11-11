@@ -473,7 +473,7 @@ def multigrid_cycle(
         )
         if verbose:
             err = jnp.linalg.norm(rhs - operators[-1].mv(x)) / jnp.linalg.norm(rhs)
-            jax.debug.print("(iter={i}) err: {err:.3e}", err=err, i=i)
+            jax.debug.print("iter={i} err: {err:.3e}", err=err, i=i, ordered=True)
         return x
 
     x = jax.lax.fori_loop(0, n, body, x0)
@@ -504,7 +504,9 @@ def _multigrid_cycle_recursive(
     if verbose:
         rk = rhs - Ak.mv(x)
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print("level=({k}) before presmooth err: {err:.3e}", err=err, k=k)
+        jax.debug.print(
+            "level={k} before presmooth err: {err:.3e}", err=err, k=k, ordered=True
+        )
 
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
     x = smooth(x, Ak, rhs, Mk, nsteps=vv)
@@ -512,7 +514,9 @@ def _multigrid_cycle_recursive(
 
     if verbose:
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print("(level={k}) after presmooth err: {err:.3e}", err=err, k=k)
+        jax.debug.print(
+            "level={k} after presmooth err: {err:.3e}", err=err, k=k, ordered=True
+        )
     rkm1 = coarse_overweight * interpolate(
         rk,
         operators[k].field,
@@ -523,9 +527,6 @@ def _multigrid_cycle_recursive(
     )
     if k == 1:
         ykm1 = coarse_opinv.mv(rkm1)
-        if verbose:
-            err = jnp.linalg.norm(ykm1)
-            jax.debug.print("(level=0) coarse_correction: {err:.3e}", err=err)
     else:
         ykm1 = jnp.zeros_like(rkm1)
         body = lambda _, yidx: (
@@ -557,6 +558,11 @@ def _multigrid_cycle_recursive(
             return y
 
         ykm1 = jax.lax.cond(cycle_index == 0, f_cycle, normal_cycle, rkm1)
+    if verbose:
+        err = jnp.linalg.norm(ykm1)
+        jax.debug.print(
+            "level={k} coarse_correction: {err:.3e}", err=err, k=k, ordered=True
+        )
 
     yk = interpolate(
         ykm1,
@@ -570,14 +576,18 @@ def _multigrid_cycle_recursive(
     if verbose:
         rk = rhs - Ak.mv(x)
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print("level=({k}) before postsmooth err: {err:.3e}", err=err, k=k)
+        jax.debug.print(
+            "level={k} before postsmooth err: {err:.3e}", err=err, k=k, ordered=True
+        )
 
     vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
     x = smooth(x, Ak, rhs, Mk, nsteps=vv)
     if verbose:
         rk = rhs - Ak.mv(x)
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print("level=({k}) after postsmooth err: {err:.3e}", err=err, k=k)
+        jax.debug.print(
+            "level={k} after postsmooth err: {err:.3e}", err=err, k=k, ordered=True
+        )
 
     return x
 
