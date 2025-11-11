@@ -517,24 +517,25 @@ def _multigrid_cycle_recursive(
         jax.debug.print(
             "level={k} after presmooth err: {err:.3e}", err=err, k=k, ordered=True
         )
-    rkm1 = coarse_overweight * interpolate(
-        rk,
-        operators[k].field,
-        operators[k - 1].field,
-        operators[k].pitchgrid,
-        operators[k - 1].pitchgrid,
-        interp_method,
-    )
-    if k == 1:
-        ykm1 = coarse_opinv.mv(rkm1)
-    else:
-        ykm1 = jnp.zeros_like(rkm1)
-        body = lambda _, yidx: (
-            yidx[0],
-            _multigrid_cycle_recursive(
-                cycle_index=yidx[0],
+
+    def body(i, state):
+        rk, x, idx = state
+
+        rkm1 = coarse_overweight * interpolate(
+            rk,
+            operators[k].field,
+            operators[k - 1].field,
+            operators[k].pitchgrid,
+            operators[k - 1].pitchgrid,
+            interp_method,
+        )
+        if k == 1:
+            ykm1 = coarse_opinv.mv(rkm1)
+        else:
+            ykm1 = _multigrid_cycle_recursive(
+                cycle_index=idx,
                 k=k - 1,
-                x=yidx[1],
+                x=jnp.zeros_like(rkm1),
                 operators=operators,
                 rhs=rkm1,
                 smoothers=smoothers,
@@ -545,49 +546,61 @@ def _multigrid_cycle_recursive(
                 coarse_opinv=coarse_opinv,
                 coarse_overweight=coarse_overweight,
                 verbose=verbose,
-            ),
+            )
+        yk = interpolate(
+            ykm1,
+            operators[k - 1].field,
+            operators[k].field,
+            operators[k - 1].pitchgrid,
+            operators[k].pitchgrid,
+            interp_method,
         )
+        if verbose:
+            err = jnp.linalg.norm(yk) / jnp.linalg.norm(x)
+            jax.debug.print(
+                "level={k}/{i} coarse_correction: {err:.3e}",
+                err=err,
+                k=k - 1,
+                i=i,
+                ordered=True,
+            )
 
-        def normal_cycle(y):
-            idx, y = jax.lax.fori_loop(0, cycle_index, body, (cycle_index, y))
-            return y
+        x += yk
+        if verbose:
+            rk = rhs - Ak.mv(x)
+            err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
+            jax.debug.print(
+                "level={k}/{i} before postsmooth err: {err:.3e}",
+                err=err,
+                k=k,
+                i=i,
+                ordered=True,
+            )
 
-        def f_cycle(y):
-            idx, y = body(0, (cycle_index, y))
-            idx, y = body(0, (1, y))
-            return y
-
-        ykm1 = jax.lax.cond(cycle_index == 0, f_cycle, normal_cycle, rkm1)
-    if verbose:
-        err = jnp.linalg.norm(ykm1)
-        jax.debug.print(
-            "level={k} coarse_correction: {err:.3e}", err=err, k=k, ordered=True
-        )
-
-    yk = interpolate(
-        ykm1,
-        operators[k - 1].field,
-        operators[k].field,
-        operators[k - 1].pitchgrid,
-        operators[k].pitchgrid,
-        interp_method,
-    )
-    x += yk
-    if verbose:
+        vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
+        x = smooth(x, Ak, rhs, Mk, nsteps=vv)
         rk = rhs - Ak.mv(x)
-        err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print(
-            "level={k} before postsmooth err: {err:.3e}", err=err, k=k, ordered=True
-        )
+        if verbose:
+            err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
+            jax.debug.print(
+                "level={k}/{i} after postsmooth err: {err:.3e}",
+                err=err,
+                k=k,
+                i=i,
+                ordered=True,
+            )
+        return rk, x, idx
 
-    vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv)
-    if verbose:
-        rk = rhs - Ak.mv(x)
-        err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print(
-            "level={k} after postsmooth err: {err:.3e}", err=err, k=k, ordered=True
-        )
+    def normal_cycle(rk, x, idx):
+        _, x, _ = jax.lax.fori_loop(0, cycle_index, body, (rk, x, idx))
+        return x
+
+    def f_cycle(rk, x, idx):
+        rk, x, idx = body(0, (rk, x, idx))
+        rk, x, idx = body(0, (rk, x, 1))
+        return x
+
+    x = jax.lax.cond(cycle_index == 0, f_cycle, normal_cycle, rk, x, cycle_index)
 
     return x
 
