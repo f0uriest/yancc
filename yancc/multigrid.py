@@ -555,8 +555,14 @@ def _multigrid_cycle_recursive(
             operators[k].pitchgrid,
             interp_method,
         )
+        if smooth_method == "krylov":
+            Ayk = Ak.mv(yk)
+            alpha = jnp.linalg.lstsq(Ayk[:, None], rk)[0]
+        else:
+            alpha = 1.0
+
         if verbose:
-            err = jnp.linalg.norm(yk) / jnp.linalg.norm(x)
+            err = jnp.linalg.norm(alpha * yk) / jnp.linalg.norm(x)
             jax.debug.print(
                 "level={k}/{i} coarse_correction: {err:.3e}",
                 err=err,
@@ -565,7 +571,8 @@ def _multigrid_cycle_recursive(
                 ordered=True,
             )
 
-        x += yk
+        x += alpha * yk
+
         if verbose:
             rk = rhs - Ak.mv(x)
             err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
