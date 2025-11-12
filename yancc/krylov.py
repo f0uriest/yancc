@@ -207,7 +207,7 @@ def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
 def _maybe_print(flag, j, res, pre=""):
 
     def truefun():
-        jax.debug.print(pre + "iter={j:3d}   res={res:.3e}", j=j, res=res)
+        jax.debug.print(pre + "iter={j:3d}   res={res:.3e}", j=j, res=res, ordered=True)
 
     def falsefun():
         pass
