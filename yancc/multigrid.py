@@ -211,26 +211,36 @@ def get_fields_grids(
     return fields, grids
 
 
-@jax.jit
-def standard_smooth(x, operator, rhs, smoothers, nsteps=1):
+@functools.partial(jax.jit, static_argnames=["verbose"])
+def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
     def body(k, x):
-        for Mi in smoothers:
+        for i, Mi in enumerate(smoothers):
             Ax = operator.mv(x)
             r = rhs - Ax
             dx = Mi.mv(r)
             x += dx
+            if verbose:
+                r = rhs - operator.mv(x)
+                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+                jax.debug.print(
+                    "v={k} after {a} err: {err:.3e}",
+                    err=err,
+                    k=k,
+                    a=Mi.axorder[-1],
+                    ordered=True,
+                )
         return x
 
     x = jax.lax.fori_loop(0, nsteps, body, x)
     return x
 
 
-@jax.jit
-def krylov_smooth(x, operator, rhs, smoothers, nsteps=1):
+@functools.partial(jax.jit, static_argnames=["verbose"])
+def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
@@ -247,6 +257,16 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1):
             dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
             x += dx
+            if verbose:
+                r = rhs - operator.mv(x)
+                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+                jax.debug.print(
+                    "v={k} after {a} err: {err:.3e}",
+                    err=err,
+                    k=k,
+                    a=Mi.axorder[-1],
+                    ordered=True,
+                )
 
         Ax = operator.mv(x)
         r = rhs - Ax
@@ -509,7 +529,7 @@ def _multigrid_cycle_recursive(
         )
 
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv)
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=verbose > 2)
     rk = rhs - Ak.mv(x)
 
     if verbose:
@@ -585,7 +605,7 @@ def _multigrid_cycle_recursive(
             )
 
         vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        x = smooth(x, Ak, rhs, Mk, nsteps=vv)
+        x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=verbose > 2)
         rk = rhs - Ak.mv(x)
         if verbose:
             err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
