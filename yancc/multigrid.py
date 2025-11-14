@@ -57,7 +57,7 @@ def get_dke_operators(
     return operators
 
 
-@functools.partial(jax.jit, static_argnames=["p1", "p2", "smooth_solver"])
+@eqx.filter_jit
 def get_mdke_jacobi_smoothers(
     fields,
     pitchgrids,
@@ -93,7 +93,7 @@ def get_mdke_jacobi_smoothers(
     return smoothers
 
 
-@functools.partial(jax.jit, static_argnames=["p1", "p2", "smooth_solver"])
+@eqx.filter_jit
 def get_dke_jacobi_smoothers(
     fields,
     pitchgrids,
@@ -276,7 +276,81 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
         dr = -jnp.diff(rs, axis=0)
 
         alpha = jnp.linalg.lstsq(dr.T, rb)[0]
-        return x0 + dxs.T @ alpha
+        x = x0 + dxs.T @ alpha
+
+        if verbose:
+            Ax = operator.mv(x)
+            r = rhs - Ax
+            err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+            jax.debug.print(
+                "v={k} err: {err:.3e} alpha: {alpha}",
+                err=err,
+                k=k,
+                alpha=alpha,
+                ordered=True,
+            )
+
+        return x
+
+    x = jax.lax.fori_loop(0, nsteps, body, x)
+    return x
+
+
+@functools.partial(jax.jit, static_argnames=["verbose"])
+def krylov_smooth2(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+    """Apply smoothing operators to operator @ x = rhs"""
+    if not isinstance(smoothers, (tuple, list)):
+        smoothers = [smoothers]
+
+    def body(k, x0):
+        rs = jnp.empty((len(smoothers) + 1, rhs.size))
+        dxs = jnp.empty((len(smoothers), rhs.size))
+        x = x0
+        Ax = operator.mv(x)
+        r = rhs - Ax
+
+        for i, Mi in enumerate(smoothers):
+            rs = rs.at[i].set(r)
+            dx = Mi.mv(r)
+            dxs = dxs.at[i].set(dx)
+            Adx = operator.mv(dx)
+            c = jnp.linalg.lstsq(Adx[:, None], r)[0][0]
+            x += c * dx
+            r -= c * Adx
+            if verbose:
+                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+                jax.debug.print(
+                    "v={k} after {a} err: {err:.3e} c: {c:.3e}",
+                    err=err,
+                    k=k,
+                    c=c,
+                    a=Mi.axorder[-1],
+                    ordered=True,
+                )
+
+        Ax = operator.mv(x)
+        r = rhs - Ax
+        rs = rs.at[-1].set(r)
+
+        rb = rs[0]
+        dr = -jnp.diff(rs, axis=0)
+
+        alpha = jnp.linalg.lstsq(dr.T, rb)[0]
+        x = x0 + dxs.T @ alpha
+
+        if verbose:
+            Ax = operator.mv(x)
+            r = rhs - Ax
+            err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+            jax.debug.print(
+                "v={k} err: {err:.3e} alpha: {alpha}",
+                err=err,
+                k=k,
+                alpha=alpha,
+                ordered=True,
+            )
+
+        return x
 
     x = jax.lax.fori_loop(0, nsteps, body, x)
     return x
@@ -458,9 +532,10 @@ def multigrid_cycle(
         Method to use for smoothing.
     coarse_opinv: lx.AbstractLinearOperator
         Precomputed inverse of coarse grid operator.
-    coarse_overweight : float
+    coarse_overweight : {"auto1", "auto2"} or float
         Factor to weight coarse grid residuals by, to improve coarse grid correction
-        for closed characteristics.
+        for closed characteristics. If str, use an automatically determined value to
+        ensure strict decrease of the coarse grid residuals.
     verbose : int
         Level of verbosity:
           - 0: no into printed.
@@ -518,8 +593,12 @@ def _multigrid_cycle_recursive(
     Ak = operators[k]
     Mk = smoothers[k]
 
-    assert smooth_method in {"standard", "krylov"}
-    smooth = {"standard": standard_smooth, "krylov": krylov_smooth}[smooth_method]
+    assert smooth_method in {"standard", "krylov", "krylov2"}
+    smooth = {
+        "standard": standard_smooth,
+        "krylov": krylov_smooth,
+        "krylov2": krylov_smooth2,
+    }[smooth_method]
 
     if verbose:
         rk = rhs - Ak.mv(x)
@@ -541,7 +620,7 @@ def _multigrid_cycle_recursive(
     def body(i, state):
         rk, x, idx = state
 
-        rkm1 = coarse_overweight * interpolate(
+        rkm1 = interpolate(
             rk,
             operators[k].field,
             operators[k - 1].field,
@@ -575,19 +654,26 @@ def _multigrid_cycle_recursive(
             operators[k].pitchgrid,
             interp_method,
         )
-        if smooth_method == "krylov":
-            Ayk = Ak.mv(yk)
-            alpha = jnp.linalg.lstsq(Ayk[:, None], rk)[0]
+        if isinstance(coarse_overweight, str):
+            if coarse_overweight == "auto1":
+                Aykm1 = operators[k - 1].mv(ykm1)
+                alpha = jnp.linalg.lstsq(Aykm1[:, None], rkm1)[0][0]
+            elif coarse_overweight == "auto2":
+                Ayk = operators[k].mv(yk)
+                alpha = jnp.linalg.lstsq(Ayk[:, None], rk)[0][0]
+            else:
+                raise ValueError
         else:
-            alpha = 1.0
+            alpha = coarse_overweight
 
         if verbose:
             err = jnp.linalg.norm(alpha * yk) / jnp.linalg.norm(x)
             jax.debug.print(
-                "level={k}/{i} coarse_correction: {err:.3e}",
+                "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha:.3e}",
                 err=err,
                 k=k - 1,
                 i=i,
+                alpha=alpha,
                 ordered=True,
             )
 
@@ -709,7 +795,10 @@ class MultigridOperator(lx.AbstractLinearOperator):
         if coarse_opinv is None:
             coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
         self.coarse_opinv = coarse_opinv
-        self.coarse_overweight = jnp.asarray(coarse_overweight)
+        if not isinstance(coarse_overweight, str):
+            self.coarse_overweight = jnp.asarray(coarse_overweight)
+        else:
+            self.coarse_overweight = coarse_overweight
         self.verbose = verbose
 
     @eqx.filter_jit
