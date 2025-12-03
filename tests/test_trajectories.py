@@ -410,3 +410,257 @@ def test_diagonals_mdke_full(gauge, axorder, field, pitchgrid):
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_speed(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    E_psi = np.array(1e3)
+
+    f = trajectories.DKESpeed(
+        field, pitchgrid, speedgrid, species2, E_psi, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_theta(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    E_psi = np.array(1e3)
+
+    for p1 in ["2d", "4d"]:
+        f = trajectories.DKETheta(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            E_psi,
+            p1=p1,
+            axorder=axorder,
+            gauge=gauge,
+        )
+        A = f.as_matrix()
+        B = extract_blocks(
+            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
+        )
+        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_zeta(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    E_psi = np.array(1e3)
+
+    for p1 in ["2d", "4d"]:
+        f = trajectories.DKEZeta(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            E_psi,
+            p1=p1,
+            axorder=axorder,
+            gauge=gauge,
+        )
+        A = f.as_matrix()
+        B = extract_blocks(
+            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
+        )
+        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_pitch(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    E_psi = np.array(1e3)
+
+    for p1 in ["2d", "4d"]:
+        f = trajectories.DKEPitch(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            E_psi,
+            p1=p1,
+            axorder=axorder,
+            gauge=gauge,
+        )
+        A = f.as_matrix()
+        B = extract_blocks(
+            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
+        )
+        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_pitch_angle_scattering(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+
+    for p2 in [2, 4]:
+        f = PitchAngleScattering(
+            field, pitchgrid, speedgrid, species2, p2=p2, axorder=axorder, gauge=gauge
+        )
+        A = f.as_matrix()
+        B = extract_blocks(
+            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
+        )
+        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_energy_scattering(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+
+    f = EnergyScattering(
+        field, pitchgrid, speedgrid, species2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_CD(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FieldPartCD(
+        field, pitchgrid, speedgrid, species2, potentials2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_CG(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FieldPartCG(
+        field, pitchgrid, speedgrid, species2, potentials2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_CH(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FieldPartCH(
+        field, pitchgrid, speedgrid, species2, potentials2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_full(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    E_psi = np.array(1e3)
+
+    f = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        E_psi,
+        potentials2,
+        "2d",
+        4,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)

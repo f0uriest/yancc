@@ -257,7 +257,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         if self.nx > 1:
             gauge_idx2 = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[1])
             gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
-        self.gauge_idx = gauge_idx
+        self.gauge_idx = jnp.sort(gauge_idx)
 
 
 class UniformSpeedGrid(AbstractSpeedGrid):
