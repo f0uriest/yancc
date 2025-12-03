@@ -255,7 +255,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         if self.nx > 1:
             gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
             gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
-        self.gauge_idx = gauge_idx
+        self.gauge_idx = jnp.sort(gauge_idx)
 
     def _dfdx(self, f):
         # this only knows about a single species,

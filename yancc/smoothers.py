@@ -1,5 +1,6 @@
 """Smoothing operators for multigrid."""
 
+import itertools
 import warnings
 from typing import Optional
 
@@ -112,7 +113,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
         if weight is None:
-            weight = optimal_smoothing_parameter_3d(p1, p2, nu, axorder)
+            weight = optimal_smoothing_parameter_3d(p1, p2, nu, axorder[-1])
         self.weight = jnp.atleast_1d(jnp.array(weight))
 
         mats = MDKE(
@@ -253,9 +254,9 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 nu = nustar(spa, field, x)
                 nus.append(nu)
             nus = jnp.asarray(nus)
-            _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder)
-            weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
-            weight = weight * jnp.ones((1, 1, pitchgrid.nxi, field.ntheta, field.nzeta))
+            _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
+            wght = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
+            weight = wght * jnp.ones((1, 1, pitchgrid.nxi, field.ntheta, field.nzeta))
         self.weight = jnp.asarray(weight).flatten()
 
         mats = DKE(
@@ -338,9 +339,178 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         return lx.FunctionLinearOperator(fun, x)
 
 
+class DKEJacobi2Smoother(lx.AbstractLinearOperator):
+    """Block diagonal smoother for DKE, keeping coupling in s,x.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : MaxwellSpeedGrid
+        Grid of coordinates in speed.
+    species : list[LocalMaxwellian]
+        Species being considered
+    E_psi : float
+        Normalized electric field, E_psi/v
+    p1 : int
+        Order of approximation for first derivatives.
+    p2 : int
+        Order of approximation for second derivatives.
+    axorder : {"atz", "zat", "tza"}
+        Ordering for variables in f, eg how the 3d array is flattened
+    gauge : bool
+        Whether to impose gauge constraint by fixing f at a single point on the surface.
+    smooth_solver : {"banded", "dense"}
+        Solver to use for inverting the smoother. "banded" is significantly faster in
+        most cases but may be numerically unstable in some edge cases. "dense" is
+        slower but more robust.
+    weight : array-like, optional
+        Under-relaxation parameter.
+    operator_weights : array-like, optional
+
+
+    """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: MaxwellSpeedGrid
+    species: list[LocalMaxwellian]
+    p1: str = eqx.field(static=True)
+    p2: int = eqx.field(static=True)
+    axorder: str = eqx.field(static=True)
+    bandwidth: int = eqx.field(static=True)
+    smooth_solver: str = eqx.field(static=True)
+    mats: jax.Array
+    weight: jax.Array
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: MaxwellSpeedGrid,
+        species: list[LocalMaxwellian],
+        E_psi: Float[ArrayLike, ""],
+        potentials: Optional[RosenbluthPotentials] = None,
+        p1="2d",
+        p2=2,
+        axorder="atzsx",
+        gauge: Bool[ArrayLike, ""] = True,
+        smooth_solver="dense",
+        weight: Optional[jax.Array] = None,
+        operator_weights: Optional[jax.Array] = None,
+    ):
+        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
+        assert axorder[-2:] == "sx"
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        self.p1 = p1
+        self.p2 = p2
+        self.axorder = axorder
+        assert smooth_solver in {"banded", "dense"}
+        self.smooth_solver = smooth_solver
+        self.bandwidth = max(
+            fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+        )
+        if weight is None:
+            x = speedgrid.x
+            nus = []
+            for spa in species:
+                nu = nustar(spa, field, x)
+                nus.append(nu)
+            nus = jnp.asarray(nus)
+            _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
+            wght = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
+            weight = wght * jnp.ones((1, 1, pitchgrid.nxi, field.ntheta, field.nzeta))
+        self.weight = jnp.asarray(weight).flatten()
+
+        mats = DKE(
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            E_psi,
+            potentials=potentials,
+            p1=p1,
+            p2=p2,
+            axorder=axorder,
+            gauge=gauge,
+            operator_weights=operator_weights,
+        ).block_diagonal2()
+
+        if self.smooth_solver == "banded":
+            raise NotImplementedError()
+        else:
+            self.mats = jnp.linalg.inv(mats)
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix vector product."""
+        x = vector
+        permute = lambda f: permute_f_4d(
+            f, self.field, self.pitchgrid, self.speedgrid, self.species, self.axorder
+        )
+        x = jax.linear_transpose(permute, x)(x)[0]
+
+        if self.smooth_solver == "banded":
+            raise NotImplementedError()
+        else:
+            size, N, M = self.mats.shape
+            x = x.reshape(size, M)
+            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+
+        return self.weight * permute(b.flatten())
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        x = jnp.zeros(self.in_size())
+
+        def fun(y):
+            return jax.linear_transpose(self.mv, x)(y)[0]
+
+        return lx.FunctionLinearOperator(fun, x)
+
+
 @lx.is_symmetric.register(DKEJacobiSmoother)
 @lx.is_diagonal.register(DKEJacobiSmoother)
 @lx.is_tridiagonal.register(DKEJacobiSmoother)
+@lx.is_symmetric.register(DKEJacobi2Smoother)
+@lx.is_diagonal.register(DKEJacobi2Smoother)
+@lx.is_tridiagonal.register(DKEJacobi2Smoother)
 @lx.is_symmetric.register(MDKEJacobiSmoother)
 @lx.is_diagonal.register(MDKEJacobiSmoother)
 @lx.is_tridiagonal.register(MDKEJacobiSmoother)
@@ -348,7 +518,7 @@ def _(operator):
     return False
 
 
-def optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder):
+def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
     """Approximate best relaxation parameter for block jacobi smoother for MDKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
     nus = jnp.array([-6, -4, -2, 0, 2])
@@ -359,18 +529,18 @@ def optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder):
             "conservative default of w=0.1"
         )
         return jnp.array(0.1)  # conservative guess
-    if axorder[-1] not in OPTIMAL_SMOOTHING_COEFFS_3D[method]:
+    if ax not in OPTIMAL_SMOOTHING_COEFFS_3D[method]:
         warnings.warn(
-            f"No optimal smoothing parameter for axorder={axorder}, using "
+            f"No optimal smoothing parameter for ax={ax}, using "
             "conservative default of w=0.1"
         )
         return jnp.array(0.1)  # conservative guess
-    c = OPTIMAL_SMOOTHING_COEFFS_3D[method][axorder[-1]]
+    c = OPTIMAL_SMOOTHING_COEFFS_3D[method][ax]
     w = interpax.interp1d(nu, nus, c, method="linear", extrap=(c[0], c[-1]))
     return jnp.clip(w, 0.1, 1.0)
 
 
-def optimal_smoothing_parameter_4d(p1, p2, nuhat, axorder):
+def optimal_smoothing_parameter_4d(p1, p2, nuhat, ax):
     """Approximate best relaxation parameter for block jacobi smoother for DKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
     nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
@@ -381,13 +551,13 @@ def optimal_smoothing_parameter_4d(p1, p2, nuhat, axorder):
             "conservative default of w=0.01"
         )
         return jnp.array(0.01)  # conservative guess
-    if axorder[-1] not in OPTIMAL_SMOOTHING_COEFFS_4D[method]:
+    if ax not in OPTIMAL_SMOOTHING_COEFFS_4D[method]:
         warnings.warn(
-            f"No optimal smoothing parameter for axorder={axorder}, using "
+            f"No optimal smoothing parameter for ax={ax}, using "
             "conservative default of w=0.01"
         )
         return jnp.array(0.01)  # conservative guess
-    c = OPTIMAL_SMOOTHING_COEFFS_4D[method][axorder[-1]]
+    c = OPTIMAL_SMOOTHING_COEFFS_4D[method][ax]
     w = interpax.interp1d(nu, nus, c, method="linear", extrap=(c[0], c[-1]))
     return jnp.clip(w, 0.01, 1.0)
 

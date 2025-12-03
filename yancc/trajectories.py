@@ -1,5 +1,7 @@
 """Drift Kinetic Operators without collisions."""
 
+import functools
+import itertools
 from typing import Optional
 
 import equinox as eqx
@@ -17,7 +19,7 @@ from .collisions import (
 from .field import Field
 from .finite_diff import fd_coeffs, fdbwd, fdfwd
 from .species import LocalMaxwellian
-from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
+from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _refold
 from .velocity_grids import (
     AbstractSpeedGrid,
     MaxwellSpeedGrid,
@@ -786,7 +788,7 @@ class DKETheta(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert field.ntheta > fd_coeffs[1][p1].size // 2
         assert field.ntheta > fd_coeffs[2][p2].size // 2
         self.field = field
@@ -920,6 +922,71 @@ class DKETheta(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
         return df
 
+    @eqx.filter_jit
+    def block_diagonal2(self):
+        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
+        assert self.axorder[-2:] == "sx"
+        if self.axorder[2] == "a":
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nxi
+            )
+        if self.axorder[2] == "z":
+            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
+
+        shape, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nxi,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        f = jnp.ones(self.field.ntheta)
+        vth = jnp.array([s.v_thermal for s in self.species])
+        w = sfincs_w_theta(
+            self.field,
+            self.pitchgrid,
+            self.E_psi,
+            self.speedgrid.x[None, :] * vth[:, None],
+        )
+        Is = jnp.eye(len(self.species))
+        Ix = jnp.eye(self.speedgrid.nx)
+
+        h = 2 * np.pi / self.field.ntheta
+        fd = jax.jacfwd(fdfwd)(f, self.p1, h=h, bc="periodic")
+        bd = jax.jacfwd(fdbwd)(f, self.p1, h=h, bc="periodic")
+
+        ff = [fd, Is, Ix]
+        bb = [bd, Is, Ix]
+
+        ff = functools.reduce(jnp.kron, ff)
+        bb = functools.reduce(jnp.kron, bb)
+
+        w = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
+        w = w.reshape(w.shape[0] * w.shape[1], -1, 1)
+        df = w * ((w > 0) * bb + (w <= 0) * ff)
+        df = df.reshape(*shape, self.field.ntheta, len(self.species), self.speedgrid.nx)
+        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        idxs = jnp.arange(len(self.species))
+        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
+        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
+
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :, :, :]
+            .set(0)
+            .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
+            .set(scale),
+            df,
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        N = self.in_size()
+        M = self.field.ntheta * len(self.species) * self.speedgrid.nx
+        return df.reshape(N // M, M, M)
+
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
         x = jnp.eye(self.in_size())
@@ -1009,7 +1076,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert field.nzeta > fd_coeffs[1][p1].size // 2
         assert field.nzeta > fd_coeffs[2][p2].size // 2
         self.field = field
@@ -1143,6 +1210,71 @@ class DKEZeta(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
         return df
 
+    @eqx.filter_jit
+    def block_diagonal2(self):
+        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
+        assert self.axorder[-2:] == "sx"
+        if self.axorder[2] == "a":
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nxi
+            )
+        if self.axorder[2] == "t":
+            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
+
+        shape, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nxi,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        f = jnp.ones(self.field.nzeta)
+        vth = jnp.array([s.v_thermal for s in self.species])
+        w = sfincs_w_zeta(
+            self.field,
+            self.pitchgrid,
+            self.E_psi,
+            self.speedgrid.x[None, :] * vth[:, None],
+        )
+        Is = jnp.eye(len(self.species))
+        Ix = jnp.eye(self.speedgrid.nx)
+
+        h = 2 * np.pi / self.field.nzeta / self.field.NFP
+        fd = jax.jacfwd(fdfwd)(f, self.p1, h=h, bc="periodic")
+        bd = jax.jacfwd(fdbwd)(f, self.p1, h=h, bc="periodic")
+
+        ff = [fd, Is, Ix]
+        bb = [bd, Is, Ix]
+
+        ff = functools.reduce(jnp.kron, ff)
+        bb = functools.reduce(jnp.kron, bb)
+
+        w = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
+        w = w.reshape(w.shape[0] * w.shape[1], -1, 1)
+        df = w * ((w > 0) * bb + (w <= 0) * ff)
+        df = df.reshape(*shape, self.field.nzeta, len(self.species), self.speedgrid.nx)
+        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        idxs = jnp.arange(len(self.species))
+        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
+        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
+
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :, :, :]
+            .set(0)
+            .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
+            .set(scale),
+            df,
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        N = self.in_size()
+        M = self.field.nzeta * len(self.species) * self.speedgrid.nx
+        return df.reshape(N // M, M, M)
+
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
         x = jnp.eye(self.in_size())
@@ -1232,7 +1364,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
         self.field = field
@@ -1369,6 +1501,71 @@ class DKEPitch(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
         return df
 
+    @eqx.filter_jit
+    def block_diagonal2(self):
+        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
+        assert self.axorder[-2:] == "sx"
+        if self.axorder[2] == "t":
+            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
+        if self.axorder[2] == "z":
+            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
+
+        shape, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nxi,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        f = jnp.ones(self.pitchgrid.nxi)
+        vth = jnp.array([s.v_thermal for s in self.species])
+        w = sfincs_w_pitch(
+            self.field,
+            self.pitchgrid,
+            self.E_psi,
+            self.speedgrid.x[None, :] * vth[:, None],
+        )
+        Is = jnp.eye(len(self.species))
+        Ix = jnp.eye(self.speedgrid.nx)
+
+        h = np.pi / self.pitchgrid.nxi
+        fd = jax.jacfwd(fdfwd)(f, self.p1, h=h, bc="symmetric")
+        bd = jax.jacfwd(fdbwd)(f, self.p1, h=h, bc="symmetric")
+
+        ff = [fd, Is, Ix]
+        bb = [bd, Is, Ix]
+
+        ff = functools.reduce(jnp.kron, ff)
+        bb = functools.reduce(jnp.kron, bb)
+
+        w = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
+        w = w.reshape(w.shape[0] * w.shape[1], -1, 1)
+        df = w * ((w > 0) * bb + (w <= 0) * ff)
+        df = df.reshape(
+            *shape, self.pitchgrid.nxi, len(self.species), self.speedgrid.nx
+        )
+        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        idxs = jnp.arange(len(self.species))
+        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
+        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
+
+        scale = jnp.mean(jnp.abs(w)) / h
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0, :, :, :]
+            .set(0)
+            .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
+            .set(scale),
+            df,
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        N = self.in_size()
+        M = self.pitchgrid.nxi * len(self.species) * self.speedgrid.nx
+        return df.reshape(N // M, M, M)
+
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
         x = jnp.eye(self.in_size())
@@ -1447,7 +1644,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1560,6 +1757,21 @@ class DKESpeed(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.speedgrid.nx, self.speedgrid.nx))
         return df
 
+    @eqx.filter_jit
+    def block_diagonal2(self):
+        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
+        assert self.axorder[-2:] == "sx"
+        if self.axorder[2] == "a":
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nxi
+            )
+        if self.axorder[2] == "t":
+            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
+        if self.axorder[2] == "z":
+            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
+        else:
+            raise ValueError()
+
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
         x = jnp.eye(self.in_size())
@@ -1658,7 +1870,7 @@ class DKE(lx.AbstractLinearOperator):
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: Optional[jax.Array] = None,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1742,6 +1954,24 @@ class DKE(lx.AbstractLinearOperator):
         d2 = self._opt.block_diagonal()
         d3 = self._opz.block_diagonal()
         d4 = self._C.block_diagonal()
+        eye = jnp.broadcast_to(jnp.identity(d0.shape[1]), d0.shape)
+        return (
+            self.operator_weights[0] * d0
+            + self.operator_weights[1] * d1
+            + self.operator_weights[2] * d2
+            + self.operator_weights[3] * d3
+            + d4
+            + self.operator_weights[-1] * eye
+        )
+
+    @eqx.filter_jit
+    def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
+        """Block diagonal of operator as (N,M,M) array."""
+        d0 = self._opx.block_diagonal2()
+        d1 = self._opa.block_diagonal2()
+        d2 = self._opt.block_diagonal2()
+        d3 = self._opz.block_diagonal2()
+        d4 = self._C.block_diagonal2()
         eye = jnp.broadcast_to(jnp.identity(d0.shape[1]), d0.shape)
         return (
             self.operator_weights[0] * d0
