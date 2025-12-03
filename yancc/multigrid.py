@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import lineax as lx
 
 from .linalg import InverseLinearOperator
-from .smoothers import DKEJacobiSmoother, MDKEJacobiSmoother
+from .smoothers import DKEJacobi2Smoother, DKEJacobiSmoother, MDKEJacobiSmoother
 from .trajectories import DKE, MDKE
 from .velocity_grids import UniformPitchAngleGrid
 
@@ -133,6 +133,46 @@ def get_dke_jacobi_smoothers(
     return smoothers
 
 
+@eqx.filter_jit
+def get_dke_jacobi2_smoothers(
+    fields,
+    pitchgrids,
+    speedgrid,
+    species,
+    E_psi,
+    potentials,
+    p1,
+    p2,
+    gauge,
+    smooth_solver,
+    weight,
+    **options,
+):
+    """Get multigrid smoothers for each field, pitchgrid."""
+    smoothers = []
+    for field, pitchgrid in zip(fields, pitchgrids):
+        smooth = [
+            DKEJacobi2Smoother(
+                field,
+                pitchgrid,
+                speedgrid,
+                species,
+                E_psi,
+                potentials,
+                p1=p1,
+                p2=p2,
+                axorder=order,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=weight,
+                **options,
+            )
+            for order in ["atzsx", "tzasx", "zatsx"]
+        ]
+        smoothers.append(smooth)
+    return smoothers
+
+
 def _half_next_even(k, m=2):
     if int(k // m) == 0:
         return 2
@@ -230,7 +270,7 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                     "v={k} after {a} err: {err:.3e}",
                     err=err,
                     k=k,
-                    a=Mi.axorder[-1],
+                    a=Mi.axorder,
                     ordered=True,
                 )
         return x
@@ -264,7 +304,7 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                     "v={k} after {a} err: {err:.3e}",
                     err=err,
                     k=k,
-                    a=Mi.axorder[-1],
+                    a=Mi.axorder,
                     ordered=True,
                 )
 
