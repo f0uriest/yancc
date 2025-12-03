@@ -131,7 +131,7 @@ def fd2(f, p, h=1, bc="periodic", axis=0):
 
 @functools.partial(jnp.vectorize, signature="(n)->(n)", excluded=[1, 2])
 def _fdctr(f, dx, bc="periodic"):
-    assert bc in {"periodic", "symmetric"}
+    assert bc in {"periodic", "symmetric", "speed"}
     m = len(dx)
     f1 = f2 = jnp.zeros(m)
     if bc == "symmetric":
@@ -140,6 +140,9 @@ def _fdctr(f, dx, bc="periodic"):
     elif bc == "periodic":
         f1 = f[-m:]
         f2 = f[:m]
+    elif bc == "speed":
+        f1 = f[:m][::-1]
+        f2 = jnp.zeros_like(f1)
     fpad = jnp.concatenate([f1, f, f2])
     df = jnp.convolve(fpad, dx[::-1], "valid")
     offset = (df.size - f.size) // 2
