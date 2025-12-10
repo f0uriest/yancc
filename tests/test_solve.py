@@ -4,6 +4,7 @@ import time
 
 import jax
 import numpy as np
+import pytest
 
 from yancc.field import Field
 from yancc.solve import solve_mdke
@@ -42,7 +43,10 @@ def _read_monkes_dat(path):
     return data
 
 
-def test_solve_mdke_w7x_eim():
+# idx are chosen to have nu~1e-2-1e0, er~0,1e-3
+# this is a reasonable range for testing at low resolution
+@pytest.mark.parametrize("idx", [15, 20, 25, 51, 56, 61])
+def test_solve_mdke_w7x_eim(idx):
     config = {
         "dat_path": "tests/data/monkes_Monoenergetic_Database_w7x_eim.dat",
         "booz_path": "tests/data/boozmn_wout_w7x_eim.nc",
@@ -55,66 +59,104 @@ def test_solve_mdke_w7x_eim():
     }
     data_fortran = _read_monkes_dat(config["dat_path"])
 
-    # these are chosen to have nu~1e-2-1e0, er~0,1e-3
-    # this is a reasonable range for testing at low resolution
-    idxs = [15, 20, 25, 51, 56, 61]
-
     nt = 17
     nz = 33
     nl = 65
     field = Field.from_booz_xform(config["booz_path"], config["s"], nt, nz, cutoff=1e-5)
     pitchgrid = UniformPitchAngleGrid(nl)
 
-    for i in idxs:
-        erhat = data_fortran["erhat"][i]
-        nuhat = data_fortran["nuhat"][i]
-        print(f"Running i={i}, nuhat={nuhat:.3e}, erhat={erhat:.3e}")
-        t1 = time.perf_counter()
-        Dij, x, rhs, info = jax.block_until_ready(
-            solve_mdke(
-                field, pitchgrid, erhat / field.psi_r * 2 * np.pi, nuhat, coarse_N=1000
-            )
-        )
-        t2 = time.perf_counter()
-        print(f"Took {t2-t1:.3e} s")
-        print(info)
+    erhat = data_fortran["erhat"][idx]
+    nuhat = data_fortran["nuhat"][idx]
+    print(f"Running i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}")
+    t1 = time.perf_counter()
+    Dij, x, rhs, info = jax.block_until_ready(
+        solve_mdke(field, pitchgrid, erhat / field.psi_r, nuhat, coarse_N=1000)
+    )
+    t2 = time.perf_counter()
+    print(f"Took {t2-t1:.3e} s")
+    print(info)
 
-        D11_yancc = Dij[0, 0] * config["K11"]
-        D31_yancc = Dij[2, 0] * config["K31"]
-        D13_yancc = Dij[0, 2] * config["K13"]
-        D33_yancc = Dij[2, 2] * config["K33"]
-        np.testing.assert_allclose(
-            D11_yancc,
-            data_fortran["D11"][i],
-            rtol=5e-2,
-            err_msg=f"i={i}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
-        )
-        np.testing.assert_allclose(
-            D31_yancc,
-            data_fortran["D31"][i],
-            rtol=5e-2,
-            atol=1e-4,  # these can be near zero
-            err_msg=f"i={i}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
-        )
-        np.testing.assert_allclose(
-            D13_yancc,
-            data_fortran["D13"][i],
-            rtol=5e-2,
-            atol=1e-4,  # these can be near zero
-            err_msg=f"i={i}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
-        )
-        np.testing.assert_allclose(
-            D33_yancc,
-            data_fortran["D33"][i],
-            rtol=5e-2,
-            err_msg=f"i={i}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
-        )
+    D11_yancc = Dij[0, 0] * config["K11"]
+    D31_yancc = Dij[2, 0] * config["K31"]
+    D13_yancc = Dij[0, 2] * config["K13"]
+    D33_yancc = Dij[2, 2] * config["K33"]
+    np.testing.assert_allclose(
+        D11_yancc,
+        data_fortran["D11"][idx],
+        rtol=5e-2,
+        err_msg=f"i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
+    )
+    np.testing.assert_allclose(
+        D31_yancc,
+        data_fortran["D31"][idx],
+        rtol=5e-2,
+        atol=1e-4,  # these can be near zero
+        err_msg=f"i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
+    )
+    np.testing.assert_allclose(
+        D13_yancc,
+        data_fortran["D13"][idx],
+        rtol=5e-2,
+        atol=1e-4,  # these can be near zero
+        err_msg=f"i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
+    )
+    np.testing.assert_allclose(
+        D33_yancc,
+        data_fortran["D33"][idx],
+        rtol=5e-2,
+        err_msg=f"i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
+    )
 
-        # also check onsager symmetry
-        np.testing.assert_allclose(
-            D31_yancc,
-            -D13_yancc,
-            rtol=1e-2,
-            atol=1e-4,  # these can be near zero
-            err_msg=f"i={i}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
-        )
+    # also check onsager symmetry
+    np.testing.assert_allclose(
+        D31_yancc,
+        -D13_yancc,
+        rtol=1e-2,
+        atol=1e-4,  # these can be near zero
+        err_msg=f"i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}",
+    )
+
+
+@pytest.mark.parametrize("nu", [1e-2, 1e1])
+@pytest.mark.parametrize("er", [0.0, 1e-2])
+def test_solve_field_types(nu, er):
+    """Test solving the MDKE with the same physical field in different coordinates."""
+    import desc  # pyright: ignore[reportMissingImports]
+
+    eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
+
+    nt = 17
+    nz = 37
+    rho = 0.5
+    s = rho**2
+
+    field1 = Field.from_desc(eq, rho, nt, nz)
+    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", s, nt, nz)
+    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", s, nt, nz)
+    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", s, nt, nz)
+    pitchgrid = UniformPitchAngleGrid(73)
+
+    D1, f1, rhs1, info1 = solve_mdke(field1, pitchgrid, er, nu)
+    D2, f2, rhs2, info2 = solve_mdke(field2, pitchgrid, er, nu)
+    D3, f3, rhs3, info3 = solve_mdke(field3, pitchgrid, er, nu)
+    D4, f4, rhs4, info4 = solve_mdke(field4, pitchgrid, er, nu)
+    print(info1)
+    print(info2)
+    print(info3)
+    print(info4)
+
+    np.testing.assert_allclose(D1[0, 0], D2[0, 0], rtol=1e-2, atol=0)
+    np.testing.assert_allclose(D1[0, 0], D3[0, 0], rtol=2e-2, atol=0)
+    np.testing.assert_allclose(D1[0, 0], D4[0, 0], rtol=2e-2, atol=0)
+
+    np.testing.assert_allclose(D1[0, 2], D2[0, 2], rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(D1[0, 2], D3[0, 2], rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(D1[0, 2], D4[0, 2], rtol=1e-2, atol=1e-2)
+
+    np.testing.assert_allclose(D1[2, 0], D2[2, 0], rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(D1[2, 0], D3[2, 0], rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(D1[2, 0], D4[2, 0], rtol=1e-2, atol=1e-2)
+
+    np.testing.assert_allclose(D1[2, 2], D2[2, 2], rtol=1e-2, atol=0)
+    np.testing.assert_allclose(D1[2, 2], D3[2, 2], rtol=1e-2, atol=0)
+    np.testing.assert_allclose(D1[2, 2], D4[2, 2], rtol=1e-2, atol=0)
