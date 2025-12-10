@@ -806,7 +806,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
     coarse_opinv: InverseLinearOperator
-    coarse_overweight: jax.Array
+    coarse_overweight: Union[str, jax.Array]
     verbose: int = eqx.field(static=True)
 
     def __init__(
