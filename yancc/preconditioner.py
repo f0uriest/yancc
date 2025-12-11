@@ -10,6 +10,7 @@ from .collisions import RosenbluthPotentials
 from .field import Field
 from .multigrid import (
     MultigridOperator,
+    get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     get_dke_operators,
     get_fields_grids,
@@ -171,6 +172,7 @@ class DKEPreconditioner(MultigridOperator):
         coarse_overweight = options.pop("coarse_overweight", 1)
         interp_method = options.pop("interp_method", "linear")
         smooth_method = options.pop("smooth_method", "standard")
+        smooth_type = options.pop("smooth_type", 1)
         verbose = options.pop("verbose", False)
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
@@ -202,21 +204,36 @@ class DKEPreconditioner(MultigridOperator):
             gauge=gauge,
             **options,
         )
-        smoothers = get_dke_jacobi_smoothers(
-            fields=fields,
-            pitchgrids=grids,
-            speedgrid=speedgrid,
-            species=species,
-            E_psi=E_psi,
-            potentials=potentials,
-            p1=self.p1,
-            p2=self.p2,
-            gauge=gauge,
-            smooth_solver=smooth_solver,
-            weight=smooth_weights,
-            **options,
-        )
-
+        if smooth_type == 1:
+            smoothers = get_dke_jacobi_smoothers(
+                fields=fields,
+                pitchgrids=grids,
+                speedgrid=speedgrid,
+                species=species,
+                E_psi=E_psi,
+                potentials=potentials,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+                **options,
+            )
+        else:
+            smoothers = get_dke_jacobi2_smoothers(
+                fields=fields,
+                pitchgrids=grids,
+                speedgrid=speedgrid,
+                species=species,
+                E_psi=E_psi,
+                potentials=potentials,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+                **options,
+            )
         super().__init__(
             operators=operators[::-1],
             smoothers=smoothers[::-1],
