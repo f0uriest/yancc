@@ -23,14 +23,29 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
+        combos: [{group: 1, python_version: '3.10'},
+                 {group: 2, python_version: '3.10'},
+                 {group: 3, python_version: '3.10'},
+                 {group: 4, python_version: '3.10'},
+                 {group: 1, python_version: '3.11'},
+                 {group: 2, python_version: '3.11'},
+                 {group: 3, python_version: '3.11'},
+                 {group: 4, python_version: '3.11'},
+                 {group: 1, python_version: '3.12'},
+                 {group: 2, python_version: '3.12'},
+                 {group: 3, python_version: '3.12'},
+                 {group: 4, python_version: '3.12'},
+                 {group: 1, python_version: '3.13'},
+                 {group: 2, python_version: '3.13'},
+                 {group: 3, python_version: '3.13'},
+                 {group: 4, python_version: '3.13'}]
 
     steps:
       - uses: actions/checkout@v6
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python ${{ matrix.combos.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.combos.python-version }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -40,12 +55,20 @@ jobs:
         run: |
           pwd
           lscpu
-          python -m pytest -v --durations=0 --cov-report xml:cov.xml --cov-config=setup.cfg --cov=yancc/ --db ./prof.db
+          python -m pytest -v  \
+            --durations=0 \
+            --cov-report xml:cov.xml \
+            --cov-config=setup.cfg \
+            --cov=yancc/ \
+            --splits 4 \
+            --group ${{ matrix.combos.group }} \
+            --splitting-algorithm least_duration \
+            --db ./prof.db
       - name: save coverage file and plot comparison results
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: unit_test_artifact_${{ matrix.python-version }}
+          name: unit_test_artifact-${{ matrix.combos.python_version }}-${{ matrix.combos.group }}
           path: |
             ./cov.xml
             ./prof.db
