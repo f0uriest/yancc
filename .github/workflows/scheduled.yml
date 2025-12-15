@@ -54,7 +54,7 @@ jobs:
             --db ./prof.db
       - name: save coverage file and plot comparison results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: unit_test_artifact-${{ matrix.combos.python_version }}-${{ matrix.combos.group }}
           path: |
