@@ -3,6 +3,7 @@
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 from scipy.constants import elementary_charge, proton_mass
 
 from .field import Field
@@ -416,6 +417,19 @@ def compute_fluxes(
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
+
+    f = f.flatten()
+    shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
+    N = np.prod(shape)
+    if f.size == N:
+        f = f.reshape(shape)
+        particle_source = jnp.empty(0)
+        heat_source = jnp.empty(0)
+    elif f.size == N + 2 * len(species):
+        heat_source = f[-len(species) :]
+        particle_source = f[-2 * len(species) : -len(species)]
+        f = f[:N].reshape(shape)
+
     vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
     ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
@@ -462,6 +476,8 @@ def compute_fluxes(
         "bootstrap_current": bootstrap_current,
         "radial_current": radial_current,
         "Jpar": Jpar,
+        "heat_source": heat_source,
+        "particle_source": particle_source,
     }
 
     return fluxes
