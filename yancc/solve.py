@@ -252,4 +252,9 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
     )
     shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
 
-    return f1[: np.prod(shape)].reshape(shape), rhs.reshape(shape), fluxes, stats
+    return (
+        f1[: np.prod(shape)].reshape(shape),
+        rhs[: np.prod(shape)].reshape(shape),
+        fluxes,
+        stats,
+    )
