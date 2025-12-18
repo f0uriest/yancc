@@ -195,7 +195,7 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         p2=p2a,
         gauge=True,
     )
-    if verbose:
+    if verbose or print_every:
         for iop, op in enumerate(M.operators):
             assert isinstance(op, DKE)
             print(
