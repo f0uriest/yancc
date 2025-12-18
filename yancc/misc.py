@@ -396,20 +396,22 @@ def compute_fluxes(
 
     Returns
     -------
-    Γₐ : jax.Array, shape(ns)
-        Particle flux for each species.
-    Qₐ : jax.Array, shape(ns)
-        Heat flux for each species.
-    V|| : jax.Array, shape(ns, nt, nz)
-        Parallel velocity for each species
-    〈BV||〉: jax.Array, shape(ns)
-        Flux surface average field*parallel velocity for each species
-    〈J||B〉: float
-        Bootstrap current.
-    Jr : float
-        Radial current.
-    J|| : jax.Array, shape(nt, nz)
-        Parallel current density.
+    fluxes: dict of ndarray
+        Contains:
+        particle_flux : jax.Array, shape(ns)
+            Γₐ = Particle flux for each species.
+        heat_flux : jax.Array, shape(ns)
+            Qₐ = Heat flux for each species.
+        Vpar : jax.Array, shape(ns, nt, nz)
+            V|| = Parallel velocity for each species
+        BVpar: jax.Array, shape(ns)
+            〈BV||〉 = Flux surface average field*parallel velocity for each species
+        bootstrap_current: float
+            〈J||B〉 = Bootstrap current.
+        radial_current : float
+            Jr = Radial current.
+        Jpar : jax.Array, shape(nt, nz)
+            J|| = Parallel current density.
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
@@ -451,12 +453,14 @@ def compute_fluxes(
     radial_current = radial_current.sum(axis=(0, 1, 2, 3, 4))
     Jpar = Jpar.sum(axis=(0, 1, 2))
 
-    return (
-        particle_flux,
-        heat_flux,
-        Vpar,
-        BVpar,
-        bootstrap_current,
-        radial_current,
-        Jpar,
-    )
+    fluxes = {
+        "particle_flux": particle_flux,
+        "heat_flux": heat_flux,
+        "Vpar": Vpar,
+        "BVpar": BVpar,
+        "bootstrap_current": bootstrap_current,
+        "radial_current": radial_current,
+        "Jpar": Jpar,
+    }
+
+    return fluxes
