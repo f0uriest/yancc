@@ -11,7 +11,7 @@ from yancc.trajectories import dkes_w_pitch, dkes_w_theta, dkes_w_zeta
 def dfdtheta(
     field,
     pitchgrid,
-    E_psi,
+    erhohat,
     p="1a",
     gauge=False,
 ):
@@ -23,8 +23,8 @@ def dfdtheta(
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
     p : str
         Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
         formal order of accuracy, letter denotes degree of upwinding. "a" is fully
@@ -38,7 +38,7 @@ def dfdtheta(
     """
     assert field.ntheta > fd_coeffs[1][p].size // 2
 
-    w = np.array(dkes_w_theta(field, pitchgrid, E_psi).flatten())[:, None]
+    w = np.array(dkes_w_theta(field, pitchgrid, erhohat).flatten())[:, None]
     h = 2 * np.pi / field.ntheta
 
     f = np.ones(field.ntheta)
@@ -68,7 +68,7 @@ def dfdtheta(
 def dfdzeta(
     field,
     pitchgrid,
-    E_psi,
+    erhohat,
     p="1a",
     gauge=False,
 ):
@@ -80,8 +80,8 @@ def dfdzeta(
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
     p : str
         Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
         formal order of accuracy, letter denotes degree of upwinding. "a" is fully
@@ -94,7 +94,7 @@ def dfdzeta(
     df : scipy sparse array
     """
     assert field.nzeta > fd_coeffs[1][p].size // 2
-    w = np.array(dkes_w_zeta(field, pitchgrid, E_psi).flatten())[:, None]
+    w = np.array(dkes_w_zeta(field, pitchgrid, erhohat).flatten())[:, None]
     h = 2 * np.pi / field.nzeta / field.NFP
 
     f = np.ones(field.nzeta)
@@ -124,7 +124,7 @@ def dfdzeta(
 def dfdxi(
     field,
     pitchgrid,
-    nu,
+    nuhat,
     p="1a",
     gauge=False,
 ):
@@ -136,8 +136,8 @@ def dfdxi(
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    nu : float
-        Normalized collisionality, nu/v
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
     p : str
         Stencil to use. Generally of the form "1a", "2b" etc. Number denotes
         formal order of accuracy, letter denotes degree of upwinding. "a" is fully
@@ -180,7 +180,7 @@ def dfdxi(
 def dfdpitch(
     field,
     pitchgrid,
-    nu,
+    nuhat,
     p=2,
     gauge=False,
 ):
@@ -192,8 +192,8 @@ def dfdpitch(
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    nu : float
-        Normalized collisionality, nu/v
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
     p : int
         Order of approximation for derivatives.
     gauge : bool
@@ -211,9 +211,9 @@ def dfdpitch(
     cosa = -pitchgrid.xi
 
     f1 = scipy.sparse.csr_array(jax.jacfwd(fdfwd)(f, str(p) + "z", h=h, bc="symmetric"))
-    f1 *= -(nu / 2 * cosa / sina)[:, None]
+    f1 *= -(nuhat / 2 * cosa / sina)[:, None]
     f2 = scipy.sparse.csr_array(jax.jacfwd(fd2)(f, p, h=h, bc="symmetric"))
-    f2 *= -nu / 2
+    f2 *= -nuhat / 2
     df = f1 + f2
     It = scipy.sparse.eye_array(field.ntheta)
     Iz = scipy.sparse.eye_array(field.nzeta)
@@ -226,7 +226,7 @@ def dfdpitch(
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
-        mask[idx] = nu / h**2
+        mask[idx] = nuhat / h**2
         df *= mask[:, None] == 0
         df += scipy.sparse.diags_array(mask)
 
@@ -236,8 +236,8 @@ def dfdpitch(
 def mdke(
     field,
     pitchgrid,
-    E_psi,
-    nu,
+    erhohat,
+    nuhat,
     p1="1a",
     p2=2,
     gauge=False,
@@ -250,10 +250,10 @@ def mdke(
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -266,8 +266,8 @@ def mdke(
     df : scipy sparse array
 
     """
-    dt = dfdtheta(field, pitchgrid, E_psi, p1, gauge=gauge)
-    dz = dfdzeta(field, pitchgrid, E_psi, p1, gauge=gauge)
-    di = dfdxi(field, pitchgrid, nu, p1, gauge=gauge)
-    dp = dfdpitch(field, pitchgrid, nu, p2, gauge=gauge)
+    dt = dfdtheta(field, pitchgrid, erhohat, p1, gauge=gauge)
+    dz = dfdzeta(field, pitchgrid, erhohat, p1, gauge=gauge)
+    di = dfdxi(field, pitchgrid, nuhat, p1, gauge=gauge)
+    dp = dfdpitch(field, pitchgrid, nuhat, p2, gauge=gauge)
     return dt + dz + di + dp

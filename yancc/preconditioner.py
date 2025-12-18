@@ -30,16 +30,16 @@ class MDKEPreconditioner(MultigridOperator):
         Magnetic field information.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized radial electric field.
-    nu : float
-        Normalized collisionality.
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
     """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: Float[Array, ""]
-    nu: Float[Array, ""]
+    erhohat: Float[Array, ""]
+    nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
 
@@ -47,15 +47,15 @@ class MDKEPreconditioner(MultigridOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        E_psi: Float[ArrayLike, ""],
-        nu: Float[ArrayLike, ""],
+        erhohat: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
         **options
     ):
 
         self.field = field
         self.pitchgrid = pitchgrid
-        self.E_psi = jnp.asarray(E_psi)
-        self.nu = jnp.asarray(nu)
+        self.erhohat = jnp.asarray(erhohat)
+        self.nuhat = jnp.asarray(nuhat)
         self.p1 = options.pop("p1m", "2d")
         self.p2 = options.pop("p2m", 2)
         gauge = options.pop("gauge", True)
@@ -91,8 +91,8 @@ class MDKEPreconditioner(MultigridOperator):
         operators = get_mdke_operators(
             fields=fields,
             pitchgrids=grids,
-            E_psi=E_psi,
-            nu=nu,
+            erhohat=erhohat,
+            nuhat=nuhat,
             p1=self.p1,
             p2=self.p2,
             gauge=gauge,
@@ -100,8 +100,8 @@ class MDKEPreconditioner(MultigridOperator):
         smoothers = get_mdke_jacobi_smoothers(
             fields=fields,
             pitchgrids=grids,
-            E_psi=E_psi,
-            nu=nu,
+            erhohat=erhohat,
+            nuhat=nuhat,
             p1=self.p1,
             p2=self.p2,
             gauge=gauge,
@@ -138,7 +138,7 @@ class DKEPreconditioner(MultigridOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
 
@@ -148,7 +148,7 @@ class DKEPreconditioner(MultigridOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         potentials: RosenbluthPotentials,
         **options
     ):
@@ -157,7 +157,7 @@ class DKEPreconditioner(MultigridOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
-        self.E_psi = jnp.asarray(E_psi)
+        self.Erho = jnp.asarray(Erho)
 
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
@@ -197,7 +197,7 @@ class DKEPreconditioner(MultigridOperator):
             pitchgrids=grids,
             speedgrid=speedgrid,
             species=species,
-            E_psi=E_psi,
+            Erho=Erho,
             potentials=potentials,
             p1=self.p1,
             p2=self.p2,
@@ -210,7 +210,7 @@ class DKEPreconditioner(MultigridOperator):
                 pitchgrids=grids,
                 speedgrid=speedgrid,
                 species=species,
-                E_psi=E_psi,
+                Erho=Erho,
                 potentials=potentials,
                 p1=self.p1,
                 p2=self.p2,
@@ -225,7 +225,7 @@ class DKEPreconditioner(MultigridOperator):
                 pitchgrids=grids,
                 speedgrid=speedgrid,
                 species=species,
-                E_psi=E_psi,
+                Erho=Erho,
                 potentials=potentials,
                 p1=self.p1,
                 p2=self.p2,
@@ -263,7 +263,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     M: MultigridOperator
     vs: jax.Array
 
@@ -273,7 +273,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         **options
     ):
 
@@ -281,7 +281,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
-        self.E_psi = jnp.asarray(E_psi)
+        self.Erho = jnp.asarray(Erho)
 
         Ers = []
         nus = []
@@ -293,7 +293,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             for x in speedgrid.x:
                 v = x * spec.v_thermal
                 nu = collisionality(spec, v, *species)
-                Erhat = E_psi / v
+                Erhat = Erho / v
                 nuhat = nu / v
                 temp_Er.append(Erhat)
                 temp_nu.append(nuhat)
@@ -307,9 +307,9 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         nus = jnp.array(nus)
         self.vs = jnp.array(vs)
 
-        def get_mdke_precond(nu, E_psi):
+        def get_mdke_precond(nu, Er):
             return MDKEPreconditioner(
-                field=field, pitchgrid=pitchgrid, E_psi=E_psi, nu=nu, **options
+                field=field, pitchgrid=pitchgrid, erhohat=Er, nuhat=nu, **options
             )
 
         self.M = jax.vmap(jax.vmap(get_mdke_precond))(nus, Ers)

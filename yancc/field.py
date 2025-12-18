@@ -16,8 +16,8 @@ class Field(eqx.Module):
     """Magnetic field on a flux surface.
 
     Field is given as 2D arrays uniformly spaced in arbitrary
-    poloidal and toroidal angles. The radial coordinate is assumed to be psi = toroidal
-    flux, divided by 2pi, in Webers
+    poloidal and toroidal angles. The radial coordinate is assumed to be
+    rho = sqrt(normalized toroidal flux)
 
     Parameters
     ----------
@@ -34,8 +34,8 @@ class Field(eqx.Module):
     Bmag : jax.Array, shape(ntheta, nzeta)
         Magnetic field magnitude.
     sqrtg : jax.Array, shape(ntheta, nzeta)
-        Coordinate jacobian determinant from (psi, theta, zeta) to (R, phi, Z). Units
-        of m/T
+        Coordinate jacobian determinant from (rho, theta, zeta) to (R, phi, Z). Units
+        of m^3
     Psi : float
         Total toroidal flux within the LCFS (in Webers, not divided by 2pi).
     iota : float
@@ -52,7 +52,6 @@ class Field(eqx.Module):
         Characteristic scale for magnetic field. Default is surface average of B.
     """
 
-    # note: assumes (psi, theta, zeta) coordinates, not (rho, theta, zeta)
     rho: Float[Array, ""]
     theta: Float[Array, "ntheta "]
     zeta: Float[Array, "nzeta "]
@@ -65,12 +64,13 @@ class Field(eqx.Module):
     sqrtg: Float[Array, "ntheta nzeta"]
     Bmag: Float[Array, "ntheta nzeta"]
     bdotgradB: Float[Array, "ntheta nzeta"]
-    BxgradpsidotgradB: Float[Array, "ntheta nzeta"]
+    BxgradrhodotgradB: Float[Array, "ntheta nzeta"]
     dBdt: Float[Array, "ntheta nzeta"]
     dBdz: Float[Array, "ntheta nzeta"]
     Bmag_fsa: Float[Array, ""]
     B2mag_fsa: Float[Array, ""]
     psi_r: Float[Array, ""]
+    psi_rho: Float[Array, ""]
     Psi: Float[Array, ""]
     R_major: Float[Array, ""]
     a_minor: Float[Array, ""]
@@ -124,7 +124,7 @@ class Field(eqx.Module):
         self.bdotgradB = (
             self.B_sup_t * self.dBdt + self.B_sup_z * self.dBdz
         ) / self.Bmag
-        self.BxgradpsidotgradB = (
+        self.BxgradrhodotgradB = (
             self.B_sub_z * self.dBdt - self.B_sub_t * self.dBdz
         ) / self.sqrtg
         self.Bmag_fsa = self.flux_surface_average(self.Bmag)
@@ -133,7 +133,8 @@ class Field(eqx.Module):
         self.iota = jnp.asarray(iota)
         self.R_major = jnp.asarray(R_major)
         self.a_minor = jnp.asarray(a_minor)
-        self.psi_r = jnp.asarray(self.Psi / np.pi * self.rho / self.a_minor)
+        self.psi_rho = jnp.asarray(self.Psi / np.pi * self.rho)
+        self.psi_r = self.psi_rho / self.a_minor
         self.theta = jnp.linspace(0, 2 * np.pi, self.ntheta, endpoint=False)
         self.zeta = jnp.linspace(0, 2 * np.pi / NFP, self.nzeta, endpoint=False)
         self.wtheta = jnp.diff(self.theta, append=jnp.array([2 * jnp.pi]))
@@ -188,7 +189,7 @@ class Field(eqx.Module):
             "Bmag": desc_data["|B|"],
             "dBdt": desc_data["|B|_t"],
             "dBdz": desc_data["|B|_z"],
-            "sqrtg": desc_data["sqrt(g)"] / (desc_data["psi_r"]),
+            "sqrtg": desc_data["sqrt(g)"],
         }
 
         data = {
@@ -260,9 +261,7 @@ class Field(eqx.Module):
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
 
-        sqrtg = (
-            vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn) / phi * 2 * np.pi
-        )
+        sqrtg = vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn)
         Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
         B_sub_t = vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
         B_sub_z = vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
@@ -282,7 +281,7 @@ class Field(eqx.Module):
         iota *= sign
 
         data = {}
-        data["sqrtg"] = sqrtg
+        data["sqrtg"] = sqrtg * 2 * jnp.sqrt(s)
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -520,7 +519,7 @@ class Field(eqx.Module):
         """
         sqrtg = (G + iota * I) / Bmag**2
         data = {}
-        data["sqrtg"] = sqrtg
+        data["sqrtg"] = sqrtg * Psi * rho / np.pi
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -548,7 +547,7 @@ class Field(eqx.Module):
         return (self.B_sup_t * self._dfdt(f) + self.B_sup_z * self._dfdz(f)) / self.Bmag
 
     @functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=[0])
-    def Bxgradpsidotgrad(
+    def Bxgradrhodotgrad(
         self, f: Float[Array, "ntheta nzeta"]
     ) -> Float[Array, "ntheta nzeta"]:
         """𝐁 × ∇ ψ ⋅ ∇ f."""

@@ -52,10 +52,10 @@ class LocalMaxwellian(eqx.Module):
         Temperature of the species, in units of eV.
     density : float
         Density of the species, in units of particles/m^3.
-    dndr : float
-        Derivative of density with respect to normalized flux.
-    dTdr : float
-        Derivative of temperature with respect to normalized flux.
+    dndrho : float
+        Derivative of density with respect to rho = sqrt(normalized toroidal flux).
+    dTdrho : float
+        Derivative of temperature with respect to rho = sqrt(normalized toroidal flux).
 
     """
 
@@ -63,16 +63,16 @@ class LocalMaxwellian(eqx.Module):
     temperature: jax.Array  # in units of eV
     density: jax.Array  # in units of particles/m^3
     v_thermal: jax.Array  # in units of m/s
-    dndr: jax.Array
-    dTdr: jax.Array
+    dndrho: jax.Array
+    dTdrho: jax.Array
 
     def __init__(
         self,
         species: Species,
         temperature: ArrayLike,
         density: ArrayLike,
-        dndr: ArrayLike,
-        dTdr: ArrayLike,
+        dTdrho: ArrayLike,
+        dndrho: ArrayLike,
     ):
         self.species = species
         self.temperature = jnp.asarray(temperature)
@@ -80,8 +80,8 @@ class LocalMaxwellian(eqx.Module):
         self.v_thermal = jnp.sqrt(
             2 * self.temperature * JOULE_PER_EV / self.species.mass
         )
-        self.dndr = jnp.asarray(dndr)
-        self.dTdr = jnp.asarray(dTdr)
+        self.dndrho = jnp.asarray(dndrho)
+        self.dTdrho = jnp.asarray(dTdrho)
 
     def __call__(self, v: ArrayLike) -> jax.Array:
         """Evaluate f at a given velocity."""
@@ -100,9 +100,11 @@ class GlobalMaxwellian(eqx.Module):
     species : Species
         Atomic species of the distribution function.
     temperature : callable
-        Temperature of the species as a function of radius, in units of eV.
+        Temperature (in units of eV) of the species as a function of
+        rho = sqrt(normalized toroidal flux).
     density : callable
-        Density of the species as a function of radius, in units of particles/m^3.
+        Density (in units of particles/m^3) of the species as a function of
+        rho = sqrt(normalized toroidal flux).
 
     """
 
@@ -120,17 +122,17 @@ class GlobalMaxwellian(eqx.Module):
     def localize(self, r: ArrayLike) -> LocalMaxwellian:
         """The global distribution function evaluated at a particular radius r."""
         r = jnp.asarray(r)
-        n, dndr = jax.value_and_grad(self.density)(r)
-        T, dTdr = jax.value_and_grad(self.temperature)(r)
-        return LocalMaxwellian(self.species, T, n, dndr, dTdr)
+        n, dndrho = jax.value_and_grad(self.density)(r)
+        T, dTdrho = jax.value_and_grad(self.temperature)(r)
+        return LocalMaxwellian(self.species, T, n, dTdrho, dndrho)
 
-    def __call__(self, r: ArrayLike, v: ArrayLike) -> jax.Array:
+    def __call__(self, rho: ArrayLike, v: ArrayLike) -> jax.Array:
         """Evaluate f at a given radius and velocity."""
-        r = jnp.asarray(r)
+        rho = jnp.asarray(rho)
         return (
-            self.density(r)
-            / (jnp.sqrt(jnp.pi) * self.v_thermal(r)) ** 3
-            * jnp.exp(-(v**2) / self.v_thermal(r) ** 2)
+            self.density(rho)
+            / (jnp.sqrt(jnp.pi) * self.v_thermal(rho)) ** 3
+            * jnp.exp(-(v**2) / self.v_thermal(rho) ** 2)
         )
 
 
@@ -304,7 +306,7 @@ def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     return rhostar
 
 
-def Estar(species: LocalMaxwellian, field: Field, E_psi: ArrayLike, x: ArrayLike = 1.0):
+def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0):
     """Normalized electric field E* = E_r /(v <B>).
 
     Parameters
@@ -313,19 +315,19 @@ def Estar(species: LocalMaxwellian, field: Field, E_psi: ArrayLike, x: ArrayLike
         Species being considered.
     field: Field
         Magnetic field information.
-    E_psi : float
-        Electric field being considered. E_psi = -∂Φ /∂ψ
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     x : float
         Normalized speed being considered. x=v/vth
     """
     x = jnp.asarray(x)
-    E_psi = jnp.asarray(E_psi)
+    Er = jnp.asarray(Erho) / field.a_minor
     v = x * species.v_thermal
-    return E_psi * jnp.abs(field.psi_r) / v / field.Bmag_fsa
+    return Er / v / field.Bmag_fsa
 
 
 def nustar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
-    """Normalized collisionality ν* = ν * R₀ /(v ι).
+    """Normalized collisionality ν* = ν R₀ /(v ι).
 
     Parameters
     ----------

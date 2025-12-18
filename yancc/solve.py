@@ -8,7 +8,7 @@ from .preconditioner import MDKEPreconditioner
 from .trajectories import MDKE
 
 
-def solve_mdke(field, pitchgrid, E_psi, nu, **options):
+def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
 
     Parameters
@@ -17,10 +17,10 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
         Magnetic field information.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
 
 
     Returns
@@ -46,13 +46,13 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
     print_every = options.pop("print_every", 0)
 
     M = MDKEPreconditioner(
-        field=field, pitchgrid=pitchgrid, nu=nu, E_psi=E_psi, **options
+        field=field, pitchgrid=pitchgrid, nuhat=nuhat, erhohat=erhohat, **options
     )
     A = MDKE(
         field,
         pitchgrid,
-        E_psi,
-        nu,
+        erhohat,
+        nuhat,
         p1=p1a,
         p2=p2a,
         gauge=True,
@@ -86,7 +86,7 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
     )
     f2 = f1.copy()
     f = jnp.array([f1, f2, f3]).T
-    Dij = compute_monoenergetic_coefficients(f, field, pitchgrid, 1.0)
+    Dij = compute_monoenergetic_coefficients(f, field, pitchgrid)
     return (
         Dij,
         f,

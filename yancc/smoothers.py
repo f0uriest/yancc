@@ -58,9 +58,9 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : PitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
-    nu : float
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
+    nuhat : float
         Normalized collisionality, nu/v
     p1 : int
         Order of approximation for first derivatives.
@@ -93,8 +93,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        E_psi: Float[ArrayLike, ""],
-        nu: Float[ArrayLike, ""],
+        erhohat: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
         p1: str = "2d",
         p2: int = 2,
         axorder: str = "atz",
@@ -113,11 +113,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
         if weight is None:
-            weight = optimal_smoothing_parameter_3d(p1, p2, nu, axorder[-1])
+            weight = optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder[-1])
         self.weight = jnp.atleast_1d(jnp.array(weight))
 
         mats = MDKE(
-            field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge
+            field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge
         ).block_diagonal()
 
         if self.smooth_solver == "banded":
@@ -185,8 +185,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Normalized electric field, E_psi/v
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -224,7 +224,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         potentials: Optional[RosenbluthPotentials] = None,
         p1="2d",
         p2=2,
@@ -268,7 +268,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             pitchgrid,
             speedgrid,
             species,
-            E_psi,
+            Erho,
             potentials=potentials,
             p1=p1,
             p2=p2,
@@ -356,8 +356,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Normalized electric field, E_psi/v
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -395,7 +395,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         potentials: Optional[RosenbluthPotentials] = None,
         p1="2d",
         p2=2,
@@ -436,7 +436,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             pitchgrid,
             speedgrid,
             species,
-            E_psi,
+            Erho,
             potentials=potentials,
             p1=p1,
             p2=p2,

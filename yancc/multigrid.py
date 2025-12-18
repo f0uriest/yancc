@@ -16,11 +16,13 @@ from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
-def get_mdke_operators(fields, pitchgrids, E_psi, nu, p1, p2, gauge, **options):
+def get_mdke_operators(fields, pitchgrids, erhohat, nuhat, p1, p2, gauge, **options):
     """Get multigrid operators for each field, pitchgrid."""
     operators = []
     for field, pitchgrid in zip(fields, pitchgrids):
-        op = MDKE(field, pitchgrid, E_psi, nu, p1=p1, p2=p2, gauge=gauge, **options)
+        op = MDKE(
+            field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, gauge=gauge, **options
+        )
         operators.append(op)
     return operators
 
@@ -31,7 +33,7 @@ def get_dke_operators(
     pitchgrids,
     speedgrid,
     species,
-    E_psi,
+    Erho,
     potentials,
     p1,
     p2,
@@ -46,7 +48,7 @@ def get_dke_operators(
             pitchgrid,
             speedgrid,
             species,
-            E_psi,
+            Erho,
             potentials,
             p1=p1,
             p2=p2,
@@ -61,8 +63,8 @@ def get_dke_operators(
 def get_mdke_jacobi_smoothers(
     fields,
     pitchgrids,
-    E_psi,
-    nu,
+    erhohat,
+    nuhat,
     p1,
     p2,
     gauge,
@@ -77,8 +79,8 @@ def get_mdke_jacobi_smoothers(
             MDKEJacobiSmoother(
                 field,
                 pitchgrid,
-                E_psi,
-                nu,
+                erhohat,
+                nuhat,
                 axorder=order,
                 p1=p1,
                 p2=p2,
@@ -99,7 +101,7 @@ def get_dke_jacobi_smoothers(
     pitchgrids,
     speedgrid,
     species,
-    E_psi,
+    Erho,
     potentials,
     p1,
     p2,
@@ -117,7 +119,7 @@ def get_dke_jacobi_smoothers(
                 pitchgrid,
                 speedgrid,
                 species,
-                E_psi,
+                Erho,
                 potentials,
                 p1=p1,
                 p2=p2,
@@ -139,7 +141,7 @@ def get_dke_jacobi2_smoothers(
     pitchgrids,
     speedgrid,
     species,
-    E_psi,
+    Erho,
     potentials,
     p1,
     p2,
@@ -157,7 +159,7 @@ def get_dke_jacobi2_smoothers(
                 pitchgrid,
                 speedgrid,
                 species,
-                E_psi,
+                Erho,
                 potentials,
                 p1=p1,
                 p2=p2,

@@ -162,10 +162,10 @@ def radial_magnetic_drift(
     xi = pitchgrid.xi[None, None, :, None, None]
     x = speedgrid.x[None, :, None, None, None]
     v = x * vth
-    vmadotgradpsi = -(
-        ms * v**2 / qs * (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
+    vmadotgradrho = -(
+        ms * v**2 / qs * (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradrhodotgradB
     )
-    return vmadotgradpsi
+    return vmadotgradrho
 
 
 def dke_rhs(
@@ -173,7 +173,7 @@ def dke_rhs(
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
-    E_psi: float,
+    Erho: float,
     include_constraints: bool = True,
     normalize: bool = False,
 ) -> jax.Array:
@@ -189,8 +189,8 @@ def dke_rhs(
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Radial electric field.
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     include_constraints : bool
         Whether to append zeros to the rhs for constraint equations.
     normalize : bool
@@ -205,15 +205,15 @@ def dke_rhs(
         species = [species]
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
     ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
-    dns = jnp.array([sp.dndr for sp in species])[:, None, None, None, None]
+    dns = jnp.array([sp.dndrho for sp in species])[:, None, None, None, None]
     Ts = jnp.array([sp.temperature for sp in species])[:, None, None, None, None]
-    dTs = jnp.array([sp.dTdr for sp in species])[:, None, None, None, None]
-    Ln = dns / ns  # missing factor of psi?
+    dTs = jnp.array([sp.dTdrho for sp in species])[:, None, None, None, None]
+    Ln = dns / ns
     LT = dTs / Ts
     x = speedgrid.x[None, :, None, None, None]
-    vmadotgradpsi = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
-    gradients = Ln + qs * E_psi / Ts + (x**2 - 3 / 2) * LT
-    rhs = -vmadotgradpsi * gradients
+    vmadotgradrho = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
+    gradients = Ln + qs * Erho / Ts + (x**2 - 3 / 2) * LT
+    rhs = -vmadotgradrho * gradients
     if normalize:
         vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
         rhs /= vth
@@ -242,7 +242,7 @@ def mdke_rhs(
         RHS of linear monoenergetic DKE.
     """
     xi = pitchgrid.xi[:, None, None]
-    s1 = (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradpsidotgradB
+    s1 = (1 + xi**2) / (2 * field.Bmag**3) * field.BxgradrhodotgradB
     s2 = s1
     s3 = xi * field.Bmag
     rhs = jnp.array([s1, s2, s3]).reshape((3, -1)).T
@@ -254,7 +254,6 @@ def compute_monoenergetic_coefficients(
     f: jax.Array,
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    v: float = 1.0,
 ) -> jax.Array:
     """Compute D_ij coefficients from solution for distribution function f.
 
@@ -266,8 +265,6 @@ def compute_monoenergetic_coefficients(
         Magnetic field information
     pitchgrid : UniformPitchAngleGrid
         Grid of coordinates in pitch angle.
-    v : float
-        Speed being considered.
 
     Returns
     -------
@@ -292,14 +289,42 @@ def compute_monoenergetic_coefficients(
     Dij_itz = sf.reshape((3, 3, nxi, nt, nz))
     Dij_i = field.flux_surface_average(Dij_itz)
     Dij = jnp.sum(Dij_i * pitchgrid.wxi, axis=-1)
-    # scale is somewhat arbitrary, this is chosen to match DKES/MONKES
+    return Dij
+
+
+def normalize_dkes(Dij: jax.Array, field: Field, v: float = 1.0):
+    """Normalize monoenergetic coefficients to match DKES/MONKES.
+
+    Parameters
+    ----------
+    Dij : jax.Array, shape(..., 3, 3)
+        Array of monoenergetic coefficients.
+    field : Field
+        Magnetic field information
+    v : float
+        Speed being considered.
+
+    Returns
+    -------
+    Dij : jax.Array, shape(..., 3, 3)
+        Rescaled monoenergetic coefficients
+    """
+    sgn = jnp.sign(field.Psi)
+    a = field.a_minor
+    sa = sgn * a
+    B0 = field.B0
+
     scale = (
         jnp.array(
-            [[1, 1, field.B0], [1, 1, field.B0], [field.B0, field.B0, field.B0**2]]
+            [
+                [a**2, sa, sa / B0],
+                [sa, sa, sa / B0],
+                [sa / B0, sa / B0, 1 / B0**2],
+            ]
         )
         * v
     )
-    return Dij / scale
+    return Dij * scale
 
 
 def compute_transport_matrix(
