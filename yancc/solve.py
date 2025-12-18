@@ -2,6 +2,7 @@
 
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 
 from .collisions import RosenbluthPotentials
 from .krylov import gcrotmk
@@ -209,14 +210,14 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         for spec in species:
             print("Species 1:")
             x = speedgrid.x[0]
-            print(f"ν* (x={x:.2e}): {nustar(spec, field, x):.3e}")
-            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x):.3e}")
+            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
+            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
             x = 1.0
-            print(f"ν* (x={x:.2e}): {nustar(spec, field, x):.3e}")
-            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x):.3e}")
+            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
+            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
             x = speedgrid.x[-1]
-            print(f"ν* (x={x:.2e}): {nustar(spec, field, x):.3e}")
-            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x):.3e}")
+            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
+            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
 
     B = DKESources(field, pitchgrid, speedgrid, species)
     C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
@@ -251,4 +252,4 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
     )
     shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
 
-    return f1.reshape(shape), rhs.reshape(shape), fluxes, stats
+    return f1[: np.prod(shape)].reshape(shape), rhs.reshape(shape), fluxes, stats
