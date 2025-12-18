@@ -207,7 +207,7 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
             )
 
         for spec in species:
-            print(spec)
+            print("Species 1:")
             x = speedgrid.x[0]
             print(f"ν* (x={x:.2e}): {nustar(spec, field, x):.3e}")
             print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x):.3e}")
