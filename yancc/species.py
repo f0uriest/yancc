@@ -39,6 +39,20 @@ Electron = Species(1 / 1836.15267343, -1)
 Hydrogen = Species(1, 1)
 Deuterium = Species(2, 1)
 Tritium = Species(3, 1)
+Helium4 = Species(4, 2)
+Helium = Helium4
+Lithium6 = Species(6, 3)
+Lithium7 = Species(7, 3)
+Lithium = Lithium7
+Beryllium9 = Species(9, 4)
+Beryllium = Beryllium9
+Boron10 = Species(10, 5)
+Boron11 = Species(11, 5)
+Boron = Boron11
+Nitrogen14 = Species(14, 7)
+Nitrogen = Nitrogen14
+Oxygen16 = Species(16, 8)
+Oxygen = Oxygen16
 
 
 class LocalMaxwellian(eqx.Module):
