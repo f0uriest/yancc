@@ -176,7 +176,9 @@ class DKEPreconditioner(MultigridOperator):
         verbose = options.pop("verbose", False)
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
-        cycle_index = options.pop("cycle_index", 3)
+        cycle_index = options.pop("cycle_index", 1)
+        operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
+        smoother_weights = options.pop("smoother_weights", operator_weights)
 
         fields, grids = get_fields_grids(
             field=field,
@@ -202,6 +204,7 @@ class DKEPreconditioner(MultigridOperator):
             p1=self.p1,
             p2=self.p2,
             gauge=gauge,
+            operator_weights=operator_weights,
             **options,
         )
         if smooth_type == 1:
@@ -217,6 +220,7 @@ class DKEPreconditioner(MultigridOperator):
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
+                operator_weights=smoother_weights,
                 **options,
             )
         else:
@@ -232,6 +236,7 @@ class DKEPreconditioner(MultigridOperator):
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
+                operator_weights=smoother_weights,
                 **options,
             )
         super().__init__(
