@@ -3,9 +3,10 @@
 import jax
 import jax.numpy as jnp
 import lineax as lx
+from scipy.constants import elementary_charge, proton_mass
 
 from .field import Field
-from .species import LocalMaxwellian
+from .species import JOULE_PER_EV, LocalMaxwellian
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
@@ -463,4 +464,36 @@ def compute_fluxes(
         "Jpar": Jpar,
     }
 
+    return fluxes
+
+
+def normalize_fluxes_sfincs(fluxes, Bbar=1, Rbar=1, nbar=1e19, mbar=1, Tbar=1e3):
+    """Normalize fluxes to match SFINCS.
+
+    Parameters
+    ----------
+    fluxes : dict of array
+        Fluxes, as output from ``compute_fluxes``.
+    Bbar : float
+        Reference magnetic field, in Tesla.
+    Rbar : float
+        Reference length scale, in meters.
+    nbar : float
+        Reference density, in 1/meter^3
+    mbar : float
+        Reference mass, in proton masses.
+    Tbar : float
+        Reference temperature, in eV.
+    """
+    mbar *= proton_mass
+    Tbar *= JOULE_PER_EV
+    vbar = jnp.sqrt(Tbar / mbar)
+    fluxes = fluxes.copy()
+    fluxes["particle_flux"] *= Rbar / (nbar * vbar)
+    fluxes["heat_flux"] *= Rbar / (nbar * vbar**3 * mbar)
+    fluxes["Vpar"] *= 1 / (nbar * vbar)
+    fluxes["BVpar"] *= 1 / (vbar * Bbar * nbar)
+    fluxes["bootstrap_current"] *= 1 / (elementary_charge * nbar * vbar * Bbar)
+    fluxes["radial_current"] *= Rbar / (elementary_charge * nbar * vbar)
+    fluxes["jpar"] *= 1 / (elementary_charge * nbar * vbar)
     return fluxes
