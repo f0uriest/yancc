@@ -254,7 +254,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 nu = nustar(spa, field, x)
                 nus.append(nu)
             nus = jnp.asarray(nus)
-            _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder)
+            _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
             _weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             _weight = _weight * jnp.ones(
                 (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
