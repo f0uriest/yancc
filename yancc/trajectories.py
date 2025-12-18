@@ -736,7 +736,7 @@ def sfincs_w_speed(
     """Wind in speed/x direction for SFINCS DKE."""
     xi = pitchgrid.xi[None, None, :, None, None]
     x = x[:, :, None, None, None]
-    w = (1 + xi**2) * x / (2 * field.Bmag**2) * field.BxgradrhodotgradB * Erho
+    w = (1 + xi**2) * x / (2 * field.Bmag**3) * field.BxgradrhodotgradB * Erho
     return w
 
 
