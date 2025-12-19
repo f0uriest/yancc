@@ -11,6 +11,23 @@ from .species import JOULE_PER_EV, LocalMaxwellian
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
+def _dr(field):
+    """Real space volume element."""
+    dt = field.wtheta[:, None]
+    dz = field.wzeta[None, :]
+    dr = field.sqrtg[:, :] * dt * dz
+    dr = dr
+    return dr
+
+
+def _d3v(speedgrid, pitchgrid, species):
+    """Velocity space volume element."""
+    dx = (speedgrid.x**2 * speedgrid.wx)[None, :, None]
+    dxi = pitchgrid.wxi[None, None, :]
+    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
+    return 2 * jnp.pi * vth**3 * dxi * dx
+
+
 class DKESources(lx.MatrixLinearOperator):
     """Fake sources of particles and heat to ensure solvability
 
@@ -205,17 +222,23 @@ def dke_rhs(
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
-    qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
+    qs = (
+        jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
+        / elementary_charge
+    )
     ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
     dns = jnp.array([sp.dndrho for sp in species])[:, None, None, None, None]
     Ts = jnp.array([sp.temperature for sp in species])[:, None, None, None, None]
     dTs = jnp.array([sp.dTdrho for sp in species])[:, None, None, None, None]
+    Fs = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])[
+        :, :, None, None, None
+    ]
     Ln = dns / ns
     LT = dTs / Ts
     x = speedgrid.x[None, :, None, None, None]
     vmadotgradrho = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
-    gradients = Ln + qs * Erho / Ts + (x**2 - 3 / 2) * LT
-    rhs = -vmadotgradrho * gradients
+    gradients = Ln + qs * (-Erho) / Ts + (x**2 - 3 / 2) * LT
+    rhs = -vmadotgradrho * gradients * Fs
     if normalize:
         vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
         rhs /= vth
@@ -398,22 +421,23 @@ def compute_fluxes(
 
     Returns
     -------
-    fluxes: dict of ndarray
+    fluxes: dict of jax.Array
         Contains:
-        particle_flux : jax.Array, shape(ns)
-            Γₐ = Particle flux for each species.
-        heat_flux : jax.Array, shape(ns)
-            Qₐ = Heat flux for each species.
-        Vpar : jax.Array, shape(ns, nt, nz)
-            V|| = Parallel velocity for each species
-        BVpar: jax.Array, shape(ns)
-            〈BV||〉 = Flux surface average field*parallel velocity for each species
-        bootstrap_current: float
-            〈J||B〉 = Bootstrap current.
-        radial_current : float
-            Jr = Radial current.
-        Jpar : jax.Array, shape(nt, nz)
-            J|| = Parallel current density.
+        <particle_flux> : jax.Array, shape(ns)
+            Γₐ = FSA particle flux for each species, in particles/(meter² second).
+        <heat_flux> : jax.Array, shape(ns)
+            Qₐ = FSA heat flux for each species, in Joules/(meter² second)
+        V|| : jax.Array, shape(ns, nt, nz)
+            V|| = Parallel velocity for each species, in meters/second
+        <BV||>: jax.Array, shape(ns)
+            <BV||> = Flux surface average field*parallel velocity for each species,
+            in Tesla*meter/second
+        <J||B>: float
+            <J||B> = Bootstrap current, in Tesla*Amps/meter².
+        J_rho : float
+            J_rho = Radial current, in Amps/meter².
+        J|| : jax.Array, shape(nt, nz)
+            J|| = Parallel current density in Amps/meter².
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
@@ -429,6 +453,8 @@ def compute_fluxes(
         heat_source = f[-len(species) :]
         particle_source = f[-2 * len(species) : -len(species)]
         f = f[:N].reshape(shape)
+    else:
+        raise ValueError("got wrong size for f")
 
     vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
     ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
@@ -436,24 +462,18 @@ def compute_fluxes(
     ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
     xi = pitchgrid.xi[None, None, :, None, None]
     x = speedgrid.x[None, :, None, None, None]
-
-    dx = ((speedgrid.x**2 * speedgrid.wx) @ speedgrid.xvander_inv)[
-        None, :, None, None, None
-    ]
-    dxi = pitchgrid.wxi[None, None, :, None, None]
-    # int f d3v
-    d3v = vth**3 * dx * dxi
-
-    # flux surface average operator
-    dt = field.wtheta[None, None, None, :, None]
-    dz = field.wzeta[None, None, None, None, :]
-    dr = field.sqrtg[None, None, None, :, :] * dt * dz
-    dr = dr / dr.sum()
-    radial_drift = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
     vpar = x * vth * xi
+    v = vth * x
+    # int f d3v
+    d3v = _d3v(speedgrid, pitchgrid, species)[..., None, None]
+    # flux surface average operator
+    dr = _dr(field)[None, None, None]
+    dr = dr / dr.sum()
+
+    radial_drift = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
 
     particle_flux = f * radial_drift * d3v * dr
-    heat_flux = f * ms * vth**2 * x**2 * radial_drift * d3v * dr
+    heat_flux = 1 / 2 * f * ms * v**2 * radial_drift * d3v * dr
     Vpar = 1 / ns * vpar * f * d3v
     BVpar = field.Bmag[None, None, None, :, :] * Vpar * dr
     bootstrap_current = ns * qs * BVpar
@@ -469,13 +489,13 @@ def compute_fluxes(
     Jpar = Jpar.sum(axis=(0, 1, 2))
 
     fluxes = {
-        "particle_flux": particle_flux,
-        "heat_flux": heat_flux,
-        "Vpar": Vpar,
-        "BVpar": BVpar,
-        "bootstrap_current": bootstrap_current,
-        "radial_current": radial_current,
-        "Jpar": Jpar,
+        "<particle_flux>": particle_flux,
+        "<heat_flux>": heat_flux,
+        "V||": Vpar,
+        "<BV||>": BVpar,
+        "<J||B>": bootstrap_current,
+        "J_rho": radial_current,
+        "J||": Jpar,
         "heat_source": heat_source,
         "particle_source": particle_source,
     }
@@ -483,13 +503,30 @@ def compute_fluxes(
     return fluxes
 
 
-def normalize_fluxes_sfincs(fluxes, Bbar=1, Rbar=1, nbar=1e19, mbar=1, Tbar=1e3):
+def normalize_fluxes_sfincs(
+    fluxes,
+    field,
+    pitchgrid,
+    speedgrid,
+    species,
+    Bbar=1,
+    Rbar=1,
+    nbar=1e20,
+    mbar=1,
+    Tbar=1e3,
+):
     """Normalize fluxes to match SFINCS.
 
     Parameters
     ----------
     fluxes : dict of array
         Fluxes, as output from ``compute_fluxes``.
+    pitchgrid : UniformPitchAngleGrid
+        Grid of coordinates in pitch angle.
+    speedgrid : AbstractSpeedGrid
+        Grid of coordinates in speed.
+    species : list[LocalMaxwellian]
+        Species being considered
     Bbar : float
         Reference magnetic field, in Tesla.
     Rbar : float
@@ -500,16 +537,28 @@ def normalize_fluxes_sfincs(fluxes, Bbar=1, Rbar=1, nbar=1e19, mbar=1, Tbar=1e3)
         Reference mass, in proton masses.
     Tbar : float
         Reference temperature, in eV.
+
+    Returns
+    -------
+    fluxes : dict of array
+        Fluxes, in SFINCS normalized units.
     """
     mbar *= proton_mass
     Tbar *= JOULE_PER_EV
-    vbar = jnp.sqrt(Tbar / mbar)
-    fluxes = fluxes.copy()
-    fluxes["particle_flux"] *= Rbar / (nbar * vbar)
-    fluxes["heat_flux"] *= Rbar / (nbar * vbar**3 * mbar)
-    fluxes["Vpar"] *= 1 / (nbar * vbar)
-    fluxes["BVpar"] *= 1 / (vbar * Bbar * nbar)
-    fluxes["bootstrap_current"] *= 1 / (elementary_charge * nbar * vbar * Bbar)
-    fluxes["radial_current"] *= Rbar / (elementary_charge * nbar * vbar)
-    fluxes["jpar"] *= 1 / (elementary_charge * nbar * vbar)
-    return fluxes
+    vbar = jnp.sqrt(2 * Tbar / mbar)
+    density = np.array([sp.density for sp in species])
+    sfincs_fluxes = {}
+    sfincs_fluxes["particleFlux_vm_rHat"] = (
+        fluxes["<particle_flux>"] * Rbar / (nbar * vbar)
+    )
+    sfincs_fluxes["heatFlux_vm_rHat"] = (
+        fluxes["<heat_flux>"] * Rbar / (nbar * vbar**3 * mbar)
+    )
+    sfincs_fluxes["flow"] = fluxes["V||"] * density[:, None, None] / (nbar * vbar)
+    sfincs_fluxes["FSABFlow"] = fluxes["<BV||>"] / (vbar * Bbar) * density / nbar
+    sfincs_fluxes["FSABjHat"] = fluxes["<J||B>"] / (
+        elementary_charge * nbar * vbar * Bbar
+    )
+    sfincs_fluxes["j_rHat"] = fluxes["J_rho"] * Rbar / (elementary_charge * nbar * vbar)
+    sfincs_fluxes["jHat"] = fluxes["J||"] / (elementary_charge * nbar * vbar)
+    return sfincs_fluxes

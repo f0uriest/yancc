@@ -688,7 +688,7 @@ def sfincs_w_theta(
     vpar = v * xi
     w = (
         field.B_sup_t / field.Bmag * vpar
-        + field.B_sub_z / field.Bmag**2 / field.sqrtg * Erho
+        + field.B_sub_z / field.Bmag**2 / field.sqrtg * (-Erho)
     )
     return w
 
@@ -705,7 +705,7 @@ def sfincs_w_zeta(
     vpar = v * xi
     w = (
         field.B_sup_z / field.Bmag * vpar
-        - field.B_sub_t / field.Bmag**2 / field.sqrtg * Erho
+        - field.B_sub_t / field.Bmag**2 / field.sqrtg * (-Erho)
     )
     return w
 
@@ -722,7 +722,7 @@ def sfincs_w_pitch(
     sina = jnp.sqrt(1 - xi**2)
     w1 = -field.bdotgradB / (2 * field.Bmag) * (1 - xi**2) / sina * v
     w2 = (
-        xi * (1 - xi**2) / (2 * field.Bmag**3) * Erho * field.BxgradrhodotgradB
+        xi * (1 - xi**2) / (2 * field.Bmag**3) * (-Erho) * field.BxgradrhodotgradB
     ) / sina
     return w1 + w2
 
@@ -736,7 +736,7 @@ def sfincs_w_speed(
     """Wind in speed/x direction for SFINCS DKE."""
     xi = pitchgrid.xi[None, None, :, None, None]
     x = x[:, :, None, None, None]
-    w = (1 + xi**2) * x / (2 * field.Bmag**3) * field.BxgradrhodotgradB * Erho
+    w = (1 + xi**2) * x / (2 * field.Bmag**3) * field.BxgradrhodotgradB * (-Erho)
     return w
 
 

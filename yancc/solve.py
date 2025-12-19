@@ -115,7 +115,7 @@ def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
 
 
 def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
-    """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
+    """Solve the drift kinetic equation, giving fluxes.
 
     Parameters
     ----------
@@ -132,26 +132,28 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
 
     Returns
     -------
-    f` : jax.Array, shape(N,)
-        Perturbed distribution function, solution of DKE
-    rhs : jax.Array, shape(N,)
+    f : jax.Array, shape(ns,nx,na,nt,nz)
+        Distribution function f = F0 + f1 where F0 is the leading order Maxwellian and
+        f1 is the perturbation.
+    rhs : jax.Array, shape(ns,nx,na,nt,nz)
         Drive term from leading order Maxwellian. Right hand side of DKE.
-    fluxes: dict of ndarray
+    fluxes: dict of jax.Array
         Contains:
-        particle_flux : jax.Array, shape(ns)
-            Γₐ = Particle flux for each species.
-        heat_flux : jax.Array, shape(ns)
-            Qₐ = Heat flux for each species.
-        Vpar : jax.Array, shape(ns, nt, nz)
-            V|| = Parallel velocity for each species
-        BVpar: jax.Array, shape(ns)
-            〈BV||〉 = Flux surface average field*parallel velocity for each species
-        bootstrap_current: float
-            〈J||B〉 = Bootstrap current.
-        radial_current : float
-            Jr = Radial current.
-        Jpar : jax.Array, shape(nt, nz)
-            J|| = Parallel current density.
+        <particle_flux> : jax.Array, shape(ns)
+            Γₐ = FSA particle flux for each species, in particles/(meter² second).
+        <heat_flux> : jax.Array, shape(ns)
+            Qₐ = FSA heat flux for each species, in Joules/(meter² second)
+        V|| : jax.Array, shape(ns, nt, nz)
+            V|| = Parallel velocity for each species, in meters/second
+        <BV||>: jax.Array, shape(ns)
+            <BV||> = Flux surface average field*parallel velocity for each species,
+            in Tesla*meter/second
+        <J||B>: float
+            <J||B> = Bootstrap current, in Tesla*Amps/meter².
+        J_rho : float
+            J_rho = Radial current, in Amps/meter².
+        J|| : jax.Array, shape(nt, nz)
+            J|| = Parallel current density in Amps/meter².
     stats : dict
         Info about the solve, such as number of iterations, number of matrix-vector
         products, final residual etc.
@@ -186,11 +188,11 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         **options,
     )
     A = DKE(
-        field,
-        pitchgrid,
-        speedgrid,
-        species,
-        Erho,
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species,
+        Erho=Erho,
         potentials=potentials,
         p1=p1a,
         p2=p2a,
@@ -207,8 +209,8 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
                 f"N={op.in_structure().size:4d}"
             )
 
-        for spec in species:
-            print("Species 1:")
+        for si, spec in enumerate(species):
+            print(f"Species {si}:")
             x = speedgrid.x[0]
             print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
             print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
@@ -243,8 +245,16 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
     )
     stats = {"niter": j1, "nmv": nmv1, "res": res1 / jnp.linalg.norm(rhs)}
 
+    F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
+    F0 = jnp.tile(
+        F0[:, :, None, None, None], (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+    )
+    F0 = jnp.concatenate([F0.flatten(), jnp.zeros(2 * len(species))])
+
+    f = F0 + f1
+
     fluxes = compute_fluxes(
-        f1,
+        f,
         field,
         pitchgrid,
         speedgrid,
@@ -253,7 +263,7 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
     shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
 
     return (
-        f1[: np.prod(shape)].reshape(shape),
+        f[: np.prod(shape)].reshape(shape),
         rhs[: np.prod(shape)].reshape(shape),
         fluxes,
         stats,
