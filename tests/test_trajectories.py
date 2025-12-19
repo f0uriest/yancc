@@ -24,13 +24,13 @@ def extract_blocks(a, m):
 
 @pytest.mark.parametrize("p1", ["1a", "4b"])
 @pytest.mark.parametrize("p2", [2, 4])
-@pytest.mark.parametrize("E_psi", [1e-3, 1e3])
-@pytest.mark.parametrize("nu", [1e-3, 1e3])
+@pytest.mark.parametrize("erhohat", [1e-3, 1e3])
+@pytest.mark.parametrize("nuhat", [1e-3, 1e3])
 @pytest.mark.parametrize("gauge", [True, False])
-def test_scipy_operators(p1, p2, E_psi, nu, gauge, field, pitchgrid):
+def test_scipy_operators(p1, p2, erhohat, nuhat, gauge, field, pitchgrid):
     """Test that scipy sparse matrices are the same as jax jacobians."""
-    A1 = trajectories_scipy.mdke(field, pitchgrid, E_psi, nu, p1, p2, gauge=gauge)
-    A2 = trajectories.MDKE(field, pitchgrid, E_psi, nu, p1, p2, "atz", gauge=gauge)
+    A1 = trajectories_scipy.mdke(field, pitchgrid, erhohat, nuhat, p1, p2, gauge=gauge)
+    A2 = trajectories.MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, "atz", gauge=gauge)
     np.testing.assert_allclose(A1.toarray(), A2.as_matrix())
 
 
@@ -46,10 +46,10 @@ def test_diagonals_dke_speed(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     f = trajectories.DKESpeed(
-        field, pitchgrid, speedgrid, species2, E_psi, axorder=axorder, gauge=gauge
+        field, pitchgrid, speedgrid, species2, Erho, axorder=axorder, gauge=gauge
     )
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
@@ -69,7 +69,7 @@ def test_diagonals_dke_theta(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.DKETheta(
@@ -77,7 +77,7 @@ def test_diagonals_dke_theta(
             pitchgrid,
             speedgrid,
             species2,
-            E_psi,
+            Erho,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -100,7 +100,7 @@ def test_diagonals_dke_zeta(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.DKEZeta(
@@ -108,7 +108,7 @@ def test_diagonals_dke_zeta(
             pitchgrid,
             speedgrid,
             species2,
-            E_psi,
+            Erho,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -131,7 +131,7 @@ def test_diagonals_dke_pitch(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.DKEPitch(
@@ -139,7 +139,7 @@ def test_diagonals_dke_pitch(
             pitchgrid,
             speedgrid,
             species2,
-            E_psi,
+            Erho,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -270,14 +270,14 @@ def test_diagonals_dke_full(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     f = trajectories.DKE(
         field,
         pitchgrid,
         speedgrid,
         species2,
-        E_psi,
+        Erho,
         potentials2,
         "2d",
         4,
@@ -298,13 +298,13 @@ def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid):
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    erhohat = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.MDKETheta(
             field,
             pitchgrid,
-            E_psi,
+            erhohat,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -323,13 +323,13 @@ def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid):
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    erhohat = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.MDKEZeta(
             field,
             pitchgrid,
-            E_psi,
+            erhohat,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -348,13 +348,13 @@ def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid):
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    erhohat = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.MDKEPitch(
             field,
             pitchgrid,
-            E_psi,
+            erhohat,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -373,11 +373,11 @@ def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid)
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    nu = np.array(1e-3)
+    nuhat = np.array(1e-3)
 
     for p2 in [2, 4]:
         f = MDKEPitchAngleScattering(
-            field, pitchgrid, nu, p2=p2, axorder=axorder, gauge=gauge
+            field, pitchgrid, nuhat, p2=p2, axorder=axorder, gauge=gauge
         )
         A = f.as_matrix()
         np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
@@ -393,14 +393,14 @@ def test_diagonals_mdke_full(gauge, axorder, field, pitchgrid):
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
-    nu = np.array(1e-3)
+    erhohat = np.array(1e3)
+    nuhat = np.array(1e-3)
 
     f = trajectories.MDKE(
         field,
         pitchgrid,
-        E_psi,
-        nu,
+        erhohat,
+        nuhat,
         p1="2d",
         p2=4,
         axorder=axorder,
@@ -424,10 +424,10 @@ def test_diagonals2_dke_speed(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     f = trajectories.DKESpeed(
-        field, pitchgrid, speedgrid, species2, E_psi, axorder=axorder, gauge=gauge
+        field, pitchgrid, speedgrid, species2, Erho, axorder=axorder, gauge=gauge
     )
     A = f.as_matrix()
     B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
@@ -446,7 +446,7 @@ def test_diagonals2_dke_theta(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.DKETheta(
@@ -454,7 +454,7 @@ def test_diagonals2_dke_theta(
             pitchgrid,
             speedgrid,
             species2,
-            E_psi,
+            Erho,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -478,7 +478,7 @@ def test_diagonals2_dke_zeta(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.DKEZeta(
@@ -486,7 +486,7 @@ def test_diagonals2_dke_zeta(
             pitchgrid,
             speedgrid,
             species2,
-            E_psi,
+            Erho,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -510,7 +510,7 @@ def test_diagonals2_dke_pitch(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     for p1 in ["2d", "4d"]:
         f = trajectories.DKEPitch(
@@ -518,7 +518,7 @@ def test_diagonals2_dke_pitch(
             pitchgrid,
             speedgrid,
             species2,
-            E_psi,
+            Erho,
             p1=p1,
             axorder=axorder,
             gauge=gauge,
@@ -647,14 +647,14 @@ def test_diagonals2_dke_full(
         "t": field.ntheta,
         "z": field.nzeta,
     }
-    E_psi = np.array(1e3)
+    Erho = np.array(1e3)
 
     f = trajectories.DKE(
         field,
         pitchgrid,
         speedgrid,
         species2,
-        E_psi,
+        Erho,
         potentials2,
         "2d",
         4,
