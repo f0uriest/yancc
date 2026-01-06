@@ -8,7 +8,7 @@ from setuptools import find_packages, setup
 here = os.path.abspath(os.path.dirname(__file__))
 
 
-with open(os.path.join(here, "README.rst"), encoding="utf-8") as f:
+with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
     long_description = f.read()
 
 with open(os.path.join(here, "requirements.txt"), encoding="utf-8") as f:
@@ -48,10 +48,9 @@ setup(
     packages=find_packages(exclude=["docs", "tests", "local", "report"]),
     include_package_data=True,
     install_requires=requirements,
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     project_urls={
         "Issues Tracker": "https://github.com/f0uriest/yancc/issues",
-        "Contributing": "https://github.com/f0uriest/yancc/blob/master/CONTRIBUTING.rst",  # noqa: E501
         "Source Code": "https://github.com/f0uriest/yancc/",
         "Documentation": "https://yancc.readthedocs.io/",
     },

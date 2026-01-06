@@ -1,14 +1,26 @@
 """Main interface for solving drift kinetic equations in yancc."""
 
 import jax.numpy as jnp
+import lineax as lx
+import numpy as np
 
+from .collisions import RosenbluthPotentials
 from .krylov import gcrotmk
-from .misc import compute_monoenergetic_coefficients, mdke_rhs
-from .preconditioner import MDKEPreconditioner
-from .trajectories import MDKE
+from .linalg import BorderedOperator, InverseBorderedOperator
+from .misc import (
+    DKEConstraint,
+    DKESources,
+    compute_fluxes,
+    compute_monoenergetic_coefficients,
+    dke_rhs,
+    mdke_rhs,
+)
+from .preconditioner import DKEPreconditioner, MDKEPreconditioner
+from .species import Estar, nustar
+from .trajectories import DKE, MDKE
 
 
-def solve_mdke(field, pitchgrid, E_psi, nu, **options):
+def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
 
     Parameters
@@ -17,10 +29,10 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
         Magnetic field information.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
 
 
     Returns
@@ -46,13 +58,13 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
     print_every = options.pop("print_every", 0)
 
     M = MDKEPreconditioner(
-        field=field, pitchgrid=pitchgrid, nu=nu, E_psi=E_psi, **options
+        field=field, pitchgrid=pitchgrid, nuhat=nuhat, erhohat=erhohat, **options
     )
     A = MDKE(
         field,
         pitchgrid,
-        E_psi,
-        nu,
+        erhohat,
+        nuhat,
         p1=p1a,
         p2=p2a,
         gauge=True,
@@ -86,7 +98,7 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
     )
     f2 = f1.copy()
     f = jnp.array([f1, f2, f3]).T
-    Dij = compute_monoenergetic_coefficients(f, field, pitchgrid, 1.0)
+    Dij = compute_monoenergetic_coefficients(f, field, pitchgrid)
     return (
         Dij,
         f,
@@ -99,4 +111,160 @@ def solve_mdke(field, pitchgrid, E_psi, nu, **options):
             "nmv2": nmv3,
             "res2": res3 / jnp.linalg.norm(rhs[:, 3]),
         },
+    )
+
+
+def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
+    """Solve the drift kinetic equation, giving fluxes.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : MaxwellSpeedGrid
+        Speed grid data.
+    species : list[LocalMaxwellian]
+        Species information.
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+
+    Returns
+    -------
+    f : jax.Array, shape(ns,nx,na,nt,nz)
+        Distribution function f = F0 + f1 where F0 is the leading order Maxwellian and
+        f1 is the perturbation.
+    rhs : jax.Array, shape(ns,nx,na,nt,nz)
+        Drive term from leading order Maxwellian. Right hand side of DKE.
+    fluxes: dict of jax.Array
+        Contains:
+        <particle_flux> : jax.Array, shape(ns)
+            Γₐ = FSA particle flux for each species, in particles/(meter² second).
+        <heat_flux> : jax.Array, shape(ns)
+            Qₐ = FSA heat flux for each species, in Joules/(meter² second)
+        V|| : jax.Array, shape(ns, nt, nz)
+            V|| = Parallel velocity for each species, in meters/second
+        <BV||>: jax.Array, shape(ns)
+            <BV||> = Flux surface average field*parallel velocity for each species,
+            in Tesla*meter/second
+        <J||B>: float
+            <J||B> = Bootstrap current, in Tesla*Amps/meter².
+        J_rho : float
+            J_rho = Radial current, in Amps/meter².
+        J|| : jax.Array, shape(nt, nz)
+            J|| = Parallel current density in Amps/meter².
+    stats : dict
+        Info about the solve, such as number of iterations, number of matrix-vector
+        products, final residual etc.
+
+    """
+    p1a = options.pop("p1a", "4d")
+    p2a = options.pop("p2a", 4)
+    p1b = options.pop("p1b", "2d")
+    p2b = options.pop("p2b", 2)
+    rtol = jnp.asarray(options.pop("rtol", 1e-5))
+    atol = jnp.asarray(options.pop("atol", 0.0))
+    m = options.pop("m", 150)
+    k = options.pop("k", 10)
+    maxiter = options.pop("maxiter", 10)
+    print_every = options.pop("print_every", 0)
+    nL = options.pop("nL", 4)
+    quad = options.pop("quad", False)
+    verbose = options.get("verbose", 0)
+
+    potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
+
+    M = DKEPreconditioner(
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species,
+        Erho=Erho,
+        potentials=potentials,
+        gauge=True,
+        p1=p1b,
+        p2=p2b,
+        **options,
+    )
+    A = DKE(
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species,
+        Erho=Erho,
+        potentials=potentials,
+        p1=p1a,
+        p2=p2a,
+        gauge=True,
+    )
+    if verbose or print_every:
+        for iop, op in enumerate(M.operators):
+            assert isinstance(op, DKE)
+            print(
+                f"Grid {iop}: nx={op.speedgrid.nx:4d}, "
+                f"na={op.pitchgrid.nxi:4d}, "
+                f"nt={op.field.ntheta:4d}, "
+                f"nz={op.field.nzeta:4d}, "
+                f"N={op.in_structure().size:4d}"
+            )
+
+        for si, spec in enumerate(species):
+            print(f"Species {si}:")
+            x = speedgrid.x[0]
+            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
+            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
+            x = 1.0
+            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
+            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
+            x = speedgrid.x[-1]
+            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
+            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
+
+    B = DKESources(field, pitchgrid, speedgrid, species)
+    C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
+    D = lx.MatrixLinearOperator(jnp.zeros((len(species) * 2, len(species) * 2)))
+
+    operator = BorderedOperator(A, B, C, D)
+    preconditioner = InverseBorderedOperator(M, B, C, D)
+
+    rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, True, False)
+
+    x0 = jnp.zeros_like(rhs)
+    f1, j1, nmv1, res1, _, _ = gcrotmk(
+        operator,
+        rhs,
+        x0=x0,
+        MR=preconditioner,
+        m=m,
+        k=k,
+        rtol=rtol,
+        atol=atol,
+        maxiter=maxiter,
+        print_every=print_every,
+    )
+    stats = {"niter": j1, "nmv": nmv1, "res": res1 / jnp.linalg.norm(rhs)}
+
+    F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
+    F0 = jnp.tile(
+        F0[:, :, None, None, None], (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+    )
+    F0 = jnp.concatenate([F0.flatten(), jnp.zeros(2 * len(species))])
+
+    f = F0 + f1
+
+    fluxes = compute_fluxes(
+        f,
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+    )
+    shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
+
+    return (
+        f[: np.prod(shape)].reshape(shape),
+        rhs[: np.prod(shape)].reshape(shape),
+        fluxes,
+        stats,
     )

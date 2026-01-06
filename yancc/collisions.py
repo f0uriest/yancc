@@ -39,8 +39,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    nu : float
-        Normalized collisionality, nu/v
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -56,7 +56,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    nu: Float[Array, ""]
+    nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -66,7 +66,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        nu: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
@@ -76,7 +76,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
-        self.nu = jnp.array(nu)
+        self.nuhat = jnp.array(nuhat)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -97,13 +97,13 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         h = jnp.pi / self.pitchgrid.nxi
 
         f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= -(self.nu / 2 * cosa / sina)[:, None, None]
+        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None]
         f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=0)
-        f2 *= -self.nu / 2
+        f2 *= -self.nuhat / 2
         df = f1 + f2
 
         idx = self.pitchgrid.nxi // 2
-        scale = self.nu / h**2
+        scale = self.nuhat / h**2
         df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
@@ -125,16 +125,16 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
                 f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
             )
         )[:, None, None]
-        f1 *= -(self.nu / 2 * cosa / sina)[:, None, None]
+        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None]
         f2 = jnp.diag(
             jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)
         )[:, None, None]
-        f2 *= -self.nu / 2
+        f2 *= -self.nuhat / 2
         df = f1 + f2
         df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta))
 
         idx = self.pitchgrid.nxi // 2
-        scale = self.nu / h**2
+        scale = self.nuhat / h**2
         df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
@@ -159,16 +159,16 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         f1 = jax.jacfwd(fdfwd)(
             f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
         )[:, None, None, :]
-        f1 *= -(self.nu / 2 * cosa / sina)[:, None, None, None]
+        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None, None]
         f2 = jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)[
             :, None, None, :
         ]
-        f2 *= -self.nu / 2
+        f2 *= -self.nuhat / 2
         df = f1 + f2
         df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta, 1))
 
         idx = self.pitchgrid.nxi // 2
-        scale = self.nu / h**2
+        scale = self.nuhat / h**2
         df = jnp.where(
             self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, idx].set(scale), df
         )

@@ -42,38 +42,38 @@ def test_get_block_diag_mdke(pitchgrid, field, axorder, gauge):
     """Test that using jax tricks to get the block diagonal works correctly."""
     nt, nz = field.ntheta, field.nzeta
     nl = pitchgrid.nxi
-    nu = 1e-2
-    E_psi = 1e-1
+    nuhat = 1e-2
+    erhohat = 1e-1
     p1 = "4d"
     p2 = 4
 
     sizes = {"a": nl, "t": nt, "z": nz}
 
-    f = MDKETheta(field, pitchgrid, E_psi, p1, p2, axorder, gauge=gauge)
+    f = MDKETheta(field, pitchgrid, erhohat, p1, p2, axorder, gauge=gauge)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder + str(gauge))
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder + str(gauge))
 
-    f = MDKEZeta(field, pitchgrid, E_psi, p1, p2, axorder, gauge=gauge)
+    f = MDKEZeta(field, pitchgrid, erhohat, p1, p2, axorder, gauge=gauge)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder + str(gauge))
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder + str(gauge))
 
-    f = MDKEPitch(field, pitchgrid, E_psi, p1, p2, axorder, gauge=gauge)
+    f = MDKEPitch(field, pitchgrid, erhohat, p1, p2, axorder, gauge=gauge)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder + str(gauge))
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder + str(gauge))
 
-    f = MDKEPitchAngleScattering(field, pitchgrid, nu, p1, p2, axorder, gauge=gauge)
+    f = MDKEPitchAngleScattering(field, pitchgrid, nuhat, p1, p2, axorder, gauge=gauge)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder + str(gauge))
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder + str(gauge))
 
-    f = MDKE(field, pitchgrid, E_psi, nu, p1, p2, axorder, gauge=gauge)
+    f = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge=gauge)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder + str(gauge))
     B = extract_blocks(A, sizes[axorder[-1]])
@@ -87,31 +87,31 @@ def test_get_block_diag_dke(pitchgrid, speedgrid, species2, field, axorder):
     nl = pitchgrid.nxi
     nx = speedgrid.nx
     potentials = RosenbluthPotentials(speedgrid, species2)
-    E_psi = 1e-1
+    Erho = 1e-1
     p1 = "4d"
     p2 = 4
 
     sizes = {"s": len(species2), "x": nx, "a": nl, "t": nt, "z": nz}
 
-    f = DKETheta(field, pitchgrid, speedgrid, species2, E_psi, p1, p2, axorder)
+    f = DKETheta(field, pitchgrid, speedgrid, species2, Erho, p1, p2, axorder)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
-    f = DKEZeta(field, pitchgrid, speedgrid, species2, E_psi, p1, p2, axorder)
+    f = DKEZeta(field, pitchgrid, speedgrid, species2, Erho, p1, p2, axorder)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
-    f = DKEPitch(field, pitchgrid, speedgrid, species2, E_psi, p1, p2, axorder)
+    f = DKEPitch(field, pitchgrid, speedgrid, species2, Erho, p1, p2, axorder)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
-    f = DKESpeed(field, pitchgrid, speedgrid, species2, E_psi, axorder)
+    f = DKESpeed(field, pitchgrid, speedgrid, species2, Erho, axorder)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
@@ -163,7 +163,7 @@ def test_get_block_diag_dke(pitchgrid, speedgrid, species2, field, axorder):
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
-    f = DKE(field, pitchgrid, speedgrid, species2, E_psi, potentials, p1, p2, axorder)
+    f = DKE(field, pitchgrid, speedgrid, species2, Erho, potentials, p1, p2, axorder)
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
@@ -174,18 +174,18 @@ def test_permutations_mdke(field, pitchgrid):
     """Test that re-ordering the grid points gives equivalent operators."""
     p1 = "2a"
     p2 = 2
-    E_psi = 1e-4
-    nu = 1e-4
+    erhohat = 1e-4
+    nuhat = 1e-4
     N = field.ntheta * field.nzeta * pitchgrid.nxi
 
     A0f = MDKE(
-        field, pitchgrid, E_psi, nu, p1=p1, p2=p2, axorder="atz", gauge=True
+        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="atz", gauge=True
     ).as_matrix()
     A1f = MDKE(
-        field, pitchgrid, E_psi, nu, p1=p1, p2=p2, axorder="zat", gauge=True
+        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="zat", gauge=True
     ).as_matrix()
     A2f = MDKE(
-        field, pitchgrid, E_psi, nu, p1=p1, p2=p2, axorder="tza", gauge=True
+        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="tza", gauge=True
     ).as_matrix()
 
     P0f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "atz")

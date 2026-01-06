@@ -29,23 +29,23 @@ from .velocity_grids import (
 
 
 def dkes_w_theta(
-    field: Field, pitchgrid: UniformPitchAngleGrid, E_psi: Float[Array, ""]
+    field: Field, pitchgrid: UniformPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in theta direction for MDKE."""
     w = (
         field.B_sup_t / field.Bmag * pitchgrid.xi[:, None, None]
-        + field.B_sub_z / field.B2mag_fsa / field.sqrtg * E_psi
+        + field.B_sub_z / field.B2mag_fsa / field.sqrtg * erhohat
     )
     return w
 
 
 def dkes_w_zeta(
-    field: Field, pitchgrid: UniformPitchAngleGrid, E_psi: Float[Array, ""]
+    field: Field, pitchgrid: UniformPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in zeta direction for MDKE."""
     w = (
         field.B_sup_z / field.Bmag * pitchgrid.xi[:, None, None]
-        - field.B_sub_t / field.B2mag_fsa / field.sqrtg * E_psi
+        - field.B_sub_t / field.B2mag_fsa / field.sqrtg * erhohat
     )
     return w
 
@@ -73,8 +73,8 @@ class MDKETheta(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -90,7 +90,7 @@ class MDKETheta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: Float[Array, ""]
+    erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -100,7 +100,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        E_psi: Float[ArrayLike, ""],
+        erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
@@ -110,7 +110,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         assert field.ntheta > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
-        self.E_psi = jnp.array(E_psi)
+        self.erhohat = jnp.array(erhohat)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -126,7 +126,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        w = dkes_w_theta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_theta(self.field, self.pitchgrid, self.erhohat)
         h = 2 * np.pi / self.field.ntheta
 
         fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=1)
@@ -146,7 +146,7 @@ class MDKETheta(lx.AbstractLinearOperator):
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = dkes_w_theta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_theta(self.field, self.pitchgrid, self.erhohat)
         h = 2 * np.pi / self.field.ntheta
         fd = jnp.diag(jax.jacfwd(fdfwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
             None, :, None
@@ -173,7 +173,7 @@ class MDKETheta(lx.AbstractLinearOperator):
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = dkes_w_theta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_theta(self.field, self.pitchgrid, self.erhohat)
         h = 2 * np.pi / self.field.ntheta
         fd = (jax.jacfwd(fdfwd)(f[0, :, 0], self.p1, h=h, bc="periodic"))[
             None, :, None, :
@@ -230,8 +230,8 @@ class MDKEZeta(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -247,7 +247,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: Float[Array, ""]
+    erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -257,7 +257,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        E_psi: Float[ArrayLike, ""],
+        erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
@@ -267,7 +267,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         assert field.nzeta > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
-        self.E_psi = jnp.array(E_psi)
+        self.erhohat = jnp.array(erhohat)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -283,7 +283,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        w = dkes_w_zeta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_zeta(self.field, self.pitchgrid, self.erhohat)
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
 
         fd = fdfwd(f, self.p1, h=h, bc="periodic", axis=2)
@@ -302,7 +302,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = dkes_w_zeta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_zeta(self.field, self.pitchgrid, self.erhohat)
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
         fd = jnp.diag(jax.jacfwd(fdfwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
             None, None, :
@@ -329,7 +329,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
         )
         f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        w = dkes_w_zeta(self.field, self.pitchgrid, self.E_psi)
+        w = dkes_w_zeta(self.field, self.pitchgrid, self.erhohat)
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
         fd = (jax.jacfwd(fdfwd)(f[0, 0, :], self.p1, h=h, bc="periodic"))[
             None, None, :, :
@@ -386,8 +386,8 @@ class MDKEPitch(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -403,7 +403,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    E_psi: Float[Array, ""]
+    erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -413,7 +413,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        E_psi: Float[ArrayLike, ""],
+        erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
@@ -423,7 +423,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
-        self.E_psi = jnp.array(E_psi)
+        self.erhohat = jnp.array(erhohat)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -542,10 +542,10 @@ class MDKE(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    E_psi : float
-        Normalized electric field, E_psi/v
-    nu : float
-        Normalized collisionality, nu/v
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m
     axorder : {"atz", "zat", "tza"}
         Ordering for variables in f, eg how the 3d array is flattened
     p1 : int
@@ -560,8 +560,8 @@ class MDKE(lx.AbstractLinearOperator):
     field: Field
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
-    E_psi: Float[Array, ""]
-    nu: Float[Array, ""]
+    erhohat: Float[Array, ""]
+    nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -575,8 +575,8 @@ class MDKE(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        E_psi: Float[ArrayLike, ""],
-        nu: Float[ArrayLike, ""],
+        erhohat: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "atz",
@@ -585,18 +585,18 @@ class MDKE(lx.AbstractLinearOperator):
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = MonoenergeticSpeedGrid(jnp.array(1.0))
-        self.E_psi = jnp.array(E_psi)
-        self.nu = jnp.array(nu)
+        self.erhohat = jnp.array(erhohat)
+        self.nuhat = jnp.array(nuhat)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
-        self._opa = MDKEPitch(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
-        self._opt = MDKETheta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
-        self._opz = MDKEZeta(field, pitchgrid, E_psi, p1, p2, axorder, gauge)
+        self._opa = MDKEPitch(field, pitchgrid, erhohat, p1, p2, axorder, gauge)
+        self._opt = MDKETheta(field, pitchgrid, erhohat, p1, p2, axorder, gauge)
+        self._opz = MDKEZeta(field, pitchgrid, erhohat, p1, p2, axorder, gauge)
         self._opp = MDKEPitchAngleScattering(
-            field, pitchgrid, nu, p1, p2, axorder, gauge
+            field, pitchgrid, nuhat, p1, p2, axorder, gauge
         )
 
     @eqx.filter_jit
@@ -679,7 +679,7 @@ def _(operator):
 def sfincs_w_theta(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    E_psi: Float[Array, ""],
+    Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
     """Wind in theta direction for SFINCS DKE."""
@@ -688,7 +688,7 @@ def sfincs_w_theta(
     vpar = v * xi
     w = (
         field.B_sup_t / field.Bmag * vpar
-        + field.B_sub_z / field.Bmag**2 / field.sqrtg * E_psi
+        + field.B_sub_z / field.Bmag**2 / field.sqrtg * (-Erho)
     )
     return w
 
@@ -696,7 +696,7 @@ def sfincs_w_theta(
 def sfincs_w_zeta(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    E_psi: Float[Array, ""],
+    Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
     """Wind in zeta direction for SFINCS DKE."""
@@ -705,7 +705,7 @@ def sfincs_w_zeta(
     vpar = v * xi
     w = (
         field.B_sup_z / field.Bmag * vpar
-        - field.B_sub_t / field.Bmag**2 / field.sqrtg * E_psi
+        - field.B_sub_t / field.Bmag**2 / field.sqrtg * (-Erho)
     )
     return w
 
@@ -713,7 +713,7 @@ def sfincs_w_zeta(
 def sfincs_w_pitch(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    E_psi: Float[Array, ""],
+    Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
     """Wind in xi/pitch direction for SFINCS DKE."""
@@ -722,7 +722,7 @@ def sfincs_w_pitch(
     sina = jnp.sqrt(1 - xi**2)
     w1 = -field.bdotgradB / (2 * field.Bmag) * (1 - xi**2) / sina * v
     w2 = (
-        xi * (1 - xi**2) / (2 * field.Bmag**3) * E_psi * field.BxgradpsidotgradB
+        xi * (1 - xi**2) / (2 * field.Bmag**3) * (-Erho) * field.BxgradrhodotgradB
     ) / sina
     return w1 + w2
 
@@ -730,13 +730,13 @@ def sfincs_w_pitch(
 def sfincs_w_speed(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    E_psi: Float[Array, ""],
+    Erho: Float[Array, ""],
     x: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
     """Wind in speed/x direction for SFINCS DKE."""
     xi = pitchgrid.xi[None, None, :, None, None]
     x = x[:, :, None, None, None]
-    w = (1 + xi**2) * x / (2 * field.Bmag**2) * field.BxgradpsidotgradB * E_psi
+    w = (1 + xi**2) * x / (2 * field.Bmag**3) * field.BxgradrhodotgradB * (-Erho)
     return w
 
 
@@ -753,8 +753,8 @@ class DKETheta(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Electric field, E_psi = -dPhi/dpsi in Volts/Webers
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -770,7 +770,7 @@ class DKETheta(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -782,7 +782,7 @@ class DKETheta(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
@@ -795,7 +795,7 @@ class DKETheta(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
-        self.E_psi = jnp.array(E_psi)
+        self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -820,7 +820,7 @@ class DKETheta(lx.AbstractLinearOperator):
         w = sfincs_w_theta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = 2 * np.pi / self.field.ntheta
@@ -855,7 +855,7 @@ class DKETheta(lx.AbstractLinearOperator):
         w = sfincs_w_theta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = 2 * np.pi / self.field.ntheta
@@ -898,7 +898,7 @@ class DKETheta(lx.AbstractLinearOperator):
         w = sfincs_w_theta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = 2 * np.pi / self.field.ntheta
@@ -946,7 +946,7 @@ class DKETheta(lx.AbstractLinearOperator):
         w = sfincs_w_theta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         Is = jnp.eye(len(self.species))
@@ -1041,8 +1041,8 @@ class DKEZeta(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Electric field, E_psi = -dPhi/dpsi in Volts/Webers
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -1058,7 +1058,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -1070,7 +1070,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
@@ -1083,7 +1083,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
-        self.E_psi = jnp.array(E_psi)
+        self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -1108,7 +1108,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         w = sfincs_w_zeta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
@@ -1143,7 +1143,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         w = sfincs_w_zeta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
@@ -1186,7 +1186,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         w = sfincs_w_zeta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = 2 * np.pi / self.field.nzeta / self.field.NFP
@@ -1234,7 +1234,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         w = sfincs_w_zeta(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         Is = jnp.eye(len(self.species))
@@ -1329,8 +1329,8 @@ class DKEPitch(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Electric field, E_psi = -dPhi/dpsi in Volts/Webers
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     p1 : str
         Stencil to use for first derivatives. Generally of the form "1a", "2b" etc.
         Number denotes formal order of accuracy, letter denotes degree of upwinding.
@@ -1346,7 +1346,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -1358,7 +1358,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
@@ -1371,7 +1371,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
-        self.E_psi = jnp.array(E_psi)
+        self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -1396,7 +1396,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         w = sfincs_w_pitch(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = np.pi / self.pitchgrid.nxi
@@ -1431,7 +1431,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         w = sfincs_w_pitch(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = np.pi / self.pitchgrid.nxi
@@ -1474,7 +1474,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         w = sfincs_w_pitch(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         h = np.pi / self.pitchgrid.nxi
@@ -1523,7 +1523,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         w = sfincs_w_pitch(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * vth[:, None],
         )
         Is = jnp.eye(len(self.species))
@@ -1620,8 +1620,8 @@ class DKESpeed(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Electric field, E_psi = -dPhi/dpsi in Volts/Webers
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         Ordering for variables in f, eg how the 5d array is flattened
     """
@@ -1630,7 +1630,7 @@ class DKESpeed(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
 
@@ -1640,7 +1640,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
@@ -1649,7 +1649,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
-        self.E_psi = jnp.array(E_psi)
+        self.Erho = jnp.array(Erho)
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
@@ -1671,7 +1671,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         w = sfincs_w_speed(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
         )
         df = jnp.einsum("yx,sxatz->syatz", self.speedgrid.Dx_pseudospectral, f)
@@ -1701,7 +1701,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         w = sfincs_w_speed(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
         )
         df = jnp.diag(self.speedgrid.Dx_pseudospectral)[None, :, None, None, None]
@@ -1736,7 +1736,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         w = sfincs_w_speed(
             self.field,
             self.pitchgrid,
-            self.E_psi,
+            self.Erho,
             self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
         )
         df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
@@ -1826,8 +1826,8 @@ class DKE(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
-    E_psi : float
-        Normalized electric field, E_psi/v
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
     axorder : {"atz", "zat", "tza"}
@@ -1844,7 +1844,7 @@ class DKE(lx.AbstractLinearOperator):
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
-    E_psi: Float[Array, ""]
+    Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -1862,7 +1862,7 @@ class DKE(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
-        E_psi: Float[ArrayLike, ""],
+        Erho: Float[ArrayLike, ""],
         potentials: Optional[RosenbluthPotentials] = None,
         p1: str = "4d",
         p2: int = 4,
@@ -1878,7 +1878,7 @@ class DKE(lx.AbstractLinearOperator):
         if potentials is None:
             potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
-        self.E_psi = jnp.array(E_psi)
+        self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -1888,17 +1888,15 @@ class DKE(lx.AbstractLinearOperator):
             operator_weights = jnp.ones(8).at[-1].set(0)
         self.operator_weights = jnp.asarray(operator_weights)
 
-        self._opx = DKESpeed(
-            field, pitchgrid, speedgrid, species, E_psi, axorder, gauge
-        )
+        self._opx = DKESpeed(field, pitchgrid, speedgrid, species, Erho, axorder, gauge)
         self._opa = DKEPitch(
-            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
+            field, pitchgrid, speedgrid, species, Erho, p1, p2, axorder, gauge
         )
         self._opt = DKETheta(
-            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
+            field, pitchgrid, speedgrid, species, Erho, p1, p2, axorder, gauge
         )
         self._opz = DKEZeta(
-            field, pitchgrid, speedgrid, species, E_psi, p1, p2, axorder, gauge
+            field, pitchgrid, speedgrid, species, Erho, p1, p2, axorder, gauge
         )
         self._C = FokkerPlanckLandau(
             field,
