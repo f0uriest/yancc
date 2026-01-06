@@ -26,6 +26,7 @@ from .velocity_grids import (
     AbstractSpeedGrid,
     LegendrePitchAngleGrid,
     MaxwellSpeedGrid,
+    MonoenergeticSpeedGrid,
     UniformPitchAngleGrid,
 )
 
@@ -229,7 +230,7 @@ class RosenbluthPotentials(eqx.Module):
     dHxlk: jax.Array
 
     def __init__(self, speedgrid, species, nL=4, quad=False):
-        if not quad:
+        if not quad and isinstance(speedgrid, MaxwellSpeedGrid):
             assert speedgrid.k == 0
             assert speedgrid.xmax == jnp.inf
 
@@ -245,17 +246,18 @@ class RosenbluthPotentials(eqx.Module):
         self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         # arr[a,b] is potential operator from species b to species a
-        for a, spa in enumerate(species):
-            for b, spb in enumerate(species):
-                va, vb = spa.v_thermal, spb.v_thermal
-                v = x * va  # speed on a grid
-                xb = v / vb  # on b grid
-                ddG = self._ddGlk(xb, l, k)
-                dH = self._dHlk(xb, l, k)
-                H = self._Hlk(xb, l, k)
-                self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(ddG)
-                self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(dH)
-                self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(H)
+        if isinstance(speedgrid, MaxwellSpeedGrid):
+            for a, spa in enumerate(species):
+                for b, spb in enumerate(species):
+                    va, vb = spa.v_thermal, spb.v_thermal
+                    v = x * va  # speed on a grid
+                    xb = v / vb  # on b grid
+                    ddG = self._ddGlk(xb, l, k)
+                    dH = self._dHlk(xb, l, k)
+                    H = self._Hlk(xb, l, k)
+                    self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(ddG)
+                    self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(dH)
+                    self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(H)
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -856,27 +858,32 @@ class EnergyScattering(lx.AbstractLinearOperator):
         coeff2 = []
         x = speedgrid.x
 
-        for spa in species:
-            vta = spa.v_thermal
-            v = x * vta
-            term0 = 0.0
-            term1 = 0.0
-            term2 = 0.0
-            for spb in species:
-                nupar = nupar_ab(spa, spb, v)
-                nuD = nuD_ab(spa, spb, v)
-                gamma = gamma_ab(spa, spb)
-                ma, mb = spa.species.mass, spb.species.mass
-                vtb = spb.v_thermal
-                term0 += 4 * jnp.pi * gamma * ma / mb * spb(v)
-                term1 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
-                term2 += nupar * x**2 / 2
-            coeff0.append(term0)
-            coeff1.append(term1)
-            coeff2.append(term2)
-        self.coeff0 = jnp.asarray(coeff0)
-        self.coeff1 = jnp.asarray(coeff1)
-        self.coeff2 = jnp.asarray(coeff2)
+        if isinstance(speedgrid, MonoenergeticSpeedGrid):
+            self.coeff0 = jnp.zeros((len(species), speedgrid.nx))
+            self.coeff1 = jnp.zeros((len(species), speedgrid.nx))
+            self.coeff2 = jnp.zeros((len(species), speedgrid.nx))
+        else:
+            for spa in species:
+                vta = spa.v_thermal
+                v = x * vta
+                term0 = 0.0
+                term1 = 0.0
+                term2 = 0.0
+                for spb in species:
+                    nupar = nupar_ab(spa, spb, v)
+                    nuD = nuD_ab(spa, spb, v)
+                    gamma = gamma_ab(spa, spb)
+                    ma, mb = spa.species.mass, spb.species.mass
+                    vtb = spb.v_thermal
+                    term0 += 4 * jnp.pi * gamma * ma / mb * spb(v)
+                    term1 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
+                    term2 += nupar * x**2 / 2
+                coeff0.append(term0)
+                coeff1.append(term1)
+                coeff2.append(term2)
+            self.coeff0 = jnp.asarray(coeff0)
+            self.coeff1 = jnp.asarray(coeff1)
+            self.coeff2 = jnp.asarray(coeff2)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -1113,31 +1120,34 @@ class FieldPartCD(lx.AbstractLinearOperator):
         # | C_aa  C_ab | | f_a | = | R_a |
         # | C_ba  C_bb | | f_b |   | R_b |
 
-        C = []
-        Ca = []
-        for a, spa in enumerate(species):
-            va = spa.v_thermal
-            ma = spa.species.mass
-            v = x * va
-            Fa = spa(v)
-            for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
-                vb = spb.v_thermal
-                mb = spb.species.mass
-                # need to evaluate fb on the speed grid for fa
-                # if va >> vb, then fa is "wider" in speed, and we're evaluating in
-                # the tail of fb, ie xq >> 1, so xq = va/vb x
-                xq = va / vb * x
-                # matrix to evaluate fb at xq
-                Dab = orthax.orthvander(
-                    xq, speedgrid.nx - 1, speedgrid.xrec
-                ) * speedgrid.xrec.weight(xq[:, None])
-                prefactor = jnp.diag(gamma * Fa * 4 * jnp.pi * ma / mb)
-                CDab = prefactor @ Dab @ speedgrid.xvander_inv
-                Ca.append(CDab)
-            C.append(Ca)
+        if isinstance(speedgrid, MonoenergeticSpeedGrid):
+            self.C = jnp.zeros((len(species), len(species), speedgrid.nx, speedgrid.nx))
+        else:
+            C = []
             Ca = []
-        self.C = jnp.asarray(C)
+            for a, spa in enumerate(species):
+                va = spa.v_thermal
+                ma = spa.species.mass
+                v = x * va
+                Fa = spa(v)
+                for b, spb in enumerate(species):
+                    gamma = gamma_ab(spa, spb)
+                    vb = spb.v_thermal
+                    mb = spb.species.mass
+                    # need to evaluate fb on the speed grid for fa
+                    # if va >> vb, then fa is "wider" in speed, and we're evaluating in
+                    # the tail of fb, ie xq >> 1, so xq = va/vb x
+                    xq = va / vb * x
+                    # matrix to evaluate fb at xq
+                    Dab = orthax.orthvander(
+                        xq, speedgrid.nx - 1, speedgrid.xrec
+                    ) * speedgrid.xrec.weight(xq[:, None])
+                    prefactor = jnp.diag(gamma * Fa * 4 * jnp.pi * ma / mb)
+                    CDab = prefactor @ Dab @ speedgrid.xvander_inv
+                    Ca.append(CDab)
+                C.append(Ca)
+                Ca = []
+            self.C = jnp.asarray(C)
 
     @eqx.filter_jit
     def mv(self, vector):
