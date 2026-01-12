@@ -3,8 +3,9 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 import orthax
+
+from .finite_diff import fdfwd
 
 
 # save some time by precomputing this, usually only need nx <= 5-8
@@ -128,6 +129,7 @@ class AbstractSpeedGrid(eqx.Module):
     xvander_inv: jax.Array
     Dx: jax.Array
     Dx_pseudospectral: jax.Array
+    D2x: jax.Array
     D2x_pseudospectral: jax.Array
     gauge_idx: jax.Array
 
@@ -142,17 +144,17 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
     """
 
     def __init__(self, x: jax.Array):
-        x = jnp.asarray(x)
-        assert x.size == 1
-        self.nx = 1
+        x = jnp.atleast_1d(x)
+        self.nx = x.size
         self.x = x
-        self.wx = jnp.ones(1)
-        self.xvander = jnp.ones((1, 1))
-        self.xvander_inv = jnp.ones((1, 1))
-        self.Dx = jnp.zeros((1, 1))
-        self.Dx_pseudospectral = jnp.zeros((1, 1))
-        self.D2x_pseudospectral = jnp.zeros((1, 1))
-        self.gauge_idx = jnp.array([0])
+        self.wx = jnp.ones(self.nx)
+        self.xvander = jnp.eye(self.nx)
+        self.xvander_inv = jnp.eye(self.nx)
+        self.Dx = jnp.zeros((self.nx, self.nx))
+        self.Dx_pseudospectral = jnp.zeros((self.nx, self.nx))
+        self.D2x = jnp.zeros((self.nx, self.nx))
+        self.D2x_pseudospectral = jnp.zeros((self.nx, self.nx))
+        self.gauge_idx = jnp.arange(self.nx)
 
 
 class MaxwellSpeedGrid(AbstractSpeedGrid):
@@ -253,32 +255,61 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
         gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[0])
         if self.nx > 1:
-            gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
+            gauge_idx2 = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[1])
             gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
         self.gauge_idx = jnp.sort(gauge_idx)
 
-    def _dfdx(self, f):
-        # this only knows about a single species,
-        # f assumed to be shape(xi, x, theta, zeta)
-        return jnp.einsum("ax,ixtz->iatz", self.Dx_pseudospectral, f)
 
-    def _interp(self, x, f, xq, weight=True):
-        # f assumed to be shape(xi, x, theta, zeta)
-        M = orthax.orthvander(x, len(x) - 1, self.xrec)
-        if weight:
-            M *= jnp.sqrt(self.xrec.weight(x[:, None]))
-        f = jnp.moveaxis(f, 1, 0)
-        shp = f.shape
-        c = jnp.linalg.lstsq(M, f.reshape((self.nx, -1)))[0].reshape(shp)
-        fq = orthax.orthval(xq, c, self.xrec)
-        if weight:
-            fq *= jnp.sqrt(self.xrec.weight(xq))
-        # fq now of shape (xi, theta, zeta, x)
-        return jnp.moveaxis(fq, -1, 1)
+class UniformSpeedGrid(AbstractSpeedGrid):
+    """Grid for speed variable x=v/vth.
 
-    def _integral(self, f):
-        # f assumed to be shape(xi, x, theta, zeta)
-        return (f * self.wx[None, :, None, None]).sum(axis=1)
+    Uses finite differences with uniformly spaced grid.
+
+    Parameters
+    ----------
+    nx : int
+        Number of grid points.
+    xmax : float, optional
+        Upper bound for x.
+
+    """
+
+    nx: int = eqx.field(static=True)
+    k: int  # remove
+    xmax: float
+    xrec: orthax.recurrence.AbstractRecurrenceRelation  # remove
+    x: jax.Array
+    wx: jax.Array
+    xvander: jax.Array  # remove
+    xvander_inv: jax.Array  # remove
+    Dx: jax.Array
+    Dx_pseudospectral: jax.Array
+    gauge_idx: jax.Array
+
+    def __init__(self, nx, xmax=6):
+        self.nx = nx
+        self.k = 0  # remove
+        self.xmax = xmax
+        self.xrec = default_xrec  # remove
+
+        self.x = jnp.linspace(0, self.xmax, nx, endpoint=False) + self.xmax / (2 * nx)
+        self.wx = jnp.ones_like(self.x) * self.xmax / nx  # fix
+
+        self.xvander = jnp.eye(nx)  # remove
+        self.xvander_inv = jnp.eye(nx)  # remove
+
+        h = self.xmax / nx
+        self.Dx_pseudospectral = jax.jacfwd(fdfwd)(self.x, "2z", h, "speed")
+        self.Dx = self.Dx_pseudospectral  # remove
+
+        self.D2x_pseudospectral = self.Dx @ self.Dx
+        self.D2x = self.D2x_pseudospectral  # remove
+
+        gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(self.x - 1))[0])
+        if self.nx > 1:
+            gauge_idx2 = jnp.atleast_1d(jnp.argsort(jnp.abs(self.x - 1))[1])
+            gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
+        self.gauge_idx = gauge_idx
 
 
 class LegendrePitchAngleGrid(eqx.Module):
