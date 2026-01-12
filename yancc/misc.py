@@ -546,7 +546,7 @@ def normalize_fluxes_sfincs(
     mbar *= proton_mass
     Tbar *= JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
-    density = np.array([sp.density for sp in species])
+    density = jnp.array([sp.density for sp in species])
     sfincs_fluxes = {}
     sfincs_fluxes["particleFlux_vm_rHat"] = (
         fluxes["<particle_flux>"] * Rbar / (nbar * vbar)
