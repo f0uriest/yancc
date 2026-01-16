@@ -1,5 +1,7 @@
 """Stuff for preconditioners."""
 
+from typing import Union
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -14,6 +16,7 @@ from .multigrid import (
     get_dke_jacobi_smoothers,
     get_dke_operators,
     get_fields_grids,
+    get_grid_resolutions,
     get_mdke_jacobi_smoothers,
     get_mdke_operators,
 )
@@ -34,6 +37,12 @@ class MDKEPreconditioner(MultigridOperator):
         Monoenergetic electric field, Erho/v in units of V*s/m
     nuhat : float
         Monoenergetic collisionality, nu/v in units of 1/m
+    verbose : int
+        Level of verbosity:
+          - 0: no into printed.
+          - 1: print initialization info.
+          - 2: also print residuals at each multigrid level before and after smoothing.
+          - 3: also print residuals within smoothing iterations.
     """
 
     field: Field
@@ -49,43 +58,67 @@ class MDKEPreconditioner(MultigridOperator):
         pitchgrid: UniformPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
-        **options
+        verbose: Union[bool, int] = False,
+        **options,
     ):
 
         self.field = field
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.asarray(erhohat)
         self.nuhat = jnp.asarray(nuhat)
-        self.p1 = options.pop("p1m", "2d")
-        self.p2 = options.pop("p2m", 2)
+        self.p1 = options.pop("p1", "2d")
+        self.p2 = options.pop("p2", 2)
         gauge = options.pop("gauge", True)
-        smooth_solver = options.pop("smooth_solver", "dense")
-        smooth_weights = options.pop("smooth_weights", None)
-        coarsening = options.pop("coarsening", 2)
+        ress = options.pop("ress", None)
+        max_grids = options.pop("max_grids", None)
+        coarsening_factor = options.pop("coarsening_factor", None)
         coarse_N = options.pop("coarse_N", 8000)
         min_nt = options.pop("min_nt", 5)
         min_nz = options.pop("min_nz", 5)
         min_na = options.pop("min_na", 5)
+        smooth_solver = options.pop("smooth_solver", "dense")
+        smooth_weights = options.pop("smooth_weights", None)
+        smooth_method = options.pop("smooth_method", "standard")
         coarse_overweight = options.pop("coarse_overweight", 1)
         interp_method = options.pop("interp_method", "linear")
-        smooth_method = options.pop("smooth_method", "standard")
-        verbose = options.pop("verbose", False)
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
         cycle_index = options.pop("cycle_index", 3)
 
-        assert len(options) == 0, "got unknown option " + str(options)
+        assert len(options) == 0, "MDKEPreconditioner got unknown option " + str(
+            options
+        )
+
+        if ress is None:
+            ress = get_grid_resolutions(
+                ns=1,
+                nx=1,
+                na=pitchgrid.nxi,
+                nt=field.ntheta,
+                nz=field.nzeta,
+                coarse_N=coarse_N,
+                min_na=min_na,
+                min_nt=min_nt,
+                min_nz=min_nz,
+                max_grids=max_grids,
+                coarsening_factor=coarsening_factor,
+            )
+
+        if verbose:
+            for i, res in enumerate(ress):
+                ns, nx, na, nt, nz = res
+                # these values aren't traced so we can use regular print
+                print(
+                    f"Grid {i}: na={na:4d}, "
+                    f"nt={nt:4d}, "
+                    f"nz={nz:4d}, "
+                    f"N={ns*nx*na*nt*nz}"
+                )
 
         fields, grids = get_fields_grids(
             field=field,
-            nt=field.ntheta,
-            nz=field.nzeta,
-            na=pitchgrid.nxi,
-            coarsening_factor=coarsening,
-            min_N=coarse_N,
-            min_nt=min_nt,
-            min_nz=min_nz,
-            min_na=min_na,
+            pitchgrid=pitchgrid,
+            ress=ress,
         )
 
         operators = get_mdke_operators(
@@ -110,8 +143,8 @@ class MDKEPreconditioner(MultigridOperator):
         )
 
         super().__init__(
-            operators=operators[::-1],
-            smoothers=smoothers[::-1],
+            operators=operators,
+            smoothers=smoothers,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
@@ -120,7 +153,7 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_overweight=coarse_overweight,
-            verbose=verbose,
+            verbose=max(0, verbose - 2),
         )
 
 
@@ -150,7 +183,8 @@ class DKEPreconditioner(MultigridOperator):
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         potentials: RosenbluthPotentials,
-        **options
+        verbose: Union[bool, int] = False,
+        **options,
     ):
 
         self.field = field
@@ -162,37 +196,55 @@ class DKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
         gauge = options.pop("gauge", True)
-        smooth_solver = options.pop("smooth_solver", "dense")
-        smooth_weights = options.pop("smooth_weights", None)
-        coarsening = options.pop("coarsening", 2)
+        ress = options.pop("ress", None)
+        coarsening_factor = options.pop("coarsening_factor", None)
+        max_grids = options.pop("max_grids", None)
         coarse_N = options.pop("coarse_N", 8000)
         min_nt = options.pop("min_nt", 5)
         min_nz = options.pop("min_nz", 5)
         min_na = options.pop("min_na", 5)
-        coarse_overweight = options.pop("coarse_overweight", 1)
-        interp_method = options.pop("interp_method", "linear")
+        smooth_solver = options.pop("smooth_solver", "dense")
+        smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
         smooth_type = options.pop("smooth_type", 1)
-        verbose = options.pop("verbose", False)
+        coarse_overweight = options.pop("coarse_overweight", 1)
+        interp_method = options.pop("interp_method", "linear")
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
         cycle_index = options.pop("cycle_index", 1)
         operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
         smoother_weights = options.pop("smoother_weights", operator_weights)
 
-        fields, grids = get_fields_grids(
-            field=field,
-            nt=field.ntheta,
-            nz=field.nzeta,
-            na=pitchgrid.nxi,
-            coarsening_factor=coarsening,
-            min_N=coarse_N,
-            min_nt=min_nt,
-            min_nz=min_nz,
-            min_na=min_na,
-            nx=speedgrid.nx,
-            ns=len(species),
-        )
+        assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
+
+        if ress is None:
+            ress = get_grid_resolutions(
+                ns=len(species),
+                nx=speedgrid.nx,
+                na=pitchgrid.nxi,
+                nt=field.ntheta,
+                nz=field.nzeta,
+                coarse_N=coarse_N,
+                min_na=min_na,
+                min_nt=min_nt,
+                min_nz=min_nz,
+                max_grids=max_grids,
+                coarsening_factor=coarsening_factor,
+            )
+
+        if verbose:
+            for i, res in enumerate(ress):
+                ns, nx, na, nt, nz = res
+                # these values aren't traced so we can use regular print
+                print(
+                    f"Grid {i}: nx={nx:4d}, "
+                    f"na={na:4d}, "
+                    f"nt={nt:4d}, "
+                    f"nz={nz:4d}, "
+                    f"N={ns*nx*na*nt*nz}"
+                )
+
+        fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
 
         operators = get_dke_operators(
             fields=fields,
@@ -240,8 +292,8 @@ class DKEPreconditioner(MultigridOperator):
                 **options,
             )
         super().__init__(
-            operators=operators[::-1],
-            smoothers=smoothers[::-1],
+            operators=operators,
+            smoothers=smoothers,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
@@ -250,7 +302,7 @@ class DKEPreconditioner(MultigridOperator):
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_overweight=coarse_overweight,
-            verbose=verbose,
+            verbose=max(0, verbose - 2),
         )
 
 
@@ -279,7 +331,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        **options
+        **options,
     ):
 
         self.field = field

@@ -1,10 +1,16 @@
 """Main interface for solving drift kinetic equations in yancc."""
 
+from typing import Any, Optional, Union
+
+import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Float
+from scipy.constants import elementary_charge, proton_mass
 
 from .collisions import RosenbluthPotentials
+from .field import Field
 from .krylov import gcrotmk
 from .linalg import BorderedOperator, InverseBorderedOperator
 from .misc import (
@@ -16,11 +22,20 @@ from .misc import (
     mdke_rhs,
 )
 from .preconditioner import DKEPreconditioner, MDKEPreconditioner
-from .species import Estar, nustar
+from .species import Estar, LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE
+from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
-def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
+def solve_mdke(
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    erhohat: Union[float, Float[Any, ""]],
+    nuhat: Union[float, Float[Any, ""]],
+    verbose: Union[bool, int] = False,
+    multigrid_options: Optional[dict] = None,
+    **options,
+):
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
 
     Parameters
@@ -30,43 +45,67 @@ def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
-        Monoenergetic electric field, Erho/v in units of V*s/m
+        Monoenergetic electric field, Erho/v = -∂Φ /∂ρ /v in units of V*s/m.
     nuhat : float
-        Monoenergetic collisionality, nu/v in units of 1/m
-
+        Monoenergetic collisionality, ν/v in units of 1/m.
+    verbose: bool, int
+        Level of verbosity:
+          - 0: no into printed.
+          - 1: print initialization info.
+          - 2: print info from krylov solver at each iteration. Frequency can be
+          controlled by also passing `print_every=<int>`
+          - 3: also print residuals at each multigrid level before and after smoothing.
+          - 4: also print residuals within smoothing iterations.
+        Note that verbose > 2 may slow things down as additional diagnostic info is
+        calculated at each step.
+    multigrid_options : dict, optional
+        Optional parameters to control behavior of multigrid preconditioner.
 
     Returns
     -------
-    Dij : jax.Array, shape(3,3)
-        Monoenergetic transport coefficients
     f : jax.Array, shape(N,3)
         Solution of DKE for each right hand side.
     rhs : jax.Array, shape(N,3)
         Source terms for DKE.
+    Dij : jax.Array, shape(3,3)
+        Monoenergetic transport coefficients
     info : dict
         Info about the solve, such as number of iterations, number of matrix-vector
         products, final residual etc.
 
     """
-    p1a = options.pop("p1a", "4d")
-    p2a = options.pop("p2a", 4)
+    multigrid_options = {} if multigrid_options is None else multigrid_options
+
+    p1 = options.pop("p1", "4d")
+    p2 = options.pop("p2", 4)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 300)
     k = options.pop("k", 5)
     maxiter = options.pop("maxiter", 5)
-    print_every = options.pop("print_every", 0)
+    print_every = options.pop("print_every", 10)
+
+    assert len(options) == 0, "solve_mdke got unknown option " + str(options)
+
+    if verbose:
+        jax.debug.print("ν` = {nuhat: .3e}", nuhat=nuhat)
+        jax.debug.print("E` = {erhohat: .3e}", erhohat=erhohat)
 
     M = MDKEPreconditioner(
-        field=field, pitchgrid=pitchgrid, nuhat=nuhat, erhohat=erhohat, **options
+        field=field,
+        pitchgrid=pitchgrid,
+        nuhat=nuhat,
+        erhohat=erhohat,
+        verbose=verbose,
+        **multigrid_options,
     )
     A = MDKE(
         field,
         pitchgrid,
         erhohat,
         nuhat,
-        p1=p1a,
-        p2=p2a,
+        p1=p1,
+        p2=p2,
         gauge=True,
     )
     rhs = mdke_rhs(field, pitchgrid)
@@ -82,7 +121,7 @@ def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
         rtol=rtol,
         atol=atol,
         maxiter=maxiter,
-        print_every=print_every,
+        print_every=print_every if verbose > 1 else 0,
     )
     f3, j3, nmv3, res3, _, _ = gcrotmk(
         A,
@@ -94,27 +133,54 @@ def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
         rtol=rtol,
         atol=atol,
         maxiter=maxiter,
-        print_every=print_every,
+        print_every=print_every if verbose > 1 else 0,
     )
     f2 = f1.copy()
+    info = {
+        "j1": j1,
+        "nmv1": nmv1,
+        "res1": res1 / jnp.linalg.norm(rhs[:, 0]),
+        "j2": j3,
+        "nmv2": nmv3,
+        "res2": res3 / jnp.linalg.norm(rhs[:, 3]),
+    }
+    if verbose:
+        jax.debug.print(
+            "Finished krylov (1st rhs): nmv={nmv:4d}, "
+            "n_restarts={j:3d}, residual={res:.3e}",
+            nmv=nmv1,
+            j=j1,
+            res=info["res1"],
+            ordered=True,
+        )
+        jax.debug.print(
+            "Finished krylov (2nd rhs): nmv={nmv:4d}, "
+            "n_restarts={j:3d}, residual={res:.3e}",
+            nmv=nmv3,
+            j=j3,
+            res=info["res2"],
+            ordered=True,
+        )
     f = jnp.array([f1, f2, f3]).T
     Dij = compute_monoenergetic_coefficients(f, field, pitchgrid)
     return (
-        Dij,
         f,
         rhs,
-        {
-            "j1": j1,
-            "nmv1": nmv1,
-            "res1": res1 / jnp.linalg.norm(rhs[:, 0]),
-            "j2": j3,
-            "nmv2": nmv3,
-            "res2": res3 / jnp.linalg.norm(rhs[:, 3]),
-        },
+        Dij,
+        info,
     )
 
 
-def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
+def solve_dke(
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: MaxwellSpeedGrid,
+    species: list[LocalMaxwellian],
+    Erho: Union[float, Float[Any, ""]],
+    verbose: Union[bool, int] = False,
+    multigrid_options: Optional[dict] = None,
+    **options,
+) -> tuple[jax.Array, jax.Array, dict[str, jax.Array], dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
 
     Parameters
@@ -129,6 +195,18 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         Species information.
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    verbose: bool, int
+        Level of verbosity:
+          - 0: no into printed.
+          - 1: print initialization info.
+          - 2: print info from krylov solver at each iteration. Frequency can be
+          controlled by also passing `print_every=<int>`
+          - 3: also print residuals at each multigrid level before and after smoothing.
+          - 4: also print residuals within smoothing iterations.
+        Note that verbose > 2 may slow things down as additional diagnostic info is
+        calculated at each step.
+    multigrid_options : dict, optional
+        Optional parameters to control behavior of multigrid preconditioner.
 
     Returns
     -------
@@ -159,21 +237,49 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         products, final residual etc.
 
     """
-    p1a = options.pop("p1a", "4d")
-    p2a = options.pop("p2a", 4)
-    p1b = options.pop("p1b", "2d")
-    p2b = options.pop("p2b", 2)
+    multigrid_options = {} if multigrid_options is None else multigrid_options
+
+    p1 = options.pop("p1", "4d")
+    p2 = options.pop("p2", 4)
+    potentials = options.pop("potentials", None)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 150)
     k = options.pop("k", 10)
     maxiter = options.pop("maxiter", 10)
-    print_every = options.pop("print_every", 0)
-    nL = options.pop("nL", 4)
-    quad = options.pop("quad", False)
-    verbose = options.get("verbose", 0)
+    print_every = options.pop("print_every", 10)
+    operator_weights = options.pop("operator_weights", None)
+    multigrid_options.setdefault("operator_weights", operator_weights)
 
-    potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
+    if potentials is None:
+        nL = options.pop("nL", 4)
+        quad = options.pop("quad", False)
+        potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
+
+    assert len(options) == 0, "solve_dke got unknown option " + str(options)
+
+    if verbose:
+        for si, spec in enumerate(species):
+            jax.debug.print(
+                "Species {si}:  "
+                "m={mass: .2e} (mₚ)  "
+                "q={charge: .2e} (qₚ)  "
+                "n={dens: .2e} (m⁻³)  "
+                "T={temp: .2e} (eV)  ",
+                si=si,
+                mass=spec.species.mass / proton_mass,
+                charge=spec.species.charge / elementary_charge,
+                dens=spec.density,
+                temp=spec.temperature,
+                ordered=True,
+            )
+            tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
+            nustars = nustar(spec, field, tempx)
+            erstars = Estar(spec, field, Erho, tempx)
+            for nu, x in zip(nustars, tempx):
+                jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
+            for er, x in zip(erstars, tempx):
+                jax.debug.print("E* (x={x:.2e}): {er: .3e}", x=x, er=er, ordered=True)
 
     M = DKEPreconditioner(
         field=field,
@@ -183,9 +289,8 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         Erho=Erho,
         potentials=potentials,
         gauge=True,
-        p1=p1b,
-        p2=p2b,
-        **options,
+        verbose=verbose,
+        **multigrid_options,
     )
     A = DKE(
         field=field,
@@ -194,32 +299,11 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         species=species,
         Erho=Erho,
         potentials=potentials,
-        p1=p1a,
-        p2=p2a,
-        gauge=True,
+        p1=p1,
+        p2=p2,
+        gauge=False,
+        operator_weights=operator_weights,
     )
-    if verbose or print_every:
-        for iop, op in enumerate(M.operators):
-            assert isinstance(op, DKE)
-            print(
-                f"Grid {iop}: nx={op.speedgrid.nx:4d}, "
-                f"na={op.pitchgrid.nxi:4d}, "
-                f"nt={op.field.ntheta:4d}, "
-                f"nz={op.field.nzeta:4d}, "
-                f"N={op.in_structure().size:4d}"
-            )
-
-        for si, spec in enumerate(species):
-            print(f"Species {si}:")
-            x = speedgrid.x[0]
-            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
-            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
-            x = 1.0
-            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
-            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
-            x = speedgrid.x[-1]
-            print(f"ν* (x={x:.2e}): {nustar(spec, field, x): .3e}")
-            print(f"E* (x={x:.2e}): {Estar(spec, field, Erho, x): .3e}")
 
     B = DKESources(field, pitchgrid, speedgrid, species)
     C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
@@ -241,9 +325,17 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         rtol=rtol,
         atol=atol,
         maxiter=maxiter,
-        print_every=print_every,
+        print_every=print_every if verbose > 1 else 0,
     )
-    stats = {"niter": j1, "nmv": nmv1, "res": res1 / jnp.linalg.norm(rhs)}
+    info = {"niter": j1, "nmv": nmv1, "res": res1 / jnp.linalg.norm(rhs)}
+    if verbose:
+        jax.debug.print(
+            "Finished krylov: nmv={nmv:4d}, n_restarts={j:3d}, residual={res:.3e}",
+            nmv=nmv1,
+            j=j1,
+            res=info["res"],
+            ordered=True,
+        )
 
     F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
     F0 = jnp.tile(
@@ -266,5 +358,5 @@ def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
         f[: np.prod(shape)].reshape(shape),
         rhs[: np.prod(shape)].reshape(shape),
         fluxes,
-        stats,
+        info,
     )

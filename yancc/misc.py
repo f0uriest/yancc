@@ -1,9 +1,12 @@
 """Constraints, sources, RHS, etc."""
 
+from typing import Any, Union
+
 import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
 from .field import Field
@@ -123,23 +126,19 @@ class DKEConstraint(lx.MatrixLinearOperator):
         self.species = species
         self.normalize = normalize
 
-        if normalize:
-            vth = jnp.ones((len(species), 1, 1))
-        else:
-            vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
-        dx = (speedgrid.x**2 * speedgrid.wx)[None, :, None]
-        x2dx = (speedgrid.x**4 * speedgrid.wx)[None, :, None]
-        dxi = pitchgrid.wxi[None, None, :]
+        vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
+
         # int f d3v, for particle conservation, shape(ns, nx, nxi)
-        d3v = vth**3 * dx * dxi
+        d3v = _d3v(speedgrid, pitchgrid, species)
         # int v^2 f d3v, for energy conservation, shape(ns, nx, nxi)
-        v2d3v = vth**5 * x2dx * dxi
+        v2d3v = speedgrid.x[None, :, None] ** 2 * vth**2 * d3v
+
+        if normalize:
+            d3v /= vth**3
+            v2d3v /= vth**5
 
         # flux surface average operator
-        dt = field.wtheta[:, None]
-        dz = field.wzeta[None, :]
-        dr = (field.sqrtg * dt * dz) / (field.sqrtg * dt * dz).sum()
-        dr = dr.flatten()[None, None, None, :]
+        dr = _dr(field).flatten()
 
         Ip = 2 * jnp.pi * (d3v[..., None] * dr).reshape((len(species), -1))
         Ie = 2 * jnp.pi * (v2d3v[..., None] * dr).reshape((len(species), -1))
@@ -192,7 +191,7 @@ def dke_rhs(
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
-    Erho: float,
+    Erho: Union[float, Float[Any, ""]],
     include_constraints: bool = True,
     normalize: bool = False,
 ) -> jax.Array:
@@ -317,7 +316,7 @@ def compute_monoenergetic_coefficients(
     return Dij
 
 
-def normalize_dkes(Dij: jax.Array, field: Field, v: float = 1.0):
+def normalize_dkes(Dij: jax.Array, field: Field, v: Union[float, Float[Any, ""]] = 1.0):
     """Normalize monoenergetic coefficients to match DKES/MONKES.
 
     Parameters
@@ -361,7 +360,7 @@ def compute_transport_matrix(
 
     Parameters
     ----------
-    Dij : jax.Array, shape(nspecies, nx, 3, 3)
+    Dij : jax.Array, shape(ns, nx, 3, 3)
         Monoenergetic transport coefficient for each species and each speed.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -370,10 +369,10 @@ def compute_transport_matrix(
 
     Returns
     -------
-    Lij : jax.Array, shape(nspecies, 3, 3)
-        Transport marix for each species.
+    Lij : jax.Array, shape(ns, 3, 3)
+        Transport matrix for each species.
     """
-    # TODO: check this, it seems to disagree with the formulas in monkes and beidler
+    # TODO: check this, it seems to disagree with the formulas in monkes and Beidler
     vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None]
     x = speedgrid.x[None, :, None, None]
     fM = jnp.concatenate([sp(x * sp.v_thermal) for sp in species], axis=0)
@@ -504,16 +503,16 @@ def compute_fluxes(
 
 
 def normalize_fluxes_sfincs(
-    fluxes,
-    field,
-    pitchgrid,
-    speedgrid,
-    species,
-    Bbar=1,
-    Rbar=1,
-    nbar=1e20,
-    mbar=1,
-    Tbar=1e3,
+    fluxes: dict[str, jax.Array],
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    species: list[LocalMaxwellian],
+    Bbar: Union[float, Float[Any, ""]] = 1,
+    Rbar: Union[float, Float[Any, ""]] = 1,
+    nbar: Union[float, Float[Any, ""]] = 1e20,
+    mbar: Union[float, Float[Any, ""]] = 1,
+    Tbar: Union[float, Float[Any, ""]] = 1e3,
 ):
     """Normalize fluxes to match SFINCS.
 
@@ -546,7 +545,7 @@ def normalize_fluxes_sfincs(
     mbar *= proton_mass
     Tbar *= JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
-    density = np.array([sp.density for sp in species])
+    density = jnp.array([sp.density for sp in species])
     sfincs_fluxes = {}
     sfincs_fluxes["particleFlux_vm_rHat"] = (
         fluxes["<particle_flux>"] * Rbar / (nbar * vbar)

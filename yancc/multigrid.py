@@ -1,18 +1,18 @@
 """Stuff for multigrid cycles."""
 
 import functools
-from typing import Union
+from typing import Optional, Union
 
 import equinox as eqx
 import interpax
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 
 from .linalg import InverseLinearOperator
 from .smoothers import DKEJacobi2Smoother, DKEJacobiSmoother, MDKEJacobiSmoother
 from .trajectories import DKE, MDKE
-from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
@@ -175,7 +175,7 @@ def get_dke_jacobi2_smoothers(
     return smoothers
 
 
-def _half_next_even(k, m=2):
+def _half_next_even(k: int, m: Union[int, float] = 2):
     if int(k // m) == 0:
         return 2
     elif int(k // m) % 2 == 0:
@@ -184,7 +184,7 @@ def _half_next_even(k, m=2):
         return int(k // m + 1)
 
 
-def _half_next_odd(k, m=2):
+def _half_next_odd(k: int, m: Union[int, float] = 2):
     if int(k // m) == 0:
         return 1
     elif int(k // m) % 2 == 0:
@@ -193,19 +193,79 @@ def _half_next_odd(k, m=2):
         return int(k // m)
 
 
+def get_grid_resolutions(
+    ns: int,
+    nx: int,
+    na: int,
+    nt: int,
+    nz: int,
+    coarse_N: int = 8000,
+    min_na: int = 5,
+    min_nt: int = 5,
+    min_nz: int = 5,
+    max_grids: Optional[int] = None,
+    coarsening_factor: Optional[Union[int, float]] = None,
+) -> list[tuple]:
+    """Determine resolutions for multigrid scheme.
+
+    Parameters
+    ----------
+    ns, nx, na, nt, nz: int
+        Resolutions in each coordinate of the finest grid.
+    coarse_N : int
+        Approximate desired size of the coarsest grid.
+    min_na, min_nt, min_nz : int
+        Minimum resolution in each coordinate.
+    max_grids : int
+        Maximum number of grids in the multigrid scheme.
+    coarsening_factor : int, float
+        How much to coarsen the grid in each coordinate at each level. Defaults to 2.
+
+    Returns
+    -------
+    ress : list of tuple of int
+        Each list element is a tuple of resolutions at a given grid level, each
+        tuple is the resolution (ns, nx, na, nt, nz)
+    """
+    coarse_N = max(coarse_N, ns * nx * min_na * min_nt * min_nz)
+    N = ns * nx * na * nt * nz
+
+    if coarsening_factor is not None and max_grids is not None:
+        raise ValueError("Cannot specify both coarsening_factor and max_grids")
+    elif coarsening_factor is None and max_grids is None:
+        coarsening_factor = 2
+        max_grids = int(
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
+        )
+    elif coarsening_factor is None:
+        assert isinstance(max_grids, int)
+        coarsening_factor = float((N / coarse_N) ** (1 / (3 * (max_grids - 1))))
+        coarsening_factor = max(2, coarsening_factor)
+    elif max_grids is None:
+        max_grids = int(
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
+        )
+
+    ress = [(ns, nx, na, nt, nz)]
+    na = max(_half_next_odd(na, coarsening_factor), min_na)
+    nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
+    nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
+    N = ns * nx * na * nt * nz
+    while N > coarse_N and len(ress) < max_grids - 1:
+        ress.append((ns, nx, na, nt, nz))
+        na = max(_half_next_odd(na, coarsening_factor), min_na)
+        nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
+        nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
+        N = ns * nx * na * nt * nz
+    ress.append((ns, nx, na, nt, nz))
+    return ress[::-1]
+
+
 @eqx.filter_jit
 def get_fields_grids(
     field,
-    nt,
-    nz,
-    na,
-    coarsening_factor=2,
-    min_N=8000,
-    min_nt=5,
-    min_nz=5,
-    min_na=5,
-    nx=1,
-    ns=1,
+    pitchgrid,
+    ress,
 ):
     """Get fields and grids for multigrid problem.
 
@@ -213,16 +273,10 @@ def get_fields_grids(
     ----------
     field : Field
         Field at sufficient resolution to represent B.
-    nt, nz, na : int
-        Desired resolution of finest grid in theta, zeta, alpha.
-    coarsening_factor : int, float
-        Amount to coarsen resolution at each level in each direction.
-    min_N : int
-        Desired maximum size of the coarsest grid.
-    min_nt, min_nz, min_na : int
-        Minimum resolution in theta, zeta, alpha coordinates.
-    nx, ns : int
-        Number of speed grid points and species.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    ress : array-like, shape(num_grid, 5)
+        Resolutions at each grid level in (ns, nx, na, nt, nz)
 
     Returns
     -------
@@ -232,24 +286,12 @@ def get_fields_grids(
         grids at each resolution level
 
     """
-    min_N = max(min_N, nx * ns * min_nt * min_nz * min_na)
     fields = []
     grids = []
-    fields.append(field.resample(nt, nz))
-    grids.append(UniformPitchAngleGrid(na))
-    nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
-    nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
-    na = max(_half_next_odd(na, coarsening_factor), min_na)
-    N = nt * nz * na * ns * nx
-    while N > min_N:
+    for res in ress:
+        _, _, na, nt, nz = res
         fields.append(field.resample(nt, nz))
-        grids.append(UniformPitchAngleGrid(na))
-        nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
-        nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
-        na = max(_half_next_odd(na, coarsening_factor), min_na)
-        N = nt * nz * na * ns * nx
-    fields.append(field.resample(nt, nz))
-    grids.append(UniformPitchAngleGrid(na))
+        grids.append(pitchgrid.resample(na))
     return fields, grids
 
 
@@ -530,93 +572,6 @@ def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
     return f.flatten()
 
 
-@functools.partial(
-    jax.jit, static_argnames=["interp_method", "smooth_method", "verbose"]
-)
-def multigrid_cycle(
-    operators,
-    rhs,
-    smoothers,
-    x0=None,
-    n=1,
-    cycle_index=1,
-    v1=1,
-    v2=1,
-    interp_method="linear",
-    smooth_method="standard",
-    coarse_opinv=None,
-    coarse_overweight=1.0,
-    verbose=False,
-):
-    """Apply multigrid cycle for solving operator @ x = rhs
-
-    Parameters
-    ----------
-    operators : list[lx.AbstractLinearOperator]
-        Operators for each level of discretization, from fine to coarse.
-    rhs : jax.Array
-        Right hand side vector on finest grid.
-    smoothers: list[list[lx.AbstractLinearOperator]]
-        Smoothers to apply at each level. Note the smoothing operation is
-        smoother @ x, not inv(smoother) @ x.
-    x0 : jax.Array, optional
-        Starting guess for solution. Default is all zero.
-    n : int
-        Number of cycles to perform.
-    cycle_index : int
-        Type of cycle / number of sub-cycles. cycle_index=1 corresponds to a "V" cycle,
-        cycle_index=2 is a "W" cycle etc.
-    v1, v2 : int
-        Number of pre- and post- smoothing iterations.
-    interp_method : str
-        Method of interpolation, passed to interpax.interp3d
-    smooth_method : {"standard", "krylov"}
-        Method to use for smoothing.
-    coarse_opinv: lx.AbstractLinearOperator
-        Precomputed inverse of coarse grid operator.
-    coarse_overweight : {"auto1", "auto2"} or float
-        Factor to weight coarse grid residuals by, to improve coarse grid correction
-        for closed characteristics. If str, use an automatically determined value to
-        ensure strict decrease of the coarse grid residuals.
-    verbose : int
-        Level of verbosity:
-          - 0: no into printed.
-          - 1: print residuals after each cycle.
-          - 2: also print residuals at each multigrid level before and after smoothing.
-          - 3: also print residuals within smoothing iterations.
-
-    """
-    kk = len(operators) - 1
-    if x0 is None:
-        x0 = jnp.zeros_like(rhs)
-    if coarse_opinv is None:
-        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
-
-    def body(i, x):
-        x = _multigrid_cycle_recursive(
-            cycle_index=cycle_index,
-            k=kk,
-            x=x,
-            operators=operators,
-            rhs=rhs,
-            smoothers=smoothers,
-            v1=v1,
-            v2=v2,
-            interp_method=interp_method,
-            smooth_method=smooth_method,
-            coarse_opinv=coarse_opinv,
-            coarse_overweight=coarse_overweight,
-            verbose=max(verbose - 1, 0),
-        )
-        if verbose:
-            err = jnp.linalg.norm(rhs - operators[-1].mv(x)) / jnp.linalg.norm(rhs)
-            jax.debug.print("iter={i} err: {err:.3e}", err=err, i=i, ordered=True)
-        return x
-
-    x = jax.lax.fori_loop(0, n, body, x0)
-    return x
-
-
 def _multigrid_cycle_recursive(
     cycle_index,
     k,
@@ -632,6 +587,49 @@ def _multigrid_cycle_recursive(
     coarse_overweight,
     verbose,
 ):
+    """Apply multigrid cycle for solving operator @ x = rhs
+
+    Parameters
+    ----------
+    cycle_index : int
+        Type of cycle / number of sub-cycles. cycle_index=1 corresponds to a "V" cycle,
+        cycle_index=2 is a "W" cycle etc.
+    k : int
+        Index of starting grid. Generally len(operators) - 1
+    x : jax.Array, optional
+        Starting guess for solution.
+    operators : list[lx.AbstractLinearOperator]
+        Operators for each level of discretization, from fine to coarse.
+    rhs : jax.Array
+        Right hand side vector on finest grid.
+    smoothers: list[list[lx.AbstractLinearOperator]]
+        Smoothers to apply at each level. Note the smoothing operation is
+        smoother @ x, not inv(smoother) @ x.
+    n : int
+        Number of cycles to perform.
+    v1, v2 : int
+        Number of pre- and post- smoothing iterations.
+    interp_method : str
+        Method of interpolation, passed to interpax.interp3d
+    smooth_method : {"standard", "krylov"}
+        Method to use for smoothing.
+    coarse_opinv: lx.AbstractLinearOperator
+        Precomputed inverse of coarse grid operator.
+    coarse_overweight : {"auto1", "auto2"} or float
+        Factor to weight coarse grid residuals by, to improve coarse grid correction
+        for closed characteristics. If str, use an automatically determined value to
+        ensure strict decrease of the coarse grid residuals.
+    verbose : int
+        Level of verbosity:
+          - 0: no info printed.
+          - 1: also print residuals at each multigrid level before and after smoothing.
+          - 2: also print residuals within smoothing iterations.
+
+    Returns
+    -------
+    x : jax.Array
+        Updated estimate for solution x.
+    """
     Ak = operators[k]
     Mk = smoothers[k]
 
@@ -650,7 +648,7 @@ def _multigrid_cycle_recursive(
         )
 
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=verbose > 2)
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
     rk = rhs - Ak.mv(x)
 
     if verbose:
@@ -733,7 +731,7 @@ def _multigrid_cycle_recursive(
             )
 
         vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=verbose > 2)
+        x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
         rk = rhs - Ak.mv(x)
         if verbose:
             err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
@@ -793,9 +791,8 @@ class MultigridOperator(lx.AbstractLinearOperator):
     verbose : int
         Level of verbosity:
           - 0: no into printed.
-          - 1: print residuals after each cycle.
-          - 2: also print residuals at each multigrid level before and after smoothing.
-          - 3: also print residuals within smoothing iterations.
+          - 1: print residuals at each multigrid level before and after smoothing.
+          - 2: also print residuals within smoothing iterations.
 
     """
 
@@ -807,23 +804,23 @@ class MultigridOperator(lx.AbstractLinearOperator):
     v2: jax.Array
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
-    coarse_opinv: InverseLinearOperator
+    coarse_opinv: lx.AbstractLinearOperator
     coarse_overweight: Union[str, jax.Array]
     verbose: int = eqx.field(static=True)
 
     def __init__(
         self,
-        operators,
-        smoothers,
-        x0=None,
-        cycle_index=1,
-        v1=1,
-        v2=1,
-        interp_method="linear",
-        smooth_method="standard",
-        coarse_opinv=None,
-        coarse_overweight=1.0,
-        verbose=False,
+        operators: list[lx.AbstractLinearOperator],
+        smoothers: list[list[lx.AbstractLinearOperator]],
+        x0: Optional[jax.Array] = None,
+        cycle_index: int = 1,
+        v1: int = 1,
+        v2: int = 1,
+        interp_method: str = "linear",
+        smooth_method: str = "standard",
+        coarse_opinv: Optional[lx.AbstractLinearOperator] = None,
+        coarse_overweight: float = 1.0,
+        verbose: Union[bool, int] = False,
     ):
 
         self.operators = operators

@@ -3,13 +3,16 @@
 import time
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import yancc
 from yancc.field import Field
-from yancc.misc import normalize_dkes
-from yancc.solve import solve_mdke
-from yancc.velocity_grids import UniformPitchAngleGrid
+from yancc.misc import normalize_dkes, normalize_fluxes_sfincs
+from yancc.solve import solve_dke, solve_mdke
+from yancc.species import LocalMaxwellian
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def _read_monkes_dat(path):
@@ -70,12 +73,18 @@ def test_solve_mdke_w7x_eim(idx):
     nuhat = data_fortran["nuhat"][idx]
     print(f"Running i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}")
     t1 = time.perf_counter()
-    Dij, x, rhs, info = jax.block_until_ready(
-        solve_mdke(field, pitchgrid, erhat * field.a_minor, nuhat, coarse_N=1000)
+    x, rhs, Dij, info = jax.block_until_ready(
+        solve_mdke(
+            field,
+            pitchgrid,
+            erhat * field.a_minor,
+            nuhat,
+            verbose=2,
+            multigrid_options={"coarse_N": 1000},
+        )
     )
     t2 = time.perf_counter()
     print(f"Took {t2-t1:.3e} s")
-    print(info)
     Dij = normalize_dkes(Dij, field)
 
     D11_yancc = Dij[0, 0]
@@ -138,14 +147,10 @@ def test_solve_field_types(nuhat, erhohat):
     field4 = Field.from_ipp_bc("tests/data/NCSX.bc", s, nt, nz)
     pitchgrid = UniformPitchAngleGrid(73)
 
-    D1, f1, rhs1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat)
-    D2, f2, rhs2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat)
-    D3, f3, rhs3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat)
-    D4, f4, rhs4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat)
-    print(info1)
-    print(info2)
-    print(info3)
-    print(info4)
+    f1, rhs1, D1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat, verbose=True)
+    f2, rhs2, D2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat, verbose=True)
+    f3, rhs3, D3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat, verbose=True)
+    f4, rhs4, D4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat, verbose=True)
 
     np.testing.assert_allclose(D1[0, 0], D2[0, 0], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[0, 0], D3[0, 0], rtol=2e-2, atol=0)
@@ -162,3 +167,86 @@ def test_solve_field_types(nuhat, erhohat):
     np.testing.assert_allclose(D1[2, 2], D2[2, 2], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[2, 2], D3[2, 2], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[2, 2], D4[2, 2], rtol=1e-2, atol=0)
+
+
+@pytest.mark.parametrize("idx", [0, 10, 20])
+def test_solve_dke_ncsx(idx):
+    """Test solving DKE vs sfincs."""
+    rho = 0.5
+    # hydrogen ion charge and mass (no electrons)
+    # n = 1.5e20 / m^3     # noqa E800
+    # T = 0.8 keV
+    # dn/dr = -0.4e20 / m^4
+    # dT/dr = -2.0 keV/m
+    # full Fokker-Planck collision operator with full trajectories.
+    # The collisionality was set using ln(Lambda) = 17.
+    # note that increasing this resolution slightly will get reduce errors w/ sfincs
+    # to < 1% but we need this to run with limited time/memory on github CI
+    nt = 15
+    nz = 31
+    na = 61
+    nx = 6
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", rho**2, nt, nz)
+    pitchgrid = UniformPitchAngleGrid(na)
+    speedgrid = MaxwellSpeedGrid(nx)
+    species = [
+        LocalMaxwellian(
+            yancc.species.Hydrogen,
+            0.8e3,
+            1.5e20,
+            -2e3 * field.a_minor,
+            -0.4e20 * field.a_minor,
+        )
+    ]
+
+    path = "tests/data/20251212-01_sfincs_yancc_benchmark_NCSX_1species_Er_scan.txt"
+    sfincs_data = np.loadtxt(path, skiprows=1)
+    sfincs_data = {
+        "Er": sfincs_data[:, 0],
+        "FSABFlow": sfincs_data[:, 1],
+        "particleFlux_vm_rHat": sfincs_data[:, 2] / field.a_minor,
+        "heatFlux_vm_rHat": sfincs_data[:, 3] / field.a_minor,
+        "energy_source": sfincs_data[:, 4],
+    }
+
+    C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
+    operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
+
+    Er = sfincs_data["Er"][idx]
+    print("Er:", Er)
+
+    t0 = time.perf_counter()
+    f, r, flux, info = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Er * field.a_minor * 1000,  # Er in kV/m
+        operator_weights=operator_weights,
+        verbose=2,
+        rtol=1e-5,
+    )
+    t1 = time.perf_counter()
+    print("TIME:", t1 - t0)
+    normalized_fluxes = normalize_fluxes_sfincs(
+        flux, field, pitchgrid, speedgrid, species
+    )
+
+    # tolerances could be tighter with higher resolution, but this isn't meant to be
+    # a real benchmark, just a quick check for dumb mistakes. These qtys pass though
+    # zero so we use an atol set to the average magnitude, so roughly rtol=5%
+    np.testing.assert_allclose(
+        normalized_fluxes["FSABFlow"],
+        sfincs_data["FSABFlow"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["FSABFlow"]))),
+    )
+    np.testing.assert_allclose(
+        normalized_fluxes["particleFlux_vm_rHat"],
+        sfincs_data["particleFlux_vm_rHat"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_vm_rHat"]))),
+    )
+    np.testing.assert_allclose(
+        normalized_fluxes["heatFlux_vm_rHat"],
+        sfincs_data["heatFlux_vm_rHat"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rHat"]))),
+    )
