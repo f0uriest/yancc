@@ -1,9 +1,12 @@
 """Constraints, sources, RHS, etc."""
 
+from typing import Any, Union
+
 import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
 from .field import Field
@@ -192,7 +195,7 @@ def dke_rhs(
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
-    Erho: float,
+    Erho: Union[float, Float[Any, ""]],
     include_constraints: bool = True,
     normalize: bool = False,
 ) -> jax.Array:
@@ -317,7 +320,7 @@ def compute_monoenergetic_coefficients(
     return Dij
 
 
-def normalize_dkes(Dij: jax.Array, field: Field, v: float = 1.0):
+def normalize_dkes(Dij: jax.Array, field: Field, v: Union[float, Float[Any, ""]] = 1.0):
     """Normalize monoenergetic coefficients to match DKES/MONKES.
 
     Parameters
@@ -361,7 +364,7 @@ def compute_transport_matrix(
 
     Parameters
     ----------
-    Dij : jax.Array, shape(nspecies, nx, 3, 3)
+    Dij : jax.Array, shape(ns, nx, 3, 3)
         Monoenergetic transport coefficient for each species and each speed.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -370,10 +373,10 @@ def compute_transport_matrix(
 
     Returns
     -------
-    Lij : jax.Array, shape(nspecies, 3, 3)
-        Transport marix for each species.
+    Lij : jax.Array, shape(ns, 3, 3)
+        Transport matrix for each species.
     """
-    # TODO: check this, it seems to disagree with the formulas in monkes and beidler
+    # TODO: check this, it seems to disagree with the formulas in monkes and Beidler
     vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None]
     x = speedgrid.x[None, :, None, None]
     fM = jnp.concatenate([sp(x * sp.v_thermal) for sp in species], axis=0)
@@ -504,16 +507,16 @@ def compute_fluxes(
 
 
 def normalize_fluxes_sfincs(
-    fluxes,
-    field,
-    pitchgrid,
-    speedgrid,
-    species,
-    Bbar=1,
-    Rbar=1,
-    nbar=1e20,
-    mbar=1,
-    Tbar=1e3,
+    fluxes: dict[str, jax.Array],
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    species: list[LocalMaxwellian],
+    Bbar: Union[float, Float[Any, ""]] = 1,
+    Rbar: Union[float, Float[Any, ""]] = 1,
+    nbar: Union[float, Float[Any, ""]] = 1e20,
+    mbar: Union[float, Float[Any, ""]] = 1,
+    Tbar: Union[float, Float[Any, ""]] = 1e3,
 ):
     """Normalize fluxes to match SFINCS.
 

@@ -1,7 +1,7 @@
 """Stuff for multigrid cycles."""
 
 import functools
-from typing import Union
+from typing import Optional, Union
 
 import equinox as eqx
 import interpax
@@ -175,7 +175,7 @@ def get_dke_jacobi2_smoothers(
     return smoothers
 
 
-def _half_next_even(k, m=2):
+def _half_next_even(k: int, m: Union[int, float] = 2):
     if int(k // m) == 0:
         return 2
     elif int(k // m) % 2 == 0:
@@ -184,7 +184,7 @@ def _half_next_even(k, m=2):
         return int(k // m + 1)
 
 
-def _half_next_odd(k, m=2):
+def _half_next_odd(k: int, m: Union[int, float] = 2):
     if int(k // m) == 0:
         return 1
     elif int(k // m) % 2 == 0:
@@ -807,23 +807,23 @@ class MultigridOperator(lx.AbstractLinearOperator):
     v2: jax.Array
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
-    coarse_opinv: InverseLinearOperator
+    coarse_opinv: lx.AbstractLinearOperator
     coarse_overweight: Union[str, jax.Array]
     verbose: int = eqx.field(static=True)
 
     def __init__(
         self,
-        operators,
-        smoothers,
-        x0=None,
-        cycle_index=1,
-        v1=1,
-        v2=1,
-        interp_method="linear",
-        smooth_method="standard",
-        coarse_opinv=None,
-        coarse_overweight=1.0,
-        verbose=False,
+        operators: list[lx.AbstractLinearOperator],
+        smoothers: list[list[lx.AbstractLinearOperator]],
+        x0: Optional[jax.Array] = None,
+        cycle_index: int = 1,
+        v1: int = 1,
+        v2: int = 1,
+        interp_method: str = "linear",
+        smooth_method: str = "standard",
+        coarse_opinv: Optional[lx.AbstractLinearOperator] = None,
+        coarse_overweight: float = 1.0,
+        verbose: Union[bool, int] = False,
     ):
 
         self.operators = operators

@@ -1,10 +1,15 @@
 """Main interface for solving drift kinetic equations in yancc."""
 
+from typing import Any, Optional, Union
+
+import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Float
 
 from .collisions import RosenbluthPotentials
+from .field import Field
 from .krylov import gcrotmk
 from .linalg import BorderedOperator, InverseBorderedOperator
 from .misc import (
@@ -16,11 +21,20 @@ from .misc import (
     mdke_rhs,
 )
 from .preconditioner import DKEPreconditioner, MDKEPreconditioner
-from .species import Estar, nustar
+from .species import Estar, LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE
+from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
-def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
+def solve_mdke(
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    erhohat: Union[float, Float[Any, ""]],
+    nuhat: Union[float, Float[Any, ""]],
+    verbose: Union[bool, int] = False,
+    multigrid_options: Optional[dict] = None,
+    **options,
+):
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
 
     Parameters
@@ -94,27 +108,54 @@ def solve_mdke(field, pitchgrid, erhohat, nuhat, **options):
         rtol=rtol,
         atol=atol,
         maxiter=maxiter,
-        print_every=print_every,
+        print_every=print_every if verbose > 1 else 0,
     )
     f2 = f1.copy()
+    info = {
+        "j1": j1,
+        "nmv1": nmv1,
+        "res1": res1 / jnp.linalg.norm(rhs[:, 0]),
+        "j2": j3,
+        "nmv2": nmv3,
+        "res2": res3 / jnp.linalg.norm(rhs[:, 3]),
+    }
+    if verbose:
+        jax.debug.print(
+            "Finished krylov (1st rhs): nmv={nmv:4d}, "
+            "n_restarts={j:3d}, residual={res:.3e}",
+            nmv=nmv1,
+            j=j1,
+            res=info["res1"],
+            ordered=True,
+        )
+        jax.debug.print(
+            "Finished krylov (2nd rhs): nmv={nmv:4d}, "
+            "n_restarts={j:3d}, residual={res:.3e}",
+            nmv=nmv3,
+            j=j3,
+            res=info["res2"],
+            ordered=True,
+        )
     f = jnp.array([f1, f2, f3]).T
     Dij = compute_monoenergetic_coefficients(f, field, pitchgrid)
     return (
-        Dij,
         f,
         rhs,
-        {
-            "j1": j1,
-            "nmv1": nmv1,
-            "res1": res1 / jnp.linalg.norm(rhs[:, 0]),
-            "j2": j3,
-            "nmv2": nmv3,
-            "res2": res3 / jnp.linalg.norm(rhs[:, 3]),
-        },
+        Dij,
+        info,
     )
 
 
-def solve_dke(field, pitchgrid, speedgrid, species, Erho, **options):
+def solve_dke(
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: MaxwellSpeedGrid,
+    species: list[LocalMaxwellian],
+    Erho: Union[float, Float[Any, ""]],
+    verbose: Union[bool, int] = False,
+    multigrid_options: Optional[dict] = None,
+    **options,
+) -> tuple[jax.Array, jax.Array, dict[str, jax.Array], dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
 
     Parameters
