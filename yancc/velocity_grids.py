@@ -325,6 +325,10 @@ class LegendrePitchAngleGrid(eqx.Module):
         # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv
 
+    def resample(self, nxi):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nxi)
+
 
 class UniformPitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable gamma= arccos(v||/v).
@@ -366,3 +370,7 @@ class UniformPitchAngleGrid(eqx.Module):
 
         wxi = jnp.fft.ifft(beta)
         self.wxi = wxi.real
+
+    def resample(self, nxi):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nxi)

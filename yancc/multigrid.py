@@ -8,11 +8,11 @@ import interpax
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 
 from .linalg import InverseLinearOperator
 from .smoothers import DKEJacobi2Smoother, DKEJacobiSmoother, MDKEJacobiSmoother
 from .trajectories import DKE, MDKE
-from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
@@ -193,19 +193,79 @@ def _half_next_odd(k: int, m: Union[int, float] = 2):
         return int(k // m)
 
 
+def get_grid_resolutions(
+    ns: int,
+    nx: int,
+    na: int,
+    nt: int,
+    nz: int,
+    coarse_N: int = 8000,
+    min_na: int = 5,
+    min_nt: int = 5,
+    min_nz: int = 5,
+    max_grids: Optional[int] = None,
+    coarsening_factor: Optional[Union[int, float]] = None,
+) -> list[tuple]:
+    """Determine resolutions for multigrid scheme.
+
+    Parameters
+    ----------
+    ns, nx, na, nt, nz: int
+        Resolutions in each coordinate of the finest grid.
+    coarse_N : int
+        Approximate desired size of the coarsest grid.
+    min_na, min_nt, min_nz : int
+        Minimum resolution in each coordinate.
+    max_grids : int
+        Maximum number of grids in the multigrid scheme.
+    coarsening_factor : int, float
+        How much to coarsen the grid in each coordinate at each level. Defaults to 2.
+
+    Returns
+    -------
+    ress : list of tuple of int
+        Each list element is a tuple of resolutions at a given grid level, each
+        tuple is the resolution (ns, nx, na, nt, nz)
+    """
+    coarse_N = max(coarse_N, ns * nx * min_na * min_nt * min_nz)
+    N = ns * nx * na * nt * nz
+
+    if coarsening_factor is not None and max_grids is not None:
+        raise ValueError("Cannot specify both coarsening_factor and max_grids")
+    elif coarsening_factor is None and max_grids is None:
+        coarsening_factor = 2
+        max_grids = int(
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
+        )
+    elif coarsening_factor is None:
+        assert isinstance(max_grids, int)
+        coarsening_factor = float((N / coarse_N) ** (1 / (3 * (max_grids - 1))))
+        coarsening_factor = max(2, coarsening_factor)
+    elif max_grids is None:
+        max_grids = int(
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
+        )
+
+    ress = [(ns, nx, na, nt, nz)]
+    na = max(_half_next_odd(na, coarsening_factor), min_na)
+    nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
+    nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
+    N = ns * nx * na * nt * nz
+    while N > coarse_N and len(ress) < max_grids - 1:
+        ress.append((ns, nx, na, nt, nz))
+        na = max(_half_next_odd(na, coarsening_factor), min_na)
+        nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
+        nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
+        N = ns * nx * na * nt * nz
+    ress.append((ns, nx, na, nt, nz))
+    return ress[::-1]
+
+
 @eqx.filter_jit
 def get_fields_grids(
     field,
-    nt,
-    nz,
-    na,
-    coarsening_factor=2,
-    min_N=8000,
-    min_nt=5,
-    min_nz=5,
-    min_na=5,
-    nx=1,
-    ns=1,
+    pitchgrid,
+    ress,
 ):
     """Get fields and grids for multigrid problem.
 
@@ -213,16 +273,10 @@ def get_fields_grids(
     ----------
     field : Field
         Field at sufficient resolution to represent B.
-    nt, nz, na : int
-        Desired resolution of finest grid in theta, zeta, alpha.
-    coarsening_factor : int, float
-        Amount to coarsen resolution at each level in each direction.
-    min_N : int
-        Desired maximum size of the coarsest grid.
-    min_nt, min_nz, min_na : int
-        Minimum resolution in theta, zeta, alpha coordinates.
-    nx, ns : int
-        Number of speed grid points and species.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    ress : array-like, shape(num_grid, 5)
+        Resolutions at each grid level in (ns, nx, na, nt, nz)
 
     Returns
     -------
@@ -232,24 +286,12 @@ def get_fields_grids(
         grids at each resolution level
 
     """
-    min_N = max(min_N, nx * ns * min_nt * min_nz * min_na)
     fields = []
     grids = []
-    fields.append(field.resample(nt, nz))
-    grids.append(UniformPitchAngleGrid(na))
-    nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
-    nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
-    na = max(_half_next_odd(na, coarsening_factor), min_na)
-    N = nt * nz * na * ns * nx
-    while N > min_N:
+    for res in ress:
+        _, _, na, nt, nz = res
         fields.append(field.resample(nt, nz))
-        grids.append(UniformPitchAngleGrid(na))
-        nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
-        nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
-        na = max(_half_next_odd(na, coarsening_factor), min_na)
-        N = nt * nz * na * ns * nx
-    fields.append(field.resample(nt, nz))
-    grids.append(UniformPitchAngleGrid(na))
+        grids.append(pitchgrid.resample(na))
     return fields, grids
 
 

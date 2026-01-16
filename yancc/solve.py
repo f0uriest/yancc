@@ -62,8 +62,10 @@ def solve_mdke(
         products, final residual etc.
 
     """
-    p1a = options.pop("p1a", "4d")
-    p2a = options.pop("p2a", 4)
+    multigrid_options = {} if multigrid_options is None else multigrid_options
+
+    p1 = options.pop("p1", "4d")
+    p2 = options.pop("p2", 4)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 300)
@@ -79,8 +81,8 @@ def solve_mdke(
         pitchgrid,
         erhohat,
         nuhat,
-        p1=p1a,
-        p2=p2a,
+        p1=p1,
+        p2=p2,
         gauge=True,
     )
     rhs = mdke_rhs(field, pitchgrid)
