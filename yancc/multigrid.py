@@ -648,7 +648,7 @@ def _multigrid_cycle_recursive(
         )
 
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=verbose > 2)
+    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
     rk = rhs - Ak.mv(x)
 
     if verbose:
@@ -731,7 +731,7 @@ def _multigrid_cycle_recursive(
             )
 
         vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=verbose > 2)
+        x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
         rk = rhs - Ak.mv(x)
         if verbose:
             err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
@@ -791,9 +791,8 @@ class MultigridOperator(lx.AbstractLinearOperator):
     verbose : int
         Level of verbosity:
           - 0: no into printed.
-          - 1: print residuals after each cycle.
-          - 2: also print residuals at each multigrid level before and after smoothing.
-          - 3: also print residuals within smoothing iterations.
+          - 1: print residuals at each multigrid level before and after smoothing.
+          - 2: also print residuals within smoothing iterations.
 
     """
 

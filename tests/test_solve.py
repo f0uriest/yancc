@@ -70,12 +70,18 @@ def test_solve_mdke_w7x_eim(idx):
     nuhat = data_fortran["nuhat"][idx]
     print(f"Running i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}")
     t1 = time.perf_counter()
-    Dij, x, rhs, info = jax.block_until_ready(
-        solve_mdke(field, pitchgrid, erhat * field.a_minor, nuhat, coarse_N=1000)
+    x, rhs, Dij, info = jax.block_until_ready(
+        solve_mdke(
+            field,
+            pitchgrid,
+            erhat * field.a_minor,
+            nuhat,
+            verbose=2,
+            multigrid_options={"coarse_N": 1000},
+        )
     )
     t2 = time.perf_counter()
     print(f"Took {t2-t1:.3e} s")
-    print(info)
     Dij = normalize_dkes(Dij, field)
 
     D11_yancc = Dij[0, 0]
@@ -138,14 +144,10 @@ def test_solve_field_types(nuhat, erhohat):
     field4 = Field.from_ipp_bc("tests/data/NCSX.bc", s, nt, nz)
     pitchgrid = UniformPitchAngleGrid(73)
 
-    D1, f1, rhs1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat)
-    D2, f2, rhs2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat)
-    D3, f3, rhs3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat)
-    D4, f4, rhs4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat)
-    print(info1)
-    print(info2)
-    print(info3)
-    print(info4)
+    f1, rhs1, D1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat, verbose=True)
+    f2, rhs2, D2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat, verbose=True)
+    f3, rhs3, D3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat, verbose=True)
+    f4, rhs4, D4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat, verbose=True)
 
     np.testing.assert_allclose(D1[0, 0], D2[0, 0], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[0, 0], D3[0, 0], rtol=2e-2, atol=0)

@@ -37,6 +37,12 @@ class MDKEPreconditioner(MultigridOperator):
         Monoenergetic electric field, Erho/v in units of V*s/m
     nuhat : float
         Monoenergetic collisionality, nu/v in units of 1/m
+    verbose : int
+        Level of verbosity:
+          - 0: no into printed.
+          - 1: print initialization info.
+          - 2: also print residuals at each multigrid level before and after smoothing.
+          - 3: also print residuals within smoothing iterations.
     """
 
     field: Field
@@ -147,7 +153,7 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_overweight=coarse_overweight,
-            verbose=verbose,
+            verbose=max(0, verbose - 2),
         )
 
 
@@ -296,7 +302,7 @@ class DKEPreconditioner(MultigridOperator):
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_overweight=coarse_overweight,
-            verbose=verbose,
+            verbose=max(0, verbose - 2),
         )
 
 
