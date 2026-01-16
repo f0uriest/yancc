@@ -186,7 +186,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     D2x_pseudospectral: jax.Array
     gauge_idx: jax.Array
 
-    def __init__(self, nx, k=0, xmax=jnp.inf):
+    def __init__(self, nx, k=0, xmax=jnp.inf, **kwargs):
         # need to check derivative matrix and rosenbluth potentials for these
         assert k == 0
         assert xmax == jnp.inf
@@ -251,10 +251,12 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         self.D2x = jax.jacfwd(_d2xfun)(self.x)
         self.D2x_pseudospectral = self.xvander @ self.D2x @ self.xvander_inv
 
-        gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[0])
-        if self.nx > 1:
-            gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
-            gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
+        gauge_idx = kwargs.get("gauge_idx", None)
+        if gauge_idx is None:
+            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[0])
+            if self.nx > 1:
+                gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
+                gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
         self.gauge_idx = jnp.sort(gauge_idx)
 
     def _dfdx(self, f):
@@ -323,6 +325,10 @@ class LegendrePitchAngleGrid(eqx.Module):
         # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv
 
+    def resample(self, nxi):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nxi)
+
 
 class UniformPitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable gamma= arccos(v||/v).
@@ -364,3 +370,7 @@ class UniformPitchAngleGrid(eqx.Module):
 
         wxi = jnp.fft.ifft(beta)
         self.wxi = wxi.real
+
+    def resample(self, nxi):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nxi)
