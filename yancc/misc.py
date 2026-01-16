@@ -126,23 +126,19 @@ class DKEConstraint(lx.MatrixLinearOperator):
         self.species = species
         self.normalize = normalize
 
-        if normalize:
-            vth = jnp.ones((len(species), 1, 1))
-        else:
-            vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
-        dx = (speedgrid.x**2 * speedgrid.wx)[None, :, None]
-        x2dx = (speedgrid.x**4 * speedgrid.wx)[None, :, None]
-        dxi = pitchgrid.wxi[None, None, :]
+        vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
+
         # int f d3v, for particle conservation, shape(ns, nx, nxi)
-        d3v = vth**3 * dx * dxi
+        d3v = _d3v(speedgrid, pitchgrid, species)
         # int v^2 f d3v, for energy conservation, shape(ns, nx, nxi)
-        v2d3v = vth**5 * x2dx * dxi
+        v2d3v = speedgrid.x[None, :, None] ** 2 * vth**2 * d3v
+
+        if normalize:
+            d3v /= vth**3
+            v2d3v /= vth**5
 
         # flux surface average operator
-        dt = field.wtheta[:, None]
-        dz = field.wzeta[None, :]
-        dr = (field.sqrtg * dt * dz) / (field.sqrtg * dt * dz).sum()
-        dr = dr.flatten()[None, None, None, :]
+        dr = _dr(field).flatten()
 
         Ip = 2 * jnp.pi * (d3v[..., None] * dr).reshape((len(species), -1))
         Ie = 2 * jnp.pi * (v2d3v[..., None] * dr).reshape((len(species), -1))
