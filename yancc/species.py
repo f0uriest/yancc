@@ -31,8 +31,8 @@ class Species(eqx.Module):
     charge: jax.Array
 
     def __init__(self, mass: ArrayLike, charge: ArrayLike):
-        self.mass = jnp.asarray(mass * proton_mass)
-        self.charge = jnp.asarray(charge * elementary_charge)
+        self.mass = jnp.asarray(mass) * proton_mass
+        self.charge = jnp.asarray(charge) * elementary_charge
 
 
 Electron = Species(1 / 1836.15267343, -1)
