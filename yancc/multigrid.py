@@ -572,93 +572,6 @@ def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
     return f.flatten()
 
 
-@functools.partial(
-    jax.jit, static_argnames=["interp_method", "smooth_method", "verbose"]
-)
-def multigrid_cycle(
-    operators,
-    rhs,
-    smoothers,
-    x0=None,
-    n=1,
-    cycle_index=1,
-    v1=1,
-    v2=1,
-    interp_method="linear",
-    smooth_method="standard",
-    coarse_opinv=None,
-    coarse_overweight=1.0,
-    verbose=False,
-):
-    """Apply multigrid cycle for solving operator @ x = rhs
-
-    Parameters
-    ----------
-    operators : list[lx.AbstractLinearOperator]
-        Operators for each level of discretization, from fine to coarse.
-    rhs : jax.Array
-        Right hand side vector on finest grid.
-    smoothers: list[list[lx.AbstractLinearOperator]]
-        Smoothers to apply at each level. Note the smoothing operation is
-        smoother @ x, not inv(smoother) @ x.
-    x0 : jax.Array, optional
-        Starting guess for solution. Default is all zero.
-    n : int
-        Number of cycles to perform.
-    cycle_index : int
-        Type of cycle / number of sub-cycles. cycle_index=1 corresponds to a "V" cycle,
-        cycle_index=2 is a "W" cycle etc.
-    v1, v2 : int
-        Number of pre- and post- smoothing iterations.
-    interp_method : str
-        Method of interpolation, passed to interpax.interp3d
-    smooth_method : {"standard", "krylov"}
-        Method to use for smoothing.
-    coarse_opinv: lx.AbstractLinearOperator
-        Precomputed inverse of coarse grid operator.
-    coarse_overweight : {"auto1", "auto2"} or float
-        Factor to weight coarse grid residuals by, to improve coarse grid correction
-        for closed characteristics. If str, use an automatically determined value to
-        ensure strict decrease of the coarse grid residuals.
-    verbose : int
-        Level of verbosity:
-          - 0: no into printed.
-          - 1: print residuals after each cycle.
-          - 2: also print residuals at each multigrid level before and after smoothing.
-          - 3: also print residuals within smoothing iterations.
-
-    """
-    kk = len(operators) - 1
-    if x0 is None:
-        x0 = jnp.zeros_like(rhs)
-    if coarse_opinv is None:
-        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
-
-    def body(i, x):
-        x = _multigrid_cycle_recursive(
-            cycle_index=cycle_index,
-            k=kk,
-            x=x,
-            operators=operators,
-            rhs=rhs,
-            smoothers=smoothers,
-            v1=v1,
-            v2=v2,
-            interp_method=interp_method,
-            smooth_method=smooth_method,
-            coarse_opinv=coarse_opinv,
-            coarse_overweight=coarse_overweight,
-            verbose=max(verbose - 1, 0),
-        )
-        if verbose:
-            err = jnp.linalg.norm(rhs - operators[-1].mv(x)) / jnp.linalg.norm(rhs)
-            jax.debug.print("iter={i} err: {err:.3e}", err=err, i=i, ordered=True)
-        return x
-
-    x = jax.lax.fori_loop(0, n, body, x0)
-    return x
-
-
 def _multigrid_cycle_recursive(
     cycle_index,
     k,
@@ -674,6 +587,49 @@ def _multigrid_cycle_recursive(
     coarse_overweight,
     verbose,
 ):
+    """Apply multigrid cycle for solving operator @ x = rhs
+
+    Parameters
+    ----------
+    cycle_index : int
+        Type of cycle / number of sub-cycles. cycle_index=1 corresponds to a "V" cycle,
+        cycle_index=2 is a "W" cycle etc.
+    k : int
+        Index of starting grid. Generally len(operators) - 1
+    x : jax.Array, optional
+        Starting guess for solution.
+    operators : list[lx.AbstractLinearOperator]
+        Operators for each level of discretization, from fine to coarse.
+    rhs : jax.Array
+        Right hand side vector on finest grid.
+    smoothers: list[list[lx.AbstractLinearOperator]]
+        Smoothers to apply at each level. Note the smoothing operation is
+        smoother @ x, not inv(smoother) @ x.
+    n : int
+        Number of cycles to perform.
+    v1, v2 : int
+        Number of pre- and post- smoothing iterations.
+    interp_method : str
+        Method of interpolation, passed to interpax.interp3d
+    smooth_method : {"standard", "krylov"}
+        Method to use for smoothing.
+    coarse_opinv: lx.AbstractLinearOperator
+        Precomputed inverse of coarse grid operator.
+    coarse_overweight : {"auto1", "auto2"} or float
+        Factor to weight coarse grid residuals by, to improve coarse grid correction
+        for closed characteristics. If str, use an automatically determined value to
+        ensure strict decrease of the coarse grid residuals.
+    verbose : int
+        Level of verbosity:
+          - 0: no info printed.
+          - 1: also print residuals at each multigrid level before and after smoothing.
+          - 2: also print residuals within smoothing iterations.
+
+    Returns
+    -------
+    x : jax.Array
+        Updated estimate for solution x.
+    """
     Ak = operators[k]
     Mk = smoothers[k]
 
