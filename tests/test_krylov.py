@@ -1,5 +1,6 @@
 """Tests for FGMRES/GCROT(m,k) solver."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
@@ -7,6 +8,7 @@ import numpy as np
 import scipy
 
 from yancc.krylov import _fgmres, gcrotmk, lgmres
+from yancc.linalg import InverseLinearOperator
 
 
 def crop2(a, b):
@@ -517,3 +519,50 @@ def test_left_right_preconditioner():
     assert beta1 / np.linalg.norm(b) < tol
     assert beta2 / np.linalg.norm(b) < tol
     np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
+
+
+def test_krylov_autodiff():
+    """Test that gcrot is differentiable."""
+    n = 20
+    Af = jnp.array(np.random.normal(size=(n, n)))
+    Ad = jnp.diag(jnp.arange(1, n + 1) ** 2)
+    I = jnp.eye(n)
+    b = jnp.array(np.random.normal(size=n))
+    c = jnp.array(np.random.normal(size=n))
+
+    def get_A(x):
+        return lx.MatrixLinearOperator(Af @ Ad @ (Af + I * x))
+
+    def solve_gcrot(x):
+        A = get_A(x)
+        bx = b * x
+        M = InverseLinearOperator(A)
+        y, _, _, res, _, _ = gcrotmk(A, bx, m=1, k=1, maxiter=1, MR=M)
+        y = eqx.error_if(y, res > 1e-5, "didn't converge")
+        return jnp.dot(c, y)
+
+    def solve_lgmres(x):
+        A = get_A(x)
+        bx = b * x
+        M = InverseLinearOperator(A)
+        y, _, _, res, _, _ = lgmres(A, bx, m=1, k=1, maxiter=1, MR=M)
+        y = eqx.error_if(y, res > 1e-5, "didn't converge")
+        return jnp.dot(c, y)
+
+    x0 = 1.0
+    dA = jax.jacfwd(get_A)(x0)
+    A = get_A(x0)
+    db = b
+    y0 = lx.linear_solve(A, b).value
+    dy = lx.linear_solve(A, db - dA.mv(y0)).value
+    dz_exact = jnp.dot(c, dy)
+
+    dz_jvp_gcrot = jax.jacfwd(solve_gcrot)(x0)
+    dz_vjp_gcrot = jax.jacrev(solve_gcrot)(x0)
+    dz_jvp_lgmres = jax.jacfwd(solve_lgmres)(x0)
+    dz_vjp_lgmres = jax.jacrev(solve_lgmres)(x0)
+
+    np.testing.assert_allclose(dz_exact, dz_jvp_gcrot)
+    np.testing.assert_allclose(dz_exact, dz_vjp_gcrot)
+    np.testing.assert_allclose(dz_exact, dz_jvp_lgmres)
+    np.testing.assert_allclose(dz_exact, dz_vjp_lgmres)
