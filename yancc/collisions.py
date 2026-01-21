@@ -104,7 +104,15 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
         idx = self.pitchgrid.nxi // 2
         scale = self.nuhat / h**2
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(
+                scale * f[idx, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -135,7 +143,11 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
         idx = self.pitchgrid.nxi // 2
         scale = self.nuhat / h**2
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -170,7 +182,12 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         idx = self.pitchgrid.nxi // 2
         scale = self.nuhat / h**2
         df = jnp.where(
-            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, idx].set(scale), df
+            self.gauge,
+            df.at[idx, 0, 0, :]
+            .set(0, indices_are_sorted=True, unique_indices=True)
+            .at[idx, 0, 0, idx]
+            .set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
@@ -253,9 +270,15 @@ class RosenbluthPotentials(eqx.Module):
                 ddG = self._ddGlk(xb, l, k)
                 dH = self._dHlk(xb, l, k)
                 H = self._Hlk(xb, l, k)
-                self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(ddG)
-                self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(dH)
-                self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(H)
+                self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(
+                    ddG, indices_are_sorted=True, unique_indices=True
+                )
+                self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(
+                    dH, indices_are_sorted=True, unique_indices=True
+                )
+                self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(
+                    H, indices_are_sorted=True, unique_indices=True
+                )
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -370,7 +393,11 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand1(self, z, l, k):
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         return (
             z ** (-l + 1)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -380,7 +407,11 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand2(self, z, l, k):
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         return (
             z ** (l + 2)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -390,7 +421,11 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand3(self, z, l, k):
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         return (
             z ** (-l + 3)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -400,7 +435,11 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand4(self, z, l, k):
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         return (
             z ** (l + 4)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -422,7 +461,11 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-8,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammaincc(-l / 2 + n / 2 + 1, x**2)
@@ -444,7 +487,11 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-8,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammainc(l / 2 + n / 2 + 3 / 2, x**2)
@@ -466,7 +513,11 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-8,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammaincc(-l / 2 + n / 2 + 2, x**2)
@@ -488,7 +539,11 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-8,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1)
+        c = (
+            jnp.zeros(self.speedgrid.nx)
+            .at[k]
+            .set(1, indices_are_sorted=True, unique_indices=True)
+        )
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammainc(l / 2 + n / 2 + 5 / 2, x**2)
@@ -621,7 +676,11 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         scale = self.nus[:, idxx] / h**2
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -658,7 +717,13 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = self.nus[:, idxx] / h**2
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -704,9 +769,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[:, idxx, idxa, 0, 0, idxa]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -757,9 +822,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -912,7 +977,11 @@ class EnergyScattering(lx.AbstractLinearOperator):
         )
         out = jnp.where(
             self.gauge,
-            out.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            out.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             out,
         )
         out = jnp.moveaxis(out, (0, 1, 2, 3, 4), caxorder)
@@ -948,7 +1017,13 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + jnp.abs(self.coeff1[:, idxx] / jnp.mean(self.speedgrid.wx))
             + jnp.abs(self.coeff0[:, idxx])
         )
-        out = jnp.where(self.gauge, out.at[:, idxx, idxa, 0, 0].set(scale), out)
+        out = jnp.where(
+            self.gauge,
+            out.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            out,
+        )
         out = jnp.moveaxis(out, (0, 1, 2, 3, 4), caxorder)
         return -out.flatten()
 
@@ -994,9 +1069,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
         out = jnp.where(
             self.gauge,
             out.at[:, idxx, idxa, 0, 0, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[:, idxx, idxa, 0, 0, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             out,
         )
         out = jnp.moveaxis(out, (0, 1, 2, 3, 4), caxorder)
@@ -1160,7 +1235,11 @@ class FieldPartCD(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(self.C))
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1185,7 +1264,13 @@ class FieldPartCD(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(self.C))
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return -df.flatten()
 
@@ -1213,17 +1298,17 @@ class FieldPartCD(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx[0], idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx[0], idxa, 0, 0, idxs]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx[-1], idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx[-1], idxa, 0, 0, idxs]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1249,9 +1334,9 @@ class FieldPartCD(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1304,9 +1389,9 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[idxs, idxx, idxa, 0, 0, idxs, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1470,7 +1555,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(Gabxlk))
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f0[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f0[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
 
@@ -1504,7 +1593,13 @@ class FieldPartCG(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(Gabxlk))
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
 
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return -df.flatten()
@@ -1542,17 +1637,17 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx[0], idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx[0], idxa, 0, 0, idxs]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx[-1], idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx[-1], idxa, 0, 0, idxs]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1587,9 +1682,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
 
@@ -1624,9 +1719,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxa]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
 
@@ -1677,9 +1772,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :, :, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1701,9 +1796,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx, idxa, 0, 0, idxs, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1879,7 +1974,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(Habxlk + dHabxlk))
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f0[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f0[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
 
@@ -1912,7 +2011,13 @@ class FieldPartCH(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(Habxlk))
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
 
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return -df.flatten()
@@ -1952,17 +2057,17 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx[0], idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx[0], idxa, 0, 0, idxs]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx[-1], idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx[-1], idxa, 0, 0, idxs]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1999,9 +2104,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2037,9 +2142,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxa]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2089,9 +2194,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :, :, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2113,9 +2218,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :, :]
-                .set(0)
+                .set(0, indices_are_sorted=True, unique_indices=True)
                 .at[idxs, idxx, idxa, 0, 0, idxs, idxx]
-                .set(scale),
+                .set(scale, indices_are_sorted=True, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)

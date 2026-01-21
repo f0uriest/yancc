@@ -135,7 +135,13 @@ class MDKETheta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(
+                scale * f[idx, 0, 0], indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -157,7 +163,11 @@ class MDKETheta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -186,7 +196,12 @@ class MDKETheta(lx.AbstractLinearOperator):
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
-            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, 0].set(scale), df
+            self.gauge,
+            df.at[idx, 0, 0, :]
+            .set(0, indices_are_sorted=True, unique_indices=True)
+            .at[idx, 0, 0, 0]
+            .set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
@@ -291,7 +306,13 @@ class MDKEZeta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(
+                scale * f[idx, 0, 0], indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -313,7 +334,11 @@ class MDKEZeta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -342,7 +367,12 @@ class MDKEZeta(lx.AbstractLinearOperator):
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
-            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, 0].set(scale), df
+            self.gauge,
+            df.at[idx, 0, 0, :]
+            .set(0, indices_are_sorted=True, unique_indices=True)
+            .at[idx, 0, 0, 0]
+            .set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
@@ -447,7 +477,13 @@ class MDKEPitch(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale * f[idx, 0, 0]), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(
+                scale * f[idx, 0, 0], indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -469,7 +505,11 @@ class MDKEPitch(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[idx, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[idx, 0, 0].set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -498,7 +538,12 @@ class MDKEPitch(lx.AbstractLinearOperator):
         idx = self.pitchgrid.nxi // 2
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
-            self.gauge, df.at[idx, 0, 0, :].set(0).at[idx, 0, 0, idx].set(scale), df
+            self.gauge,
+            df.at[idx, 0, 0, :]
+            .set(0, indices_are_sorted=True, unique_indices=True)
+            .at[idx, 0, 0, idx]
+            .set(scale, indices_are_sorted=True, unique_indices=True),
+            df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
@@ -833,7 +878,11 @@ class DKETheta(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -869,7 +918,13 @@ class DKETheta(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -915,7 +970,10 @@ class DKETheta(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :].set(0).at[:, idxx, idxa, 0, 0, 0].set(scale),
+            df.at[:, idxx, idxa, 0, 0, :]
+            .set(0, indices_are_sorted=True, unique_indices=True)
+            .at[:, idxx, idxa, 0, 0, 0]
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -977,9 +1035,9 @@ class DKETheta(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1121,7 +1179,11 @@ class DKEZeta(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1157,7 +1219,13 @@ class DKEZeta(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -1203,7 +1271,10 @@ class DKEZeta(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :].set(0).at[:, idxx, idxa, 0, 0, 0].set(scale),
+            df.at[:, idxx, idxa, 0, 0, :]
+            .set(0, indices_are_sorted=True, unique_indices=True)
+            .at[:, idxx, idxa, 0, 0, 0]
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1265,9 +1336,9 @@ class DKEZeta(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1409,7 +1480,11 @@ class DKEPitch(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w)) / h
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1445,7 +1520,13 @@ class DKEPitch(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w)) / h
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -1492,9 +1573,9 @@ class DKEPitch(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[:, idxx, idxa, 0, 0, idxa]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1556,9 +1637,9 @@ class DKEPitch(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1681,7 +1762,11 @@ class DKESpeed(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale * f[:, idxx, idxa, 0, 0]),
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale * f[:, idxx, idxa, 0, 0],
+                indices_are_sorted=True,
+                unique_indices=True,
+            ),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1709,7 +1794,13 @@ class DKESpeed(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
-        df = jnp.where(self.gauge, df.at[:, idxx, idxa, 0, 0].set(scale), df)
+        df = jnp.where(
+            self.gauge,
+            df.at[:, idxx, idxa, 0, 0].set(
+                scale, indices_are_sorted=True, unique_indices=True
+            ),
+            df,
+        )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
@@ -1748,9 +1839,9 @@ class DKESpeed(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :]
-            .set(0)
+            .set(0, indices_are_sorted=True, unique_indices=True)
             .at[:, idxx, idxa, 0, 0, idxx]
-            .set(scale),
+            .set(scale, indices_are_sorted=True, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1885,7 +1976,9 @@ class DKE(lx.AbstractLinearOperator):
         self.gauge = jnp.array(gauge)
 
         if operator_weights is None:
-            operator_weights = jnp.ones(8).at[-1].set(0)
+            operator_weights = (
+                jnp.ones(8).at[-1].set(0, indices_are_sorted=True, unique_indices=True)
+            )
         self.operator_weights = jnp.asarray(operator_weights)
 
         self._opx = DKESpeed(field, pitchgrid, speedgrid, species, Erho, axorder, gauge)
