@@ -3,7 +3,6 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 import orthax
 
 
@@ -253,10 +252,9 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
         gauge_idx = kwargs.get("gauge_idx", None)
         if gauge_idx is None:
-            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[0])
-            if self.nx > 1:
-                gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
-                gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
+            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
+            if self.nx == 1:
+                gauge_idx = gauge_idx[0]
         self.gauge_idx = jnp.sort(gauge_idx)
 
     def _dfdx(self, f):
