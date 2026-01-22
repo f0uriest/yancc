@@ -18,6 +18,7 @@ from .collisions import (
 )
 from .field import Field
 from .finite_diff import fd_coeffs, fdbwd, fdfwd
+from .linalg import TransposedLinearOperator
 from .species import LocalMaxwellian
 from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _refold
 from .velocity_grids import (
@@ -228,12 +229,7 @@ class MDKETheta(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class MDKEZeta(lx.AbstractLinearOperator):
@@ -399,12 +395,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class MDKEPitch(lx.AbstractLinearOperator):
@@ -570,12 +561,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class MDKE(lx.AbstractLinearOperator):
@@ -692,12 +678,7 @@ class MDKE(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 @lx.is_symmetric.register(MDKE)
@@ -1078,12 +1059,7 @@ class DKETheta(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class DKEZeta(lx.AbstractLinearOperator):
@@ -1379,12 +1355,7 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class DKEPitch(lx.AbstractLinearOperator):
@@ -1680,12 +1651,7 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class DKESpeed(lx.AbstractLinearOperator):
@@ -1896,12 +1862,7 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class DKE(lx.AbstractLinearOperator):
@@ -2106,12 +2067,7 @@ class DKE(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 @lx.is_symmetric.register(DKE)

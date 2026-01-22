@@ -14,7 +14,11 @@ from jaxtyping import ArrayLike, Bool, Float
 from .collisions import RosenbluthPotentials
 from .field import Field
 from .finite_diff import fd_coeffs
-from .linalg import lu_factor_banded_periodic, lu_solve_banded_periodic
+from .linalg import (
+    TransposedLinearOperator,
+    lu_factor_banded_periodic,
+    lu_solve_banded_periodic,
+)
 from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -164,12 +168,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class DKEJacobiSmoother(lx.AbstractLinearOperator):
@@ -335,12 +334,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class DKEJacobi2Smoother(lx.AbstractLinearOperator):
@@ -501,12 +495,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 @lx.is_symmetric.register(DKEJacobiSmoother)

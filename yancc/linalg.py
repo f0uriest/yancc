@@ -140,12 +140,48 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
         )
 
 
+class TransposedLinearOperator(lx.AbstractLinearOperator):
+    """Transpose of another linear operator using jax.tranpose"""
+
+    operator: lx.AbstractLinearOperator
+
+    def __init__(self, operator):
+        self.operator = operator
+
+    def mv(self, vector):
+        """Matrix vector product with transposed operator."""
+        x = jax.tree.map(jnp.ones_like, self.operator.in_structure())
+        return jax.linear_transpose(self.operator.mv, x)(vector)[0]
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        return self.operator.as_matrix().T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return self.operator.out_structure()
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return self.operator.in_structure()
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return self.operator
+
+    def __getattr__(self, attr):
+        return getattr(self.operator, attr)
+
+
 @lx.is_symmetric.register(InverseBorderedOperator)
 @lx.is_diagonal.register(InverseBorderedOperator)
 @lx.is_tridiagonal.register(InverseBorderedOperator)
 @lx.is_symmetric.register(BorderedOperator)
 @lx.is_diagonal.register(BorderedOperator)
 @lx.is_tridiagonal.register(BorderedOperator)
+@lx.is_symmetric.register(TransposedLinearOperator)
+@lx.is_diagonal.register(TransposedLinearOperator)
+@lx.is_tridiagonal.register(TransposedLinearOperator)
 def _(operator):
     return False
 

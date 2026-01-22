@@ -14,6 +14,7 @@ from jaxtyping import Array, ArrayLike, Bool, Float
 
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdfwd
+from .linalg import TransposedLinearOperator
 from .species import LocalMaxwellian, gamma_ab, nuD_ab, nupar_ab
 from .utils import (
     _parse_axorder_shape_3d,
@@ -214,12 +215,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class RosenbluthPotentials(eqx.Module):
@@ -865,12 +861,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class EnergyScattering(lx.AbstractLinearOperator):
@@ -1126,12 +1117,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class FieldPartCD(lx.AbstractLinearOperator):
@@ -1441,12 +1427,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class FieldPartCG(lx.AbstractLinearOperator):
@@ -1845,12 +1826,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class FieldPartCH(lx.AbstractLinearOperator):
@@ -2267,12 +2243,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class FieldParticleScattering(lx.AbstractLinearOperator):
@@ -2418,12 +2389,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 class FokkerPlanckLandau(lx.AbstractLinearOperator):
@@ -2577,12 +2543,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return TransposedLinearOperator(self)
 
 
 @lx.is_symmetric.register(MDKEPitchAngleScattering)
