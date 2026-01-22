@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Array, Float, Int
 
 from .linalg import InverseLinearOperator
 from .smoothers import DKEJacobi2Smoother, DKEJacobiSmoother, MDKEJacobiSmoother
@@ -804,13 +805,13 @@ class MultigridOperator(lx.AbstractLinearOperator):
         operators: list[lx.AbstractLinearOperator],
         smoothers: list[list[lx.AbstractLinearOperator]],
         x0: Optional[jax.Array] = None,
-        cycle_index: int = 1,
-        v1: int = 1,
-        v2: int = 1,
+        cycle_index: Union[int, Int[Array, ""]] = 1,
+        v1: Union[int, Int[Array, ""]] = 1,
+        v2: Union[int, Int[Array, ""]] = 1,
         interp_method: str = "linear",
         smooth_method: str = "standard",
         coarse_opinv: Optional[lx.AbstractLinearOperator] = None,
-        coarse_overweight: float = 1.0,
+        coarse_overweight: Union[str, float, Float[Array, ""]] = 1.0,
         verbose: Union[bool, int] = False,
     ):
 
@@ -867,12 +868,22 @@ class MultigridOperator(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        opt = [op.transpose() for op in self.operators]
+        smt = [[sm.transpose() for sm in smo] for smo in self.smoothers]
+        opit = self.coarse_opinv.transpose()
+        return MultigridOperator(
+            opt,
+            smt,
+            self.x0,
+            self.cycle_index,
+            self.v1,
+            self.v2,
+            self.interp_method,
+            self.smooth_method,
+            opit,
+            self.coarse_overweight,
+            self.verbose,
+        )
 
 
 @lx.is_symmetric.register(MultigridOperator)
