@@ -62,12 +62,7 @@ class BorderedOperator(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return BorderedOperator(self.A.T, self.C.T, self.B.T, self.D.T)
 
 
 class InverseBorderedOperator(lx.AbstractLinearOperator):
@@ -98,7 +93,7 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
 
     def mv(self, vector):
         """Matrix vector product."""
-        # [AA DB] [X1] = [AAX1 + BBX2]
+        # [AA BB] [X1] = [AAX1 + BBX2]
         # [CC DD] [X2] = [CCX1 + DDX2]
         # with
         # AA = Ai + Ai @ B @ schuri @ C @ Ai    # noqa: E800
@@ -137,12 +132,12 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
 
     def transpose(self):
         """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
-
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
-
-        return lx.FunctionLinearOperator(fun, x)
+        return InverseBorderedOperator(
+            self.Ai.T,
+            self.C.T,
+            self.B.T,
+            self.D.T,
+        )
 
 
 @lx.is_symmetric.register(InverseBorderedOperator)

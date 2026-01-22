@@ -26,6 +26,7 @@ def test_bordered_operator():
     G = jnp.block([[A, B], [C, D]])
 
     np.testing.assert_allclose(F.as_matrix(), G)
+    np.testing.assert_allclose(F.T.as_matrix(), G.T)
 
     Fi = yancc.linalg.InverseBorderedOperator(
         lx.MatrixLinearOperator(jnp.linalg.inv(A)),
@@ -34,6 +35,7 @@ def test_bordered_operator():
         lx.MatrixLinearOperator(D),
     )
     np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(G))
+    np.testing.assert_allclose(Fi.T.as_matrix(), np.linalg.inv(G.T))
 
 
 def test_tridiagonal():
