@@ -81,7 +81,7 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
         assert B.in_size() == D.in_size()
         assert C.out_size() == D.out_size()
 
-        AiB = jax.vmap(Ai.mv, in_axes=1, out_axes=1)(B.as_matrix())
+        AiB = jnp.array([Ai.mv(x) for x in B.as_matrix().T]).T
         CAiB = C.as_matrix() @ AiB
         schur = D.as_matrix() - CAiB
         self.schuri = lx.MatrixLinearOperator(jnp.linalg.pinv(schur))
