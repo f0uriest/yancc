@@ -8,8 +8,7 @@ import pytest
 import sympy
 
 from yancc.collisions import RosenbluthPotentials
-from yancc.species import GlobalMaxwellian, Hydrogen
-from yancc.utils import Gammainc, Gammaincc
+from yancc.utils import lGammainc, lGammaincc
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import _compute_G_sympy, _compute_H_sympy
@@ -30,32 +29,22 @@ def xigrid():
 
 
 @pytest.fixture
-def species():
-    """Single ion species for testing."""
-    return [
-        GlobalMaxwellian(
-            Hydrogen, lambda x: 1e3 * (1 - x**2), lambda x: 1e19 * (1 - x**4)
-        ).localize(0.5)
-    ]
-
-
-@pytest.fixture
-def potential_quad(xgrid, species):
+def potential_quad(xgrid, species2):
     """Single species potentials with quadrature."""
     return RosenbluthPotentials(
         xgrid,
-        species,
+        species2,
         nL=6,
         quad=True,
     )
 
 
 @pytest.fixture
-def potential_gamma(xgrid, species):
+def potential_gamma(xgrid, species2):
     """Single species potential without quadrature."""
     return RosenbluthPotentials(
         xgrid,
-        species,
+        species2,
         nL=6,
         quad=False,
     )
@@ -83,35 +72,124 @@ def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
     """Test for potentials using incomplete gamma functions."""
     R1 = potential_quad
     R2 = potential_gamma
-    np.testing.assert_allclose(R1.Hxlk, R2.Hxlk, rtol=1e-8, atol=1e-8)
-    np.testing.assert_allclose(R1.dHxlk, R2.dHxlk, rtol=1e-8, atol=1e-8)
-    np.testing.assert_allclose(R1.ddGxlk, R2.ddGxlk, rtol=1e-8, atol=1e-8)
+    # a,a
+    np.testing.assert_allclose(
+        R1.Hxlk[0, 0],
+        R2.Hxlk[0, 0],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.Hxlk[0, 0]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.dHxlk[0, 0],
+        R2.dHxlk[0, 0],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.dHxlk[0, 0]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.ddGxlk[0, 0],
+        R2.ddGxlk[0, 0],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.ddGxlk[0, 0]).mean(),
+    )
+    # a,b
+    np.testing.assert_allclose(
+        R1.Hxlk[0, 1],
+        R2.Hxlk[0, 1],
+        rtol=1e-6,
+        atol=1e-6 * abs(R1.Hxlk[0, 1]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.dHxlk[0, 1],
+        R2.dHxlk[0, 1],
+        rtol=1e-6,
+        atol=1e-6 * abs(R1.dHxlk[0, 1]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.ddGxlk[0, 1],
+        R2.ddGxlk[0, 1],
+        rtol=1e-6,
+        atol=1e-6 * abs(R1.ddGxlk[0, 1]).mean(),
+    )
+    # b,a
+    np.testing.assert_allclose(
+        R1.Hxlk[1, 0],
+        R2.Hxlk[1, 0],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.Hxlk[1, 0]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.dHxlk[1, 0],
+        R2.dHxlk[1, 0],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.dHxlk[1, 0]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.ddGxlk[1, 0],
+        R2.ddGxlk[1, 0],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.ddGxlk[1, 0]).mean(),
+    )
+    # b,b
+    np.testing.assert_allclose(
+        R1.Hxlk[1, 1],
+        R2.Hxlk[1, 1],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.Hxlk[1, 1]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.dHxlk[1, 1],
+        R2.dHxlk[1, 1],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.dHxlk[1, 1]).mean(),
+    )
+    np.testing.assert_allclose(
+        R1.ddGxlk[1, 1],
+        R2.ddGxlk[1, 1],
+        rtol=1e-8,
+        atol=1e-8 * abs(R1.ddGxlk[1, 1]).mean(),
+    )
 
 
-@pytest.mark.parametrize("x0", np.linspace(0.1, 4, 3))
-@pytest.mark.parametrize("l", [0, 2, 4])
-@pytest.mark.parametrize("k", [2, 4, 8])
-def test_lower_Gamma(x0, l, k):
+@np.vectorize
+def mplGammainc(s, x):
+    f = mpmath.gammainc(s, 0, x)
+    s = mpmath.sign(f)
+    lf = mpmath.log(mpmath.fabs(f))
+    return int(s), float(lf)
+
+
+@np.vectorize
+def mplGammaincc(s, x):
+    f = mpmath.gammainc(s, x, mpmath.inf)
+    s = mpmath.sign(f)
+    lf = mpmath.log(mpmath.fabs(f))
+    return int(s), float(lf)
+
+
+def test_lower_Gamma():
     """Test for lower incomplete gamma."""
+    l = np.arange(5)[:, None, None]
+    k = np.arange(9)[None, :, None]
+    x0 = np.logspace(-3, 2, 50)[None, None, :]
     s = l / 2 + k / 2 + 5 / 2  # for I_4
-    mpGammainc = lambda s, x: float(mpmath.gammainc(s, 0, x))
 
-    f1 = Gammainc(s, x0**2)
-    f2 = mpGammainc(s, x0**2)
-    np.testing.assert_allclose(f1, f2, rtol=1e-12, atol=1e-14)
+    s1, f1 = lGammainc(s, x0**2)
+    s2, f2 = mplGammainc(s, x0**2)
+    np.testing.assert_allclose(f1, f2, rtol=1e-10, atol=1e-10)
+    assert np.all(s1 == s2)
 
 
-@pytest.mark.parametrize("x0", np.linspace(0.1, 4, 3))
-@pytest.mark.parametrize("l", [0, 2, 4, 6])
-@pytest.mark.parametrize("k", [0, 2, 4, 8])
-def test_upper_Gamma(x0, l, k):
+def test_upper_Gamma():
     """Test for upper incomplete gamma."""
+    l = np.arange(5)[:, None, None]
+    k = np.arange(9)[None, :, None]
+    x0 = np.logspace(-3, 2, 50)[None, None, :]
     s = -l / 2 + k / 2 + 1  # for I_1
-    mpGammaincc = lambda s, x: float(mpmath.gammainc(s, x, mpmath.inf))
 
-    f1 = Gammaincc(s, x0**2)
-    f2 = mpGammaincc(s, x0**2)
-    np.testing.assert_allclose(f1, f2, rtol=1e-12, atol=1e-14)
+    s1, f1 = lGammaincc(s, x0**2)
+    s2, f2 = mplGammaincc(s, x0**2)
+    np.testing.assert_allclose(f1, f2, rtol=5e-8, atol=5e-8)
+    assert np.all(s1 == s2)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
