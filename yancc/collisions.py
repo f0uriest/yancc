@@ -242,10 +242,6 @@ class RosenbluthPotentials(eqx.Module):
     dHxlk: jax.Array
 
     def __init__(self, speedgrid, species, nL=4, quad=False):
-        if not quad:
-            assert speedgrid.k == 0
-            assert speedgrid.xmax == jnp.inf
-
         self.speedgrid = speedgrid
         self.legendregrid = LegendrePitchAngleGrid(nL)
         self.quad = quad
