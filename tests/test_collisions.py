@@ -15,7 +15,7 @@ from yancc.collisions import (
     RosenbluthPotentials,
 )
 from yancc.field import Field
-from yancc.species import GlobalMaxwellian, Hydrogen, gamma_ab
+from yancc.species import GlobalMaxwellian, Hydrogen, Tritium, gamma_ab
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import (
@@ -87,6 +87,106 @@ def test_CE_single_species_vs_sympy():
     ]  # collision operator has a minus sign in overall DKE
 
     np.testing.assert_allclose(CEjax, CEsympy)
+
+
+def test_CE_2_species_vs_sympy():
+    species = [
+        GlobalMaxwellian(
+            Hydrogen,
+            lambda x: 15e3 * (1 - x**2),
+            lambda x: 2e20 * (1 - x**4),
+        ).localize(0.5),
+        GlobalMaxwellian(
+            Tritium,
+            lambda x: 1.5e3 * (1 - x**2),
+            lambda x: 2.5e20 * (1 - x**4),
+        ).localize(0.5),
+    ]
+
+    speedgrid = MaxwellSpeedGrid(10)
+    pitchgrid = UniformPitchAngleGrid(11)
+    # just need a dummy field for this
+    nt = 1
+    nz = 1
+    field = Field(
+        rho=0.5,
+        B_sup_t=np.ones((nt, nz)),
+        B_sup_z=np.ones((nt, nz)),
+        B_sub_t=np.ones((nt, nz)),
+        B_sub_z=np.ones((nt, nz)),
+        Bmag=np.ones((nt, nz)),
+        sqrtg=np.ones((nt, nz)),
+        Psi=1.0,
+        iota=1.0,
+        R_major=10.0,
+        a_minor=1.0,
+    )
+
+    v = sympy.symbols("v", real=True, positive=True)
+    na, nb, ma, mb, Ta, Tb = sympy.symbols(
+        "n_a n_b m_a m_b T_a T_b", real=True, positive=True
+    )
+    pi32 = sympy.pi ** sympy.Rational(3, 2)
+    vta = sympy.sqrt(2 * Ta / ma)
+    vtb = sympy.sqrt(2 * Tb / mb)
+    Gamma_aa, Gamma_ab, Gamma_ba, Gamma_bb = sympy.symbols(
+        "Gamma_aa Gamma_ab Gamma_ba Gamma_bb", real=True
+    )
+
+    xa = v / vta
+    xb = v / vtb
+
+    Fa = na / (pi32 * vta**3) * sympy.exp(-(xa**2))
+    Fb = nb / (pi32 * vtb**3) * sympy.exp(-(xb**2))
+
+    fa = (1 - v + 3 * v**2) * sympy.exp(-(xa**2))
+    fb = (4 + v - 2 * v**2) * sympy.exp(-(xb**2))
+
+    CEaa = _compute_CEab_sympy(Fa, fa, v, vta, vta, ma, ma, na, Gamma_aa)
+    CEab = _compute_CEab_sympy(Fb, fa, v, vta, vtb, ma, mb, nb, Gamma_ab)
+    CEba = _compute_CEab_sympy(Fa, fb, v, vtb, vta, mb, ma, na, Gamma_ba)
+    CEbb = _compute_CEab_sympy(Fb, fb, v, vtb, vtb, mb, mb, nb, Gamma_bb)
+
+    CE = EnergyScattering(field, pitchgrid, speedgrid, species)
+    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_ab_jax = gamma_ab(species[0], species[1])
+    gamma_ba_jax = gamma_ab(species[1], species[0])
+    gamma_bb_jax = gamma_ab(species[1], species[1])
+
+    from yancc.species import JOULE_PER_EV
+
+    subs = {
+        na: species[0].density,
+        nb: species[1].density,
+        ma: species[0].species.mass,
+        mb: species[1].species.mass,
+        Ta: species[0].temperature * JOULE_PER_EV,
+        Tb: species[1].temperature * JOULE_PER_EV,
+        Gamma_aa: gamma_aa_jax,
+        Gamma_ab: gamma_ab_jax,
+        Gamma_ba: gamma_ba_jax,
+        Gamma_bb: gamma_bb_jax,
+    }
+
+    CEaa_sympy = _eval_f(CEaa, v, speedgrid.x * species[0].v_thermal, subs)
+    CEab_sympy = _eval_f(CEab, v, speedgrid.x * species[0].v_thermal, subs)
+    CEba_sympy = _eval_f(CEba, v, speedgrid.x * species[1].v_thermal, subs)
+    CEbb_sympy = _eval_f(CEbb, v, speedgrid.x * species[1].v_thermal, subs)
+
+    CEa_sympy = CEaa_sympy + CEab_sympy
+    CEb_sympy = CEba_sympy + CEbb_sympy
+
+    ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
+    ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
+    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f[0] *= ffa[:, None, None, None]
+    f[1] *= ffb[:, None, None, None]
+    CE_jax = -CE.mv(f)
+    CEa_jax = CE_jax[0, :, 0, 0, 0]
+    CEb_jax = CE_jax[1, :, 0, 0, 0]
+
+    np.testing.assert_allclose(CEa_jax, CEa_sympy, rtol=1e-10)
+    np.testing.assert_allclose(CEb_jax, CEb_sympy, rtol=1e-10)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
