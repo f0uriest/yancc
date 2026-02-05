@@ -235,6 +235,7 @@ class RosenbluthPotentials(eqx.Module):
     """
 
     speedgrid: MaxwellSpeedGrid
+    species: list[LocalMaxwellian]
     legendregrid: LegendrePitchAngleGrid
     quad: bool = eqx.field(static=True)
     ddGxlk: jax.Array
@@ -243,6 +244,7 @@ class RosenbluthPotentials(eqx.Module):
 
     def __init__(self, speedgrid, species, nL=4, quad=False):
         self.speedgrid = speedgrid
+        self.species = species
         self.legendregrid = LegendrePitchAngleGrid(nL)
         self.quad = quad
 
