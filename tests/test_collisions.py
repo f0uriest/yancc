@@ -19,23 +19,23 @@ from yancc.species import GlobalMaxwellian, Hydrogen, gamma_ab
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import (
-    _compute_CD_sympy,
-    _compute_CE_sympy,
-    _compute_CG_sympy,
-    _compute_CH_sympy,
+    _compute_CDab_sympy,
+    _compute_CEab_sympy,
+    _compute_CGab_sympy,
+    _compute_CHab_sympy,
+    _eval_f,
 )
 
 
 def test_CE_single_species_vs_sympy():
-    x = sympy.symbols("x", real=True)
-    v = sympy.symbols("v", real=True, positive=True)
-    na, nb, ma = sympy.symbols("n_a n_b m_a", real=True)
-    va = sympy.symbols("v_a", real=True)
+    na, nb, ma, v, va = sympy.symbols("n_a n_b m_a v v_a", real=True, positive=True)
     Gamma_aa = sympy.symbols("Gamma_aa", real=True)
     pi32 = sympy.pi ** sympy.Rational(3, 2)
+    x = v / va
     Fa = na / (pi32 * va**3) * sympy.exp(-(x**2))
     fa = (1 - x + x**2) * sympy.exp(-(x**2))
-    CEaa = _compute_CE_sympy(Fa, fa, x, v, va, va, ma, ma, nb, Gamma_aa)
+
+    CEaa = _compute_CEab_sympy(Fa, fa, v, va, va, ma, ma, na, Gamma_aa)
 
     ni = 5e19
     ti = 1000
@@ -69,23 +69,15 @@ def test_CE_single_species_vs_sympy():
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
     gamma_aa_jax = gamma_ab(species[0], species[0])
 
-    CEsympy = np.array(
-        [
-            CEaa.evalf(
-                subs={
-                    v: xi_ * species[0].v_thermal,
-                    va: species[0].v_thermal,
-                    na: species[0].density,
-                    nb: species[0].density,
-                    Gamma_aa: gamma_aa_jax,
-                }
-            )
-            for xi_ in speedgrid.x
-        ],
-        dtype=np.float64,
-    )
+    subs = {
+        va: species[0].v_thermal,
+        na: species[0].density,
+        nb: species[0].density,
+        Gamma_aa: gamma_aa_jax,
+    }
 
-    ffa = np.array([fa.evalf(subs={x: xi_}) for xi_ in speedgrid.x], dtype=np.float64)
+    CEsympy = _eval_f(CEaa, v, speedgrid.x * species[0].v_thermal, subs)
+    ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
     f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
     f[0] *= ffa[:, None, None, None]
@@ -98,28 +90,22 @@ def test_CE_single_species_vs_sympy():
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CF_single_species_vs_sympy(l):
-    x = sympy.symbols("x", real=True)
+def test_CD_single_species_vs_sympy(l):
     va, ma, v, na, Gamma_aa = sympy.symbols("v_a m_a v n_a Gamma_aa", real=True)
     pi32 = sympy.pi ** sympy.Rational(3, 2)
+    x = v / va
     Fa = na / (pi32 * va**3) * sympy.exp(-(x**2))
-
     fa = (1 + x) * sympy.exp(-(x**2))
-    CDaa = _compute_CD_sympy(Fa, fa, x, v, va, va, ma, ma, Gamma_aa)
-    CHaa = _compute_CH_sympy(Fa, fa, x, l, v, va, va, ma, ma, Gamma_aa)
-    CGaa = _compute_CG_sympy(Fa, fa, x, l, v, va, va, ma, ma, Gamma_aa)
+    CDaa = _compute_CDab_sympy(Fa, fa, ma, ma, Gamma_aa)
 
     ni = 5e19
     ti = 1000
-
     ions1 = GlobalMaxwellian(
         Hydrogen, lambda x: ti * (1 - x**2), lambda x: ni * (1 - x**4)
     ).localize(0.5)
-
     species = [
         ions1,
     ]
-
     # just need a dummy field for this
     nt = 1
     nz = 1
@@ -141,61 +127,91 @@ def test_CF_single_species_vs_sympy(l):
     potentials = RosenbluthPotentials(speedgrid, species, nL=6)
     gamma_aa_jax = gamma_ab(species[0], species[0])
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
-    CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
-    CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
+    Txi = orthax.orthvander(
+        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+    )
+    Txi_inv = jnp.linalg.pinv(Txi)
 
-    CHsympy = (
-        np.array(
-            [
-                CHaa.evalf(
-                    subs={
-                        v: xi_ * species[0].v_thermal,
-                        va: species[0].v_thermal,
-                        na: species[0].density,
-                        Gamma_aa: gamma_aa_jax,
-                    }
-                )
-                for xi_ in speedgrid.x
-            ]
-        )
-        .astype(np.complex128)
-        .real
+    subs = {
+        va: species[0].v_thermal,
+        na: species[0].density,
+        Gamma_aa: gamma_aa_jax,
+    }
+
+    CDsympy = _eval_f(CDaa, v, speedgrid.x * species[0].v_thermal, subs)
+    ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
+
+    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f[0] *= (
+        ffa[:, None, None, None]
+        * orthax.orthval(
+            pitchgrid.xi,
+            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            potentials.legendregrid.xirec,
+        )[None, :, None, None]
     )
-    CGsympy = (
-        np.array(
-            [
-                CGaa.evalf(
-                    subs={
-                        v: xi_ * species[0].v_thermal,
-                        va: species[0].v_thermal,
-                        na: species[0].density,
-                        Gamma_aa: gamma_aa_jax,
-                    }
-                )
-                for xi_ in speedgrid.x
-            ]
-        )
-        .astype(np.complex128)
-        .real
+
+    # collision operator has a minus sign in overall DKE
+    cd = -CD.mv(f)
+    cd = jnp.einsum("la,sxatz->sxltz", Txi_inv, cd)[0]
+
+    # potentials are diagonal in legendre index, so outputs for idx != l should be 0
+    np.testing.assert_allclose(cd[:, :l, :, :], 0, atol=1e-10)
+    np.testing.assert_allclose(cd[:, l + 1 :, :, :], 0, atol=1e-10)
+    np.testing.assert_allclose(cd[:, l, 0, 0], CDsympy, rtol=2e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize("l", [0, 1, 2, 3])
+def test_CH_single_species_vs_sympy(l):
+    va, ma, v, na, Gamma_aa = sympy.symbols("v_a m_a v n_a Gamma_aa", real=True)
+    pi32 = sympy.pi ** sympy.Rational(3, 2)
+    x = v / va
+    Fa = na / (pi32 * va**3) * sympy.exp(-(x**2))
+    fa = (1 + x) * sympy.exp(-(x**2))
+    CHaa = _compute_CHab_sympy(Fa, fa, l, v, va, va, ma, ma, Gamma_aa)
+
+    ni = 5e19
+    ti = 1000
+    ions1 = GlobalMaxwellian(
+        Hydrogen, lambda x: ti * (1 - x**2), lambda x: ni * (1 - x**4)
+    ).localize(0.5)
+    species = [
+        ions1,
+    ]
+    # just need a dummy field for this
+    nt = 1
+    nz = 1
+    field = Field(
+        rho=0.5,
+        B_sup_t=np.ones((nt, nz)),
+        B_sup_z=np.ones((nt, nz)),
+        B_sub_t=np.ones((nt, nz)),
+        B_sub_z=np.ones((nt, nz)),
+        Bmag=np.ones((nt, nz)),
+        sqrtg=np.ones((nt, nz)),
+        Psi=1.0,
+        iota=1.0,
+        R_major=10.0,
+        a_minor=1.0,
     )
-    CDsympy = (
-        np.array(
-            [
-                CDaa.evalf(
-                    subs={
-                        v: xi_ * species[0].v_thermal,
-                        va: species[0].v_thermal,
-                        na: species[0].density,
-                        Gamma_aa: gamma_aa_jax,
-                    }
-                )
-                for xi_ in speedgrid.x
-            ]
-        )
-        .astype(np.complex128)
-        .real
+    speedgrid = MaxwellSpeedGrid(10)
+    pitchgrid = UniformPitchAngleGrid(11)
+    potentials = RosenbluthPotentials(speedgrid, species, nL=6)
+    gamma_aa_jax = gamma_ab(species[0], species[0])
+    CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
+    Txi = orthax.orthvander(
+        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
     )
-    ffa = np.array([fa.evalf(subs={x: xi_}) for xi_ in speedgrid.x], dtype=np.float64)
+    Txi_inv = jnp.linalg.pinv(Txi)
+
+    subs = {
+        va: species[0].v_thermal,
+        na: species[0].density,
+        Gamma_aa: gamma_aa_jax,
+    }
+
+    CHsympy = _eval_f(CHaa, v, speedgrid.x * species[0].v_thermal, subs)
+    ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
     f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
     f[0] *= (
@@ -209,24 +225,83 @@ def test_CF_single_species_vs_sympy(l):
 
     # collision operator has a minus sign in overall DKE
     ch = -CH.mv(f)
-    cg = -CG.mv(f)
-    cd = -CD.mv(f)
-
-    ch = jnp.einsum("la,sxatz->sxltz", CG.Txi_inv, ch)[0]
-    cg = jnp.einsum("la,sxatz->sxltz", CG.Txi_inv, cg)[0]
-    cd = jnp.einsum("la,sxatz->sxltz", CG.Txi_inv, cd)[0]
+    ch = jnp.einsum("la,sxatz->sxltz", Txi_inv, ch)[0]
 
     # potentials are diagonal in legendre index, so outputs for idx != l should be 0
     np.testing.assert_allclose(ch[:, :l, :, :], 0, atol=1e-10)
     np.testing.assert_allclose(ch[:, l + 1 :, :, :], 0, atol=1e-10)
+    np.testing.assert_allclose(ch[:, l, 0, 0], CHsympy, rtol=2e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize("l", [0, 1, 2, 3])
+def test_CG_single_species_vs_sympy(l):
+    va, ma, v, na, Gamma_aa = sympy.symbols("v_a m_a v n_a Gamma_aa", real=True)
+    pi32 = sympy.pi ** sympy.Rational(3, 2)
+    x = v / va
+    Fa = na / (pi32 * va**3) * sympy.exp(-(x**2))
+    fa = (1 + x) * sympy.exp(-(x**2))
+    CGaa = _compute_CGab_sympy(Fa, fa, l, v, va, va, Gamma_aa)
+
+    ni = 5e19
+    ti = 1000
+    ions1 = GlobalMaxwellian(
+        Hydrogen, lambda x: ti * (1 - x**2), lambda x: ni * (1 - x**4)
+    ).localize(0.5)
+    species = [
+        ions1,
+    ]
+    # just need a dummy field for this
+    nt = 1
+    nz = 1
+    field = Field(
+        rho=0.5,
+        B_sup_t=np.ones((nt, nz)),
+        B_sup_z=np.ones((nt, nz)),
+        B_sub_t=np.ones((nt, nz)),
+        B_sub_z=np.ones((nt, nz)),
+        Bmag=np.ones((nt, nz)),
+        sqrtg=np.ones((nt, nz)),
+        Psi=1.0,
+        iota=1.0,
+        R_major=10.0,
+        a_minor=1.0,
+    )
+    speedgrid = MaxwellSpeedGrid(10)
+    pitchgrid = UniformPitchAngleGrid(11)
+    potentials = RosenbluthPotentials(speedgrid, species, nL=6)
+    gamma_aa_jax = gamma_ab(species[0], species[0])
+    CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
+    Txi = orthax.orthvander(
+        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+    )
+    Txi_inv = jnp.linalg.pinv(Txi)
+
+    subs = {
+        va: species[0].v_thermal,
+        na: species[0].density,
+        Gamma_aa: gamma_aa_jax,
+    }
+
+    CGsympy = _eval_f(CGaa, v, speedgrid.x * species[0].v_thermal, subs)
+    ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
+    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f[0] *= (
+        ffa[:, None, None, None]
+        * orthax.orthval(
+            pitchgrid.xi,
+            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            potentials.legendregrid.xirec,
+        )[None, :, None, None]
+    )
+
+    # collision operator has a minus sign in overall DKE
+    cg = -CG.mv(f)
+    cg = jnp.einsum("la,sxatz->sxltz", Txi_inv, cg)[0]
+
+    # potentials are diagonal in legendre index, so outputs for idx != l should be 0
     np.testing.assert_allclose(cg[:, :l, :, :], 0, atol=1e-10)
     np.testing.assert_allclose(cg[:, l + 1 :, :, :], 0, atol=1e-10)
-    np.testing.assert_allclose(cd[:, :l, :, :], 0, atol=1e-10)
-    np.testing.assert_allclose(cd[:, l + 1 :, :, :], 0, atol=1e-10)
-
-    np.testing.assert_allclose(ch[:, l, 0, 0], CHsympy, rtol=2e-6, atol=1e-8)
     np.testing.assert_allclose(cg[:, l, 0, 0], CGsympy, rtol=2e-6, atol=1e-8)
-    np.testing.assert_allclose(cd[:, l, 0, 0], CDsympy, rtol=2e-6, atol=1e-8)
 
 
 def test_verify_collision_null_single_species():

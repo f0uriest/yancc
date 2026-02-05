@@ -255,23 +255,29 @@ class RosenbluthPotentials(eqx.Module):
         self.ddGxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
-        # arr[a,b] is potential operator from species b to species a
+        # arr[a,b] is potential operator from species b evaluated at x grid of species a
         for a, spa in enumerate(species):
             for b, spb in enumerate(species):
                 va, vb = spa.v_thermal, spb.v_thermal
-                v = x * va  # speed on a grid
-                xb = v / vb  # on b grid
-                ddG = self._ddGlk(xb, l, k)
-                dH = self._dHlk(xb, l, k)
-                H = self._Hlk(xb, l, k)
+                # suppose vb > va, then fb is wider in v space
+                # so to get {H,G}b on fa grid, we evaluate at x << 1 ie x*va/vb
+                xa = x * va / vb
+                ddG = self._ddGlk(xa, l, k)
+                dH = self._dHlk(xa, l, k)
+                H = self._Hlk(xa, l, k)
+                # ddG is in normalized units, needs to be scaled by vb^4
+                # but ddG is dG/dx^2, want dG/dv^2 so gives extra factor of 1/vb^2
                 self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(
-                    ddG, indices_are_sorted=True, unique_indices=True
+                    ddG * vb**2, indices_are_sorted=True, unique_indices=True
                 )
+                # dH is in normalized units, needs to be scaled by vb^2
+                # but dH is dH/dx, want dH/dv so gives extra factor of 1/vb
                 self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(
-                    dH, indices_are_sorted=True, unique_indices=True
+                    dH * vb, indices_are_sorted=True, unique_indices=True
                 )
+                # H is in normalized units, needs to be scaled by vb^2
                 self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(
-                    H, indices_are_sorted=True, unique_indices=True
+                    H * vb**2, indices_are_sorted=True, unique_indices=True
                 )
 
     @eqx.filter_jit
@@ -452,7 +458,7 @@ class RosenbluthPotentials(eqx.Module):
                 order=256,
                 max_ninter=20,
                 epsabs=1e-12,
-                epsrel=1e-8,
+                epsrel=1e-12,
             )
             return f
         c = (
@@ -478,7 +484,7 @@ class RosenbluthPotentials(eqx.Module):
                 order=256,
                 max_ninter=20,
                 epsabs=1e-12,
-                epsrel=1e-8,
+                epsrel=1e-12,
             )
             return f
         c = (
@@ -504,7 +510,7 @@ class RosenbluthPotentials(eqx.Module):
                 order=256,
                 max_ninter=20,
                 epsabs=1e-12,
-                epsrel=1e-8,
+                epsrel=1e-12,
             )
             return f
         c = (
@@ -530,7 +536,7 @@ class RosenbluthPotentials(eqx.Module):
                 order=256,
                 max_ninter=20,
                 epsabs=1e-12,
-                epsrel=1e-8,
+                epsrel=1e-12,
             )
             return f
         c = (
@@ -1489,10 +1495,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             pb = []
             for b, spb in enumerate(species):
                 gamma = gamma_ab(spa, spb)
-                vb = spb.v_thermal
-                # ddG == dG/dx^2, so d/dv^2 also picks up an extra 1/vb^2
-                # G from potentials is really G/vb^4 so we multiply by vb^4 and cancel
-                pb.append(gamma * Fa * 2 * v**2 * vb**2 / va**4)
+                pb.append(gamma * Fa * 2 * v**2 / va**4)
             prefactor.append(pb)
 
         self.prefactor = jnp.array(prefactor)
@@ -1894,14 +1897,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             temp_prefactor_dH = []
             for b, spb in enumerate(species):
                 gamma = gamma_ab(spa, spb)
-                vb = spb.v_thermal
                 mb = spb.species.mass
-                # dH == dH/dx, so d/dv also picks up an extra 1/vb
-                # H from potentials is really H/vb^2 so we multiply by vb^2 and cancel
-                temp_prefactor_H.append(-2 * vb**2 / va**2 * gamma * Fa)
-                temp_prefactor_dH.append(
-                    -2 * v * vb / va**2 * (1 - ma / mb) * gamma * Fa
-                )
+                temp_prefactor_H.append(-2 / va**2 * gamma * Fa)
+                temp_prefactor_dH.append(-2 * v / va**2 * (1 - ma / mb) * gamma * Fa)
             prefactor_H.append(temp_prefactor_H)
             prefactor_dH.append(temp_prefactor_dH)
 
