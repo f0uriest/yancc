@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 
 
-def _lgammastar(s, z, kmax=100000):
+def _lgammastar(s, z, kmax=1000):
     k = jnp.arange(0, kmax)
     gammarg = s + k + 1
     gammasn = jax.scipy.special.gammasgn(gammarg)
@@ -52,6 +52,18 @@ def _exp1(x):
     return jnp.where(x == 0, jnp.inf, e1)
 
 
+@jnp.vectorize
+def _lGammainc_large_x(s, x):
+    # gamma(s,x) = Gamma(s) - Gamma(s,x)
+    sgn1 = jax.scipy.special.gammasgn(s)
+    G = jax.scipy.special.gammaln(s)
+    sgn2, F = lGammaincc(s, x)
+    x = jnp.array([G, F])
+    sgn = jnp.array([sgn1, -sgn2])
+    out, sgn = jax.scipy.special.logsumexp(x, b=sgn, return_sign=True)
+    return sgn, out
+
+
 @jax.jit
 @jnp.vectorize
 def lGammainc(s, x):
@@ -61,12 +73,19 @@ def lGammainc(s, x):
 
     Returns (sign, lGammainc) st Gammainc = sign * exp(lGammainc)
     """
-    sgn, t = _lgammastar(s, x)
-    gammasn = jax.scipy.special.gammasgn(s)
-    return (
-        gammasn * sgn * jnp.sign(x),
-        jax.scipy.special.gammaln(s) + s * jnp.log(x) + t,
-    )
+
+    def small_x():
+        sgn, t = _lgammastar(s, x)
+        gammasn = jax.scipy.special.gammasgn(s)
+        return (
+            gammasn * sgn * jnp.sign(x),
+            jax.scipy.special.gammaln(s) + s * jnp.log(x) + t,
+        )
+
+    def large_x():
+        return _lGammainc_large_x(s, x)
+
+    return jax.lax.cond(x > 100, large_x, small_x)
 
 
 @jax.jit
@@ -110,20 +129,16 @@ def lGammaincc(s, x):
 
     def spos():
         # using Gamma(s,x) = Gamma(s) - gamma(s,x) = Gamma(s)(1 - x^s gammastar(s,x))
+        # lGamma(s,x) = lGamma(s) + log(1 - x^s gammastar(s,x))
+        #             = lGamma(s) + logsumexp(0, log(x^s gammastar))
+        #             = lGamma(s) + logsumexp(0, log(x^s gammastar))
         gammasn = jax.scipy.special.gammasgn(s)
-        sgn, t = _lgammastar(s, x)
-        y = x**s * sgn * jnp.exp(t)
-        # log(|y|) = s log(x) + t
-        logy = s * jnp.log(jnp.abs(x)) + t
-        sgny = jnp.sign(y)
-        sgnlogy = jnp.sign(logy)
-        # 1-y>0 when y<1 -> sign(y)<0 or log(|y|) < 0
-        # sign(1-y) = -sign(log(|y|))
-        sgn1my = jnp.where(sgny < 0, 1, -sgnlogy)
-        # when |y| ~ 0 (ie log|y| << 0) we want to use log1p(-y)
-        # otherwise just do regular log(|1-y|)
-        log1my = jnp.where(logy < -3, jnp.log1p(-y), jnp.log(jnp.abs(1 - y)))
-        return gammasn * sgn1my, jax.scipy.special.gammaln(s) + log1my
+        sgn1, t1 = _lgammastar(s, x)
+        sgn2, t2 = jnp.sign(x) ** s, s * jnp.log(jnp.abs(x))
+        sgn = jnp.array([1, -sgn1 * sgn2])
+        arg = jnp.array([0, t1 + t2])
+        y, sgn = jax.scipy.special.logsumexp(arg, b=sgn, return_sign=True)
+        return gammasn * sgn, jax.scipy.special.gammaln(s) + y
 
     def sneg():
         # using recursive definition from wikipedia

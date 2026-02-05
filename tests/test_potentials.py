@@ -168,9 +168,9 @@ def mplGammaincc(s, x):
 
 def test_lower_Gamma():
     """Test for lower incomplete gamma."""
-    l = np.arange(5)[:, None, None]
-    k = np.arange(9)[None, :, None]
-    x0 = np.logspace(-3, 2, 50)[None, None, :]
+    l = np.arange(7)[:, None, None]
+    k = np.arange(11)[None, :, None]
+    x0 = np.logspace(-4, 3, 50)[None, None, :]
     s = l / 2 + k / 2 + 5 / 2  # for I_4
 
     s1, f1 = lGammainc(s, x0**2)
@@ -181,9 +181,9 @@ def test_lower_Gamma():
 
 def test_upper_Gamma():
     """Test for upper incomplete gamma."""
-    l = np.arange(5)[:, None, None]
-    k = np.arange(9)[None, :, None]
-    x0 = np.logspace(-3, 2, 50)[None, None, :]
+    l = np.arange(7)[:, None, None]
+    k = np.arange(11)[None, :, None]
+    x0 = np.logspace(-4, 3, 50)[None, None, :]
     s = -l / 2 + k / 2 + 1  # for I_1
 
     s1, f1 = lGammaincc(s, x0**2)
