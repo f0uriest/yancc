@@ -11,31 +11,37 @@ import yancc.linalg
 
 def test_bordered_operator():
     """Test for BorderedOperator."""
+    n, k = 5, 2
+
     rng = np.random.default_rng(123)
-    A = jnp.array(rng.random((5, 5)))
-    B = jnp.array(rng.random((5, 2)))
-    C = jnp.array(rng.random((2, 5)))
-    D = jnp.array(rng.random((2, 2)))
+    A = rng.random((n, n))
+    e, v = np.linalg.eig(A)
+    e[:k] = 0
+    A = (v @ np.diag(e) @ np.linalg.inv(v)).real
+    assert np.linalg.matrix_rank(A) == n - k
+    B = scipy.linalg.null_space(A)
+    C = scipy.linalg.null_space(A.T).T
+    assert B.shape == (n, k)
+    assert C.shape == (k, n)
+    D = np.zeros((k, k))
+    Ab = np.block([[A, B], [C, D]])
 
     F = yancc.linalg.BorderedOperator(
-        lx.MatrixLinearOperator(A),
-        lx.MatrixLinearOperator(B),
-        lx.MatrixLinearOperator(C),
-        lx.MatrixLinearOperator(D),
+        lx.MatrixLinearOperator(jnp.array(A)),
+        lx.MatrixLinearOperator(jnp.array(B)),
+        lx.MatrixLinearOperator(jnp.array(C)),
     )
-    G = jnp.block([[A, B], [C, D]])
 
-    np.testing.assert_allclose(F.as_matrix(), G)
-    np.testing.assert_allclose(F.T.as_matrix(), G.T)
+    np.testing.assert_allclose(F.as_matrix(), Ab, atol=1e-14)
+    np.testing.assert_allclose(F.T.as_matrix(), Ab.T, atol=1e-14)
 
     Fi = yancc.linalg.InverseBorderedOperator(
-        lx.MatrixLinearOperator(jnp.linalg.inv(A)),
-        lx.MatrixLinearOperator(B),
-        lx.MatrixLinearOperator(C),
-        lx.MatrixLinearOperator(D),
+        lx.MatrixLinearOperator(jnp.linalg.pinv(A)),
+        lx.MatrixLinearOperator(jnp.array(B)),
+        lx.MatrixLinearOperator(jnp.array(C)),
     )
-    np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(G))
-    np.testing.assert_allclose(Fi.T.as_matrix(), np.linalg.inv(G.T))
+    np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(Ab), atol=1e-14)
+    np.testing.assert_allclose(Fi.T.as_matrix(), np.linalg.inv(Ab.T), atol=1e-14)
 
 
 def test_tridiagonal():
@@ -48,7 +54,7 @@ def test_tridiagonal():
     u = rng.random(N - 1)
     b = rng.random(N)
     A = yancc.linalg.make_dense_tridiag(l, d, u)
-    B = yancc.linalg.make_dense_tridiag(l, d, u, 1.2, 3.2)
+    B = yancc.linalg.make_dense_tridiag(l, d, u, jnp.array(1.2), jnp.array(3.2))
 
     np.testing.assert_allclose(
         np.linalg.solve(A, b), yancc.linalg.tridiag_solve_dense(A, b)

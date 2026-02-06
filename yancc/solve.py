@@ -4,7 +4,6 @@ from typing import Any, Optional, Union
 
 import jax
 import jax.numpy as jnp
-import lineax as lx
 import numpy as np
 from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
@@ -310,10 +309,9 @@ def solve_dke(
 
     B = DKESources(field, pitchgrid, speedgrid, species)
     C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
-    D = lx.MatrixLinearOperator(jnp.zeros((len(species) * 2, len(species) * 2)))
 
-    operator = BorderedOperator(A, B, C, D)
-    preconditioner = InverseBorderedOperator(M, B, C, D)
+    operator = BorderedOperator(A, B, C)
+    preconditioner = InverseBorderedOperator(M, B, C)
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
 

@@ -13,32 +13,28 @@ class BorderedOperator(lx.AbstractLinearOperator):
     """Operator for a bordered matrix.
 
     [A B]
-    [C D]
+    [C 0]
     """
 
     A: lx.AbstractLinearOperator
     B: lx.AbstractLinearOperator
     C: lx.AbstractLinearOperator
-    D: lx.AbstractLinearOperator
 
-    def __init__(self, A, B, C, D):
+    def __init__(self, A, B, C):
         assert A.out_size() == B.out_size()
         assert A.in_size() == C.in_size()
-        assert B.in_size() == D.in_size()
-        assert C.out_size() == D.out_size()
         self.A = A
         self.B = B
         self.C = C
-        self.D = D
 
     def mv(self, vector):
         """Matrix vector product."""
         # [A B] [X1] = [AX1 + BX2]
-        # [C D] [X2] = [CX1 + DX2]
+        # [C 0] [X2] = [CX1      ]
         X1 = vector[: self.A.in_size()]
         X2 = vector[self.A.in_size() :]
         Y1 = self.A.mv(X1) + self.B.mv(X2)
-        Y2 = self.C.mv(X1) + self.D.mv(X2)
+        Y2 = self.C.mv(X1)
         return jnp.concatenate([Y1, Y2])
 
     def as_matrix(self):
@@ -49,66 +45,54 @@ class BorderedOperator(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.A.in_size() + self.D.in_size(),),
+            (self.A.in_size() + self.B.in_size(),),
             dtype=jnp.array(1.0).dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.A.out_size() + self.D.out_size(),),
+            (self.A.out_size() + self.C.out_size(),),
             dtype=jnp.array(1.0).dtype,
         )
 
     def transpose(self):
         """Transpose of the operator."""
-        return BorderedOperator(self.A.T, self.C.T, self.B.T, self.D.T)
+        return BorderedOperator(self.A.T, self.C.T, self.B.T)
 
 
 class InverseBorderedOperator(lx.AbstractLinearOperator):
-    """Inverse of a bordered matrix, using already inverted A."""
+    """(Pseudo) Inverse of a bordered matrix, using already inverted A.
+
+    Assumes CA = AB = 0
+    """
 
     Ai: lx.AbstractLinearOperator
     B: lx.AbstractLinearOperator
     C: lx.AbstractLinearOperator
-    D: lx.AbstractLinearOperator
-    schuri: lx.AbstractLinearOperator
-    AiB: lx.AbstractLinearOperator
+    CBi: lx.AbstractLinearOperator
 
-    def __init__(self, Ai, B, C, D):
+    def __init__(self, Ai, B, C):
         assert Ai.in_size() == B.out_size()
         assert Ai.out_size() == C.in_size()
-        assert B.in_size() == D.in_size()
-        assert C.out_size() == D.out_size()
 
-        AiB = jnp.array([Ai.mv(x) for x in B.as_matrix().T]).T
-        CAiB = C.as_matrix() @ AiB
-        schur = D.as_matrix() - CAiB
-        self.schuri = lx.MatrixLinearOperator(jnp.linalg.pinv(schur))
-        self.AiB = lx.MatrixLinearOperator(AiB)
+        self.CBi = lx.MatrixLinearOperator(
+            jnp.linalg.pinv(C.as_matrix() @ B.as_matrix())
+        )
         self.Ai = Ai
         self.B = B
         self.C = C
-        self.D = D
 
     def mv(self, vector):
         """Matrix vector product."""
-        # [AA BB] [X1] = [AAX1 + BBX2]
-        # [CC DD] [X2] = [CCX1 + DDX2]
-        # with
-        # AA = Ai + Ai @ B @ schuri @ C @ Ai    # noqa: E800
-        # BB = -Ai @ B @ schuri                 # noqa: E800
-        # CC = -schuri @ C @ Ai                 # noqa: E800
-        # DD = schuri                           # noqa: E800
         X1 = vector[: self.Ai.in_size()]
         X2 = vector[self.Ai.in_size() :]
-        Aix1 = self.Ai.mv(X1)
-        Amv = Aix1 + self.AiB.mv(self.schuri.mv(self.C.mv(Aix1)))
-        Bmv = -self.AiB.mv(self.schuri.mv(X2))
-        Cmv = -self.schuri.mv(self.C.mv(Aix1))
-        Dmv = self.schuri.mv(X2)
-        Y1 = Amv + Bmv
-        Y2 = Cmv + Dmv
+        z11 = X1 - self.B.mv(self.CBi.mv(self.C.mv(X1)))
+        Az11 = self.Ai.mv(z11)
+        z11 = Az11 - self.B.mv(self.CBi.mv(self.C.mv(Az11)))
+        z12 = self.B.mv(self.CBi.mv(X2))
+        Y1 = z11 + z12
+        Y2 = self.CBi.mv(self.C.mv(X1))
         return jnp.concatenate([Y1, Y2])
 
     def as_matrix(self):
@@ -119,14 +103,14 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.Ai.in_size() + self.D.in_size(),),
+            (self.Ai.in_size() + self.B.in_size(),),
             dtype=jnp.array(1.0).dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.Ai.out_size() + self.D.out_size(),),
+            (self.Ai.out_size() + self.C.out_size(),),
             dtype=jnp.array(1.0).dtype,
         )
 
@@ -136,7 +120,6 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
             self.Ai.T,
             self.C.T,
             self.B.T,
-            self.D.T,
         )
 
 
