@@ -8,7 +8,7 @@ import sympy
 from yancc.collisions import RosenbluthPotentials
 from yancc.field import Field
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen
-from yancc.velocity_grids import LegendrePitchAngleGrid, MaxwellSpeedGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 @pytest.fixture(scope="session")
@@ -22,7 +22,7 @@ def field():
 @pytest.fixture(scope="session")
 def pitchgrid():
     """Pitch angle grid for testing"""
-    return LegendrePitchAngleGrid(9)
+    return UniformPitchAngleGrid(9)
 
 
 @pytest.fixture(scope="session")
@@ -59,13 +59,68 @@ def species2():
 
 
 @pytest.fixture(scope="session")
-def potentials1(speedgrid, species1):
-    return RosenbluthPotentials(speedgrid, species1)
+def xgrid():
+    """Speed grid for testing."""
+    return MaxwellSpeedGrid(10)
+
+
+@pytest.fixture(scope="session")
+def xigrid():
+    """Pitch angle grid for testing"""
+    return UniformPitchAngleGrid(41)
+
+
+@pytest.fixture(scope="session")
+def dummy_field():
+    """Pitch angle grid for testing"""
+    nt = 1
+    nz = 1
+    field = Field(
+        rho=0.5,
+        B_sup_t=np.ones((nt, nz)),
+        B_sup_z=np.ones((nt, nz)),
+        B_sub_t=np.ones((nt, nz)),
+        B_sub_z=np.ones((nt, nz)),
+        Bmag=np.ones((nt, nz)),
+        sqrtg=np.ones((nt, nz)),
+        Psi=1.0,
+        iota=1.0,
+        R_major=10.0,
+        a_minor=1.0,
+    )
+    return field
+
+
+@pytest.fixture(scope="session")
+def potentials1(xgrid, species1):
+    return RosenbluthPotentials(xgrid, species1)
 
 
 @pytest.fixture(scope="session")
 def potentials2(speedgrid, species2):
     return RosenbluthPotentials(speedgrid, species2)
+
+
+@pytest.fixture(scope="session")
+def potential_quad(xgrid, species2):
+    """Single species potentials with quadrature."""
+    return RosenbluthPotentials(
+        xgrid,
+        species2,
+        nL=6,
+        quad=True,
+    )
+
+
+@pytest.fixture(scope="session")
+def potential_gamma(xgrid, species2):
+    """Single species potential without quadrature."""
+    return RosenbluthPotentials(
+        xgrid,
+        species2,
+        nL=6,
+        quad=False,
+    )
 
 
 def _compute_H_sympy(f, v, l, vt):
@@ -184,7 +239,7 @@ def _gamma_ab_sympy(ma, mb, Ta, Tb, na, nb, qa, qb, epsilon_0):
 
 
 def _eval_f(f, v, vi, subs):
-    f = np.array([f.evalf(subs={v: float(v_), **subs}, n=30, maxn=200) for v_ in vi])
+    f = np.array([f.evalf(subs={v: float(v_), **subs}, n=30, maxn=100) for v_ in vi])
     f = f.astype(np.complex128)
     if (abs(f.imag) > 1e-16).any():
         print(f.imag)

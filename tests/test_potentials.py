@@ -7,9 +7,8 @@ import orthax
 import pytest
 import sympy
 
-from yancc.collisions import RosenbluthPotentials
 from yancc.utils import lGammainc, lGammaincc
-from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import UniformPitchAngleGrid
 
 from .conftest import _compute_G_sympy, _compute_H_sympy, _eval_f
 
@@ -47,40 +46,6 @@ def rosenbluth_H_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
     Gabxlk = potentials.Hxlk[a, b, :, : potentials.legendregrid.nxi]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
-
-
-@pytest.fixture
-def xgrid():
-    """Speed grid for testing."""
-    return MaxwellSpeedGrid(10)
-
-
-@pytest.fixture
-def xigrid():
-    """Pitch angle grid for testing"""
-    return UniformPitchAngleGrid(17)
-
-
-@pytest.fixture
-def potential_quad(xgrid, species2):
-    """Single species potentials with quadrature."""
-    return RosenbluthPotentials(
-        xgrid,
-        species2,
-        nL=6,
-        quad=True,
-    )
-
-
-@pytest.fixture
-def potential_gamma(xgrid, species2):
-    """Single species potential without quadrature."""
-    return RosenbluthPotentials(
-        xgrid,
-        species2,
-        nL=6,
-        quad=False,
-    )
 
 
 @pytest.mark.parametrize("l", [2, 4])
@@ -235,15 +200,16 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     va = sympy.symbols("v_a", real=True)
     x = v / va
     vta = potentials.species[0].v_thermal
-    fa = (1 - x + x**2) * sympy.exp(-(x**2))
+    subs = {va: float(vta)}
+    fa = (1 - x + 3 * x**2) * sympy.exp(-(x**2))
 
     Ha = _compute_H_sympy(fa, v, l, va)
     Ga = _compute_G_sympy(fa, v, l, va)
 
-    ddGasympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * vta, {va: vta})
-    Hasympy = _eval_f(Ha, v, speedgrid.x * vta, {va: vta})
-    dHasympy = _eval_f(Ha.diff(v), v, speedgrid.x * vta, {va: vta})
-    ffa = _eval_f(fa, v, speedgrid.x * vta, {va: vta})
+    ddGasympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * vta, subs)
+    Hasympy = _eval_f(Ha, v, speedgrid.x * vta, subs)
+    dHasympy = _eval_f(Ha.diff(v), v, speedgrid.x * vta, subs)
+    ffa = _eval_f(fa, v, speedgrid.x * vta, subs)
 
     f = np.ones((1, speedgrid.nx, pitchgrid.nxi, 1, 1))
     f[0] *= (
@@ -273,9 +239,145 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     np.testing.assert_allclose(ddGajax[:, :l, :, :], 0, atol=1e-12 * vta**2)
     np.testing.assert_allclose(ddGajax[:, l + 1 :, :, :], 0, atol=1e-12 * vta**2)
 
-    np.testing.assert_allclose(Hajax[:, l, 0, 0], Hasympy, rtol=2e-6, atol=1e-8)
-    np.testing.assert_allclose(dHajax[:, l, 0, 0], dHasympy, rtol=2e-6, atol=1e-8)
-    np.testing.assert_allclose(ddGajax[:, l, 0, 0], ddGasympy, rtol=2e-6, atol=1e-8)
+    np.testing.assert_allclose(Hajax[:, l, 0, 0], Hasympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHajax[:, l, 0, 0], dHasympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGajax[:, l, 0, 0], ddGasympy, rtol=1e-10, atol=0)
+
+
+@pytest.mark.parametrize("l", [0, 1, 2, 3])
+def test_2_species_potentials_vs_sympy(l, potential_gamma):
+    potentials = potential_gamma
+    speedgrid = potentials.speedgrid
+    species = potentials.species
+    pitchgrid = UniformPitchAngleGrid(41)
+
+    v = sympy.symbols("v", real=True, positive=True)
+    vta, vtb = sympy.symbols("v_a v_b", real=True, positive=True)
+    va, vb = species[0].v_thermal, species[1].v_thermal
+    subs = {
+        vta: float(va),
+        vtb: float(vb),
+    }
+
+    xa = v / vta
+    xb = v / vtb
+
+    fa = (1 - xa + 3 * xa**2) * sympy.exp(-(xa**2))
+    fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
+    Ha = _compute_H_sympy(fa, v, l, vta)
+    Ga = _compute_G_sympy(fa, v, l, vta)
+    Hb = _compute_H_sympy(fb, v, l, vtb)
+    Gb = _compute_G_sympy(fb, v, l, vtb)
+
+    Haa_sympy = _eval_f(Ha, v, speedgrid.x * va, subs)
+    Hab_sympy = _eval_f(Hb, v, speedgrid.x * va, subs)
+    Hba_sympy = _eval_f(Ha, v, speedgrid.x * vb, subs)
+    Hbb_sympy = _eval_f(Hb, v, speedgrid.x * vb, subs)
+
+    dHaa_sympy = _eval_f(Ha.diff(v), v, speedgrid.x * va, subs)
+    dHab_sympy = _eval_f(Hb.diff(v), v, speedgrid.x * va, subs)
+    dHba_sympy = _eval_f(Ha.diff(v), v, speedgrid.x * vb, subs)
+    dHbb_sympy = _eval_f(Hb.diff(v), v, speedgrid.x * vb, subs)
+
+    ddGaa_sympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * va, subs)
+    ddGab_sympy = _eval_f(Gb.diff(v).diff(v), v, speedgrid.x * va, subs)
+    ddGba_sympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * vb, subs)
+    ddGbb_sympy = _eval_f(Gb.diff(v).diff(v), v, speedgrid.x * vb, subs)
+
+    ffa = _eval_f(fa, v, speedgrid.x * va, subs)
+    ffb = _eval_f(fb, v, speedgrid.x * vb, subs)
+
+    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, 1, 1))
+    f[0] *= (
+        ffa[:, None, None, None]
+        * orthax.orthval(
+            pitchgrid.xi,
+            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            potentials.legendregrid.xirec,
+        )[None, :, None, None]
+    )
+    f[1] *= (
+        ffb[:, None, None, None]
+        * orthax.orthval(
+            pitchgrid.xi,
+            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            potentials.legendregrid.xirec,
+        )[None, :, None, None]
+    )
+
+    Txi = orthax.orthvander(
+        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+    )
+    Txi_inv = jnp.linalg.pinv(Txi)
+
+    Haa_jax = rosenbluth_H_jax(f[0], 0, 0, speedgrid, pitchgrid, potentials, Txi_inv)
+    dHaa_jax = rosenbluth_dH_jax(f[0], 0, 0, speedgrid, pitchgrid, potentials, Txi_inv)
+    ddGaa_jax = rosenbluth_ddG_jax(
+        f[0], 0, 0, speedgrid, pitchgrid, potentials, Txi_inv
+    )
+    Hab_jax = rosenbluth_H_jax(f[1], 0, 1, speedgrid, pitchgrid, potentials, Txi_inv)
+    dHab_jax = rosenbluth_dH_jax(f[1], 0, 1, speedgrid, pitchgrid, potentials, Txi_inv)
+    ddGab_jax = rosenbluth_ddG_jax(
+        f[1], 0, 1, speedgrid, pitchgrid, potentials, Txi_inv
+    )
+    Hba_jax = rosenbluth_H_jax(f[0], 1, 0, speedgrid, pitchgrid, potentials, Txi_inv)
+    dHba_jax = rosenbluth_dH_jax(f[0], 1, 0, speedgrid, pitchgrid, potentials, Txi_inv)
+    ddGba_jax = rosenbluth_ddG_jax(
+        f[0], 1, 0, speedgrid, pitchgrid, potentials, Txi_inv
+    )
+    Hbb_jax = rosenbluth_H_jax(f[1], 1, 1, speedgrid, pitchgrid, potentials, Txi_inv)
+    dHbb_jax = rosenbluth_dH_jax(f[1], 1, 1, speedgrid, pitchgrid, potentials, Txi_inv)
+    ddGbb_jax = rosenbluth_ddG_jax(
+        f[1], 1, 1, speedgrid, pitchgrid, potentials, Txi_inv
+    )
+
+    # potentials are diagonal in legendre index, so outputs for idx != l should be 0
+    # scale for H ~ v^2, dH/dv ~ v, G ~ v^4, dG/dv^2 ~ v^2
+    # a,a
+    np.testing.assert_allclose(Haa_jax[:, :l, :, :], 0, atol=1e-12 * va**2)
+    np.testing.assert_allclose(Haa_jax[:, l + 1 :, :, :], 0, atol=1e-12 * va**2)
+    np.testing.assert_allclose(dHaa_jax[:, :l, :, :], 0, atol=1e-12 * va)
+    np.testing.assert_allclose(dHaa_jax[:, l + 1 :, :, :], 0, atol=1e-12 * va)
+    np.testing.assert_allclose(ddGaa_jax[:, :l, :, :], 0, atol=1e-12 * va**2)
+    np.testing.assert_allclose(ddGaa_jax[:, l + 1 :, :, :], 0, atol=1e-12 * va**2)
+    # a,b
+    np.testing.assert_allclose(Hab_jax[:, :l, :, :], 0, atol=1e-12 * vb**2)
+    np.testing.assert_allclose(Hab_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb**2)
+    np.testing.assert_allclose(dHab_jax[:, :l, :, :], 0, atol=1e-12 * vb)
+    np.testing.assert_allclose(dHab_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb)
+    np.testing.assert_allclose(ddGab_jax[:, :l, :, :], 0, atol=1e-12 * vb**2)
+    np.testing.assert_allclose(ddGab_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb**2)
+    # b,a
+    np.testing.assert_allclose(Hba_jax[:, :l, :, :], 0, atol=1e-12 * va**2)
+    np.testing.assert_allclose(Hba_jax[:, l + 1 :, :, :], 0, atol=1e-12 * va**2)
+    np.testing.assert_allclose(dHba_jax[:, :l, :, :], 0, atol=1e-12 * va)
+    np.testing.assert_allclose(dHba_jax[:, l + 1 :, :, :], 0, atol=1e-12 * va)
+    np.testing.assert_allclose(ddGba_jax[:, :l, :, :], 0, atol=1e-12 * va**2)
+    np.testing.assert_allclose(ddGba_jax[:, l + 1 :, :, :], 0, atol=1e-12 * va**2)
+    # b,b
+    np.testing.assert_allclose(Hbb_jax[:, :l, :, :], 0, atol=1e-12 * vb**2)
+    np.testing.assert_allclose(Hbb_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb**2)
+    np.testing.assert_allclose(dHbb_jax[:, :l, :, :], 0, atol=1e-12 * vb)
+    np.testing.assert_allclose(dHbb_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb)
+    np.testing.assert_allclose(ddGbb_jax[:, :l, :, :], 0, atol=1e-12 * vb**2)
+    np.testing.assert_allclose(ddGbb_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb**2)
+
+    # a,a
+    np.testing.assert_allclose(Haa_jax[:, l, 0, 0], Haa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHaa_jax[:, l, 0, 0], dHaa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGaa_jax[:, l, 0, 0], ddGaa_sympy, rtol=1e-10, atol=0)
+    # a,b
+    np.testing.assert_allclose(Hab_jax[:, l, 0, 0], Hab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHab_jax[:, l, 0, 0], dHab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGab_jax[:, l, 0, 0], ddGab_sympy, rtol=1e-10, atol=0)
+    # b,a
+    np.testing.assert_allclose(Hba_jax[:, l, 0, 0], Hba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHba_jax[:, l, 0, 0], dHba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGba_jax[:, l, 0, 0], ddGba_sympy, rtol=1e-10, atol=0)
+    # b,b
+    np.testing.assert_allclose(Hbb_jax[:, l, 0, 0], Hbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(dHbb_jax[:, l, 0, 0], dHbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(ddGbb_jax[:, l, 0, 0], ddGbb_sympy, rtol=1e-8, atol=0)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
