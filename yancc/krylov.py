@@ -544,42 +544,23 @@ def gcrotmk(
     return x, j_outer, nmv, res, C, U
 
 
-def _gcrotmk_solve(
-    matvec,
-    b,
-    x,
-    lpsolve,
-    rpsolve,
-    rtol,
-    atol,
-    maxiter,
-    m,
-    k,
-    C,
-    U,
-    print_every,
-):
-    print_every = jnp.asarray(print_every)
-    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
-
-    b_norm = _norm(b)
-    tol = jnp.maximum(atol, rtol * b_norm)
-    ptol_max_factor = 1.0
-    r = _sub(b, matvec(x))
-    dtype = jnp.result_type(*tree_leaves(r))
-    eps = jnp.finfo(dtype).eps
-    nmv = 1
-    beta = _norm(r)
-    _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
-
+def _gcrot_init_UC(
+    U: Optional[PyTree[ArrayLike]],
+    C: Optional[PyTree[ArrayLike]],
+    x: PyTree[ArrayLike],
+    matvec: Callable,
+    k: int,
+    nmv: Int[Array, ""],
+) -> tuple[PyTree[Array], PyTree[Array], Int[Array, ""], Int[Array, ""], int]:
     if U is None:
         assert C is None
-        lc = 0
+        lc = jnp.array(0)
         U = tree_map(lambda x: jnp.zeros((x.size, k)), x)
         C = tree_map(lambda x: jnp.zeros((x.size, k)), x)
     else:  # U provided
         U = tree_map(lambda x: jnp.atleast_2d(x.T).T, U)
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
+        k = max(k, lc)
         if C is None:
             C = jax.vmap(matvec, in_axes=1, out_axes=1)(U)
             nmv += lc
@@ -606,18 +587,54 @@ def _gcrotmk_solve(
         C = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), C)
         # if initial data wasn't full rank, only some are valid
         lc = jnp.sum(mask)
+    return U, C, nmv, lc, k
 
-    def initial_projection(x, r, beta):
-        # Solve first the projection operation with respect to the C, U matrices
-        #   y = argmin_y || b - A (x + U y) ||^2 = C^H (b - A x)
-        #   x' = x + U y
-        y = jax.vmap(lambda x: _tree_vdot(x, r), in_axes=1)(C)
-        x = _add(x, tree_map(lambda x: _dot(x, y), U))
-        r = _sub(r, tree_map(lambda x: _dot(x, y), C))
-        beta = _norm(r)
-        return x, r, beta
 
-    x, r, beta = lax.cond(lc, initial_projection, lambda *args: args, x, r, beta)
+def _gcrot_initial_projection(x, r, beta, U, C):
+    # Solve first the projection operation with respect to the C, U matrices
+    #   y = argmin_y || b - A (x + U y) ||^2 = C^H (b - A x)
+    #   x' = x + U y
+    y = jax.vmap(lambda x: _tree_vdot(x, r), in_axes=1)(C)
+    x = _add(x, tree_map(lambda x: _dot(x, y), U))
+    r = _sub(r, tree_map(lambda x: _dot(x, y), C))
+    beta = _norm(r)
+    return x, r, beta
+
+
+def _gcrotmk_solve(
+    matvec,
+    b,
+    x,
+    lpsolve,
+    rpsolve,
+    rtol,
+    atol,
+    maxiter,
+    m,
+    k,
+    C,
+    U,
+    print_every,
+):
+    print_every = jnp.asarray(print_every)
+    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+
+    b_norm = _norm(b)
+    tol = jnp.maximum(atol, rtol * b_norm)
+    ptol_max_factor = 1.0
+    r = _sub(b, matvec(x))
+    dtype = jnp.result_type(*tree_leaves(r))
+    eps = jnp.finfo(dtype).eps
+    nmv = jnp.array(1)
+    beta = _norm(r)
+
+    U, C, nmv, lc, k = _gcrot_init_UC(U, C, x, matvec, k, nmv)
+
+    x, r, beta = lax.cond(
+        lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
+    )
+
+    _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
 
     def gcrotmk_cond(carry):
         j_outer, _, _, _, beta, _, _, _, _ = carry
