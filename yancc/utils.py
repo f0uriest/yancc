@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 
 
-def _lgammastar(s, z, kmax=60):
+def _lgammastar(s, z, kmax=1000):
     k = jnp.arange(0, kmax)
     gammarg = s + k + 1
     gammasn = jax.scipy.special.gammasgn(gammarg)
@@ -32,11 +32,11 @@ def _exp1(x):
             e1 += r
             return e1, r
 
-        e1, r = jax.lax.fori_loop(1, 30, body, (e1, r), unroll=True)
+        e1, r = jax.lax.fori_loop(1, 100, body, (e1, r), unroll=True)
         return -jnp.euler_gamma - jnp.log(x) + x * e1
 
     def xgt2():
-        m = 40
+        m = 100
         t0 = 0.0
 
         def body(i, t0):
@@ -52,27 +52,69 @@ def _exp1(x):
     return jnp.where(x == 0, jnp.inf, e1)
 
 
+@jnp.vectorize
+def _lGammainc_large_x(s, x):
+    # gamma(s,x) = Gamma(s) - Gamma(s,x)
+    sgn1 = jax.scipy.special.gammasgn(s)
+    G = jax.scipy.special.gammaln(s)
+    sgn2, F = lGammaincc(s, x)
+    x = jnp.array([G, F])
+    sgn = jnp.array([sgn1, -sgn2])
+    out, sgn = jax.scipy.special.logsumexp(x, b=sgn, return_sign=True)
+    return sgn, out
+
+
 @jax.jit
 @jnp.vectorize
 def lGammainc(s, x):
     """Log of lower incomplete gamma function.
 
+    Valid for real x>0 and real s (any sign)
+
     Returns (sign, lGammainc) st Gammainc = sign * exp(lGammainc)
     """
-    sgn, t = _lgammastar(s, x)
-    gammasn = jax.scipy.special.gammasgn(s)
-    return (
-        gammasn * sgn * jnp.sign(x),
-        jax.scipy.special.gammaln(s) + s * jnp.log(x) + t,
-    )
+
+    def small_x():
+        sgn, t = _lgammastar(s, x)
+        gammasn = jax.scipy.special.gammasgn(s)
+        return (
+            gammasn * sgn * jnp.sign(x),
+            jax.scipy.special.gammaln(s) + s * jnp.log(x) + t,
+        )
+
+    def large_x():
+        return _lGammainc_large_x(s, x)
+
+    return jax.lax.cond(x > 100, large_x, small_x)
 
 
 @jax.jit
 @jnp.vectorize
 def Gammainc(s, x):
-    """Lower incomplete gamma function."""
+    """Lower incomplete gamma function.
+
+    Valid for real x>0 and real s (any sign)
+    """
     sgn, gammarg = lGammainc(s, x)
     return sgn * jnp.exp(gammarg)
+
+
+def _lGammaincc_large_x_correction(s, x, kmax=20):
+    k = jnp.arange(0, kmax)
+    arg = s - k
+    arg = arg.at[0].set(1)
+    arg = jnp.cumprod(arg)
+    sgn = jnp.sign(arg) * jnp.sign(x ** (k % 2))
+    f = -k * jnp.log(jnp.abs(x)) + jnp.log(jnp.abs(arg))
+    f, sign = jax.scipy.special.logsumexp(f, b=sgn, return_sign=True)
+    return sign, f
+
+
+def _lGammaincc_large_x(s, x, kmax=20):
+    """Asymptotic formula for x -> inf (practical for x >~ 10)"""
+    sgn, t = _lGammaincc_large_x_correction(s, x, kmax)
+    sgn = jnp.sign(x ** ((s - 1) % 2)) * sgn
+    return sgn, ((s - 1) * jnp.log(x) - x) + t
 
 
 @jax.jit
@@ -80,24 +122,23 @@ def Gammainc(s, x):
 def lGammaincc(s, x):
     """Log of upper incomplete gamma function.
 
+    Valid for real x>0 and real s (any sign)
+
     Returns (sign, lGammaincc) st Gammaincc = sign * exp(lGammaincc)
     """
 
     def spos():
+        # using Gamma(s,x) = Gamma(s) - gamma(s,x) = Gamma(s)(1 - x^s gammastar(s,x))
+        # lGamma(s,x) = lGamma(s) + log(1 - x^s gammastar(s,x))
+        #             = lGamma(s) + logsumexp(0, log(x^s gammastar))
+        #             = lGamma(s) + logsumexp(0, log(x^s gammastar))
         gammasn = jax.scipy.special.gammasgn(s)
-        sgn, t = _lgammastar(s, x)
-        y = x**s * sgn * jnp.exp(t)
-        # log(|y|) = s log(x) + t
-        logy = s * jnp.log(jnp.abs(x)) + t
-        sgny = jnp.sign(y)
-        sgnlogy = jnp.sign(logy)
-        # 1-y>0 when y<1 -> sign(y)<0 or log(|y|) < 0
-        # sign(1-y) = -sign(log(|y|))
-        sgn1my = jnp.where(sgny < 0, 1, -sgnlogy)
-        # when |y| ~ 0 (ie log|y| << 0) we want to use log1p(-y)
-        # otherwise just do regular log(|1-y|)
-        log1my = jnp.where(logy < -3, jnp.log1p(-y), jnp.log(jnp.abs(1 - y)))
-        return gammasn * sgn1my, jax.scipy.special.gammaln(s) + log1my
+        sgn1, t1 = _lgammastar(s, x)
+        sgn2, t2 = jnp.sign(x) ** s, s * jnp.log(jnp.abs(x))
+        sgn = jnp.array([1, -sgn1 * sgn2])
+        arg = jnp.array([0, t1 + t2])
+        y, sgn = jax.scipy.special.logsumexp(arg, b=sgn, return_sign=True)
+        return gammasn * sgn, jax.scipy.special.gammaln(s) + y
 
     def sneg():
         # using recursive definition from wikipedia
@@ -119,13 +160,22 @@ def lGammaincc(s, x):
         sgn = jnp.sign(gincc)
         return sgn, jnp.log(jnp.abs(gincc))
 
-    return jax.lax.cond((s <= 0) & (s % 1 == 0), sneg, spos)
+    def large_x():
+        return _lGammaincc_large_x(s, x)
+
+    def small_x():
+        return jax.lax.cond((s <= 0) & (s % 1 == 0), sneg, spos)
+
+    return jax.lax.cond(x > 20, large_x, small_x)
 
 
 @jax.jit
 @jnp.vectorize
 def Gammaincc(s, x):
-    """Upper incomplete gamma function."""
+    """Upper incomplete gamma function.
+
+    Valid for real x>0 and real s (any sign)
+    """
     sgn, gammarg = lGammaincc(s, x)
     return sgn * jnp.exp(gammarg)
 

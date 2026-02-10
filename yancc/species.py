@@ -265,7 +265,7 @@ def impact_parameter_perp(
         / (maxwellian_a.species.mass + maxwellian_b.species.mass)
     )
     v_tha, v_thb = maxwellian_a.v_thermal, maxwellian_b.v_thermal
-    return (
+    return jnp.abs(
         maxwellian_a.species.charge
         * maxwellian_b.species.charge
         / (4 * jnp.pi * epsilon_0 * m_reduced * (v_tha**2 + v_thb**2))
