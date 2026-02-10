@@ -3,7 +3,6 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 import orthax
 
 
@@ -173,8 +172,6 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     """
 
     nx: int = eqx.field(static=True)
-    k: int
-    xmax: float
     xrec: orthax.recurrence.AbstractRecurrenceRelation
     x: jax.Array
     wx: jax.Array
@@ -186,19 +183,14 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     D2x_pseudospectral: jax.Array
     gauge_idx: jax.Array
 
-    def __init__(self, nx, k=0, xmax=jnp.inf, **kwargs):
-        # need to check derivative matrix and rosenbluth potentials for these
-        assert k == 0
-        assert xmax == jnp.inf
+    def __init__(self, nx, **kwargs):
         self.nx = nx
-        self.k = k
-        self.xmax = xmax
-        if k == 0 and xmax == jnp.inf and nx < 20:
+        if nx < 20:
             self.xrec = default_xrec
         else:
             self.xrec = orthax.recurrence.generate_recurrence(
-                weight=lambda x: x**self.k * jnp.exp(-(x**2)),
-                domain=(0, self.xmax),
+                weight=_default_weight,
+                domain=(0, jnp.inf),
                 n=nx + 1,
             )
         # f at collocation points includes weight function
@@ -253,10 +245,9 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
         gauge_idx = kwargs.get("gauge_idx", None)
         if gauge_idx is None:
-            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[0])
-            if self.nx > 1:
-                gauge_idx2 = jnp.atleast_1d(np.where(self.x > 1)[0].min())
-                gauge_idx = jnp.concatenate([gauge_idx, gauge_idx2])
+            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
+            if self.nx == 1:
+                gauge_idx = gauge_idx[0]
         self.gauge_idx = jnp.sort(gauge_idx)
 
     def _dfdx(self, f):

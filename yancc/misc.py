@@ -192,8 +192,9 @@ def dke_rhs(
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: Union[float, Float[Any, ""]],
+    EparB: Union[float, Float[Any, ""]] = 0.0,
     include_constraints: bool = True,
-    normalize: bool = False,
+    single_rhs: bool = True,
 ) -> jax.Array:
     """RHS of DKE as solved in SFINCS.
 
@@ -209,10 +210,13 @@ def dke_rhs(
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    EparB : float
+        <E||B>, flux surface average of parallel electric field times B.
     include_constraints : bool
         Whether to append zeros to the rhs for constraint equations.
-    normalize : bool
-        Whether to divide equations by thermal speed to non-dimensionalize
+    single_rhs : bool
+        If True, return a single combined rhs vector. If False, return ns*3 rhs, each
+        unit drive, for computing the transport matrix.
 
     Returns
     -------
@@ -221,29 +225,52 @@ def dke_rhs(
     """
     if not isinstance(species, (list, tuple)):
         species = [species]
-    qs = (
-        jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
-        / elementary_charge
-    )
-    ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
-    dns = jnp.array([sp.dndrho for sp in species])[:, None, None, None, None]
-    Ts = jnp.array([sp.temperature for sp in species])[:, None, None, None, None]
-    dTs = jnp.array([sp.dTdrho for sp in species])[:, None, None, None, None]
-    Fs = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])[
-        :, :, None, None, None
-    ]
-    Ln = dns / ns
-    LT = dTs / Ts
-    x = speedgrid.x[None, :, None, None, None]
-    vmadotgradrho = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
-    gradients = Ln + qs * (-Erho) / Ts + (x**2 - 3 / 2) * LT
-    rhs = -vmadotgradrho * gradients * Fs
-    if normalize:
-        vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
-        rhs /= vth
-    rhs = rhs.flatten()
+
+    rhs = _dke_rhs_3(field, pitchgrid, speedgrid, species)
+    if single_rhs:
+        qs = jnp.array([sp.species.charge for sp in species]) / elementary_charge
+        ns = jnp.array([sp.density for sp in species])
+        dns = jnp.array([sp.dndrho for sp in species])
+        Ts = jnp.array([sp.temperature for sp in species])
+        dTs = jnp.array([sp.dTdrho for sp in species])
+
+        Ln = dns / ns
+        LT = dTs / Ts
+        A1 = Ln + qs * (-Erho) / Ts - 3 / 2 * LT
+        A2 = LT
+        A3 = qs / Ts * EparB / field.B2mag_fsa
+        forces = jnp.array([A1, A2, A3])[:, :, None, None, None, None, None]
+        rhs = (forces * rhs).sum(axis=(0, 1)).reshape((1, -1))
+    else:
+        rhs = jnp.swapaxes(rhs, 0, 1)
+        rhs = rhs.reshape((3 * len(species), -1))
+
     if include_constraints:
-        rhs = jnp.concatenate([rhs, jnp.zeros(2 * len(species))])
+        rhs = jnp.pad(rhs, [(0, 0), (0, 2 * len(species))])
+    return rhs.squeeze()
+
+
+def _dke_rhs_3(
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    species: list[LocalMaxwellian],
+) -> Float[jax.Array, "3 ns ns nx na nt nz"]:
+    vmadotgradrho = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
+    Fs = jax.vmap(jnp.diag, in_axes=1, out_axes=2)(
+        jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
+    )[:, :, :, None, None, None]
+    x = speedgrid.x[None, None, :, None, None, None]
+    vth = jnp.diag(jnp.array([sp.v_thermal for sp in species]))[
+        :, :, None, None, None, None
+    ]
+    vpar = pitchgrid.xi[None, None, None, :, None, None] * vth * x
+    Bvpar = field.Bmag[None, None, None, None, :, :] * vpar
+
+    v1 = -vmadotgradrho * Fs
+    v2 = -(x**2) * vmadotgradrho * Fs
+    v3 = Bvpar * Fs
+    rhs = jnp.array([v1, v2, v3])
     return rhs
 
 
