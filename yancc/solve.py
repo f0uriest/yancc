@@ -85,6 +85,8 @@ def solve_mdke(
     print_every = options.pop("print_every", 10)
     U1 = options.pop("U1", None)
     U2 = options.pop("U2", None)
+    f1 = options.pop("f1", None)
+    f2 = options.pop("f2", None)
 
     assert len(options) == 0, "solve_mdke got unknown option " + str(options)
 
@@ -111,11 +113,12 @@ def solve_mdke(
     )
     rhs = mdke_rhs(field, pitchgrid)
 
-    x0 = jnp.zeros_like(rhs[:, 0])
+    if f1 is None:
+        f1 = jnp.zeros_like(rhs[:, 0])
     f1, j1, nmv1, res1, C1, U1 = gcrotmk(
         A,
         rhs[:, 0],
-        x0=x0,
+        x0=f1,
         MR=M,
         m=m,
         k=k,
@@ -125,10 +128,12 @@ def solve_mdke(
         print_every=print_every if verbose > 1 else 0,
         U=U1,
     )
+    if f2 is None:
+        f2 = jnp.zeros_like(rhs[:, 0])
     f2, j2, nmv2, res2, C2, U2 = gcrotmk(
         A,
         rhs[:, 2],
-        x0=x0,
+        x0=f2,
         MR=M,
         m=m,
         k=k,
@@ -260,6 +265,7 @@ def solve_dke(
     operator_weights = options.pop("operator_weights", None)
     multigrid_options.setdefault("operator_weights", operator_weights)
     U = options.pop("U", None)
+    f1 = options.pop("f1", None)
 
     if potentials is None:
         nL = options.pop("nL", 4)
@@ -328,12 +334,15 @@ def solve_dke(
         assert U.shape[0] == size
         U = U.reshape((size, -1))
         U = jnp.pad(U, [(0, 2 * len(species)), (0, 0)])
+    if f1 is not None:
+        f1 = f1.flatten()
+        assert f1.size == size
+        f1 = jnp.pad(f1, [(0, 2 * len(species))])
 
-    x0 = jnp.zeros_like(rhs)
     f1, j1, nmv1, res1, C1, U1 = gcrotmk(
         operator,
         rhs,
-        x0=x0,
+        x0=f1,
         MR=preconditioner,
         m=m,
         k=k,
