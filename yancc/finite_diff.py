@@ -5,6 +5,10 @@ import operator
 
 import jax
 import jax.numpy as jnp
+from jax import config
+
+# need this here as well so that consts use 64 bit
+config.update("jax_enable_x64", True)
 
 y1b = 0.15
 y3c = 0.2
