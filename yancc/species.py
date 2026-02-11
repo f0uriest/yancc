@@ -340,7 +340,9 @@ def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike 
     return Er / v / field.Bmag_fsa
 
 
-def nustar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
+def nustar(
+    species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0, *others: LocalMaxwellian
+):
     """Normalized collisionality ν* = ν R₀ /(v ι).
 
     Parameters
@@ -354,6 +356,6 @@ def nustar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     """
     x = jnp.asarray(x)
     v = x * species.v_thermal
-    nu = collisionality(species, v)
+    nu = collisionality(species, v, *others)
     nustar = field.R_major * nu / v / jnp.abs(field.iota)
     return nustar

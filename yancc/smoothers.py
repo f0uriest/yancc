@@ -171,6 +171,12 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+def _list_remove(x, y):
+    x = x.copy()
+    x.remove(y)
+    return x
+
+
 class DKEJacobiSmoother(lx.AbstractLinearOperator):
     """Block diagonal smoother for DKE.
 
@@ -250,7 +256,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             x = speedgrid.x
             nus = []
             for spa in species:
-                nu = nustar(spa, field, x)
+                nu = nustar(spa, field, x, *_list_remove(species, spa))
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
@@ -417,7 +423,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             x = speedgrid.x
             nus = []
             for spa in species:
-                nu = nustar(spa, field, x)
+                nu = nustar(spa, field, x, *_list_remove(species, spa))
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
