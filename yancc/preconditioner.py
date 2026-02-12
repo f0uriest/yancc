@@ -79,7 +79,7 @@ class MDKEPreconditioner(MultigridOperator):
         smooth_solver = options.pop("smooth_solver", "dense")
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
-        coarse_overweight = options.pop("coarse_overweight", 1)
+        coarse_method = options.pop("coarse_method", "standard")
         interp_method = options.pop("interp_method", "linear")
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
@@ -152,7 +152,7 @@ class MDKEPreconditioner(MultigridOperator):
             interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=None,
-            coarse_overweight=coarse_overweight,
+            coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )
 
@@ -207,7 +207,7 @@ class DKEPreconditioner(MultigridOperator):
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
         smooth_type = options.pop("smooth_type", 1)
-        coarse_overweight = options.pop("coarse_overweight", 1)
+        coarse_method = options.pop("coarse_method", "standard")
         interp_method = options.pop("interp_method", "linear")
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
@@ -301,7 +301,7 @@ class DKEPreconditioner(MultigridOperator):
             interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=None,
-            coarse_overweight=coarse_overweight,
+            coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )
 

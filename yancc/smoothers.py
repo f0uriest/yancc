@@ -14,7 +14,7 @@ from jaxtyping import ArrayLike, Bool, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
-from .finite_diff import fd_coeffs
+from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
     lu_factor_banded_periodic,
@@ -613,6 +613,108 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+class DKELaplacian(lx.AbstractLinearOperator):
+    """Normalized Laplacian operator on 4d phase space."""
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: MaxwellSpeedGrid
+    species: list[LocalMaxwellian]
+    norm: jax.Array
+
+    def __init__(self, field, pitchgrid, speedgrid, species, normalize=True):
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        if normalize:
+            na = self.pitchgrid.nxi
+            nt = self.field.ntheta
+            nz = self.field.nzeta
+            ha = jnp.pi / na
+            ht = 2 * jnp.pi / nt
+            hz = 2 * jnp.pi / nz / self.field.NFP
+            # want |L@f| / |L| ~ |f|
+            # uses approx 2 norm for matrix, though a bit off because D2x is not
+            # symmetric like the others
+            self.norm = (
+                4 / ha**2 * jnp.sin(jnp.pi / 2 * (na - 1) / na) ** 2
+                + 4 / ht**2 * jnp.sin(jnp.pi / 2 * (nt - 1) / nt) ** 2
+                + 4 / hz**2 * jnp.sin(jnp.pi / 2 * (nz - 1) / nz) ** 2
+                + jnp.max(
+                    jnp.linalg.svd(self.speedgrid.D2x_pseudospectral, compute_uv=False)
+                )
+            )
+        else:
+            self.norm = jnp.array(1)
+
+    def mv(self, vector):
+        """Matrix vector product."""
+        f = vector
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nxi,
+            self.field.ntheta,
+            self.field.nzeta,
+        )
+
+        na = self.pitchgrid.nxi
+        nt = self.field.ntheta
+        nz = self.field.nzeta
+        ha = jnp.pi / na
+        ht = 2 * jnp.pi / nt
+        hz = 2 * jnp.pi / nz / self.field.NFP
+
+        f = f.reshape(shape)
+        fxx = jnp.einsum("yx,sxatz->syatz", self.speedgrid.D2x_pseudospectral, f)
+        faa = fd2(f, 2, h=ha, bc="symmetric", axis=2)
+        ftt = fd2(f, 2, h=ht, bc="periodic", axis=3)
+        fzz = fd2(f, 2, h=hz, bc="periodic", axis=4)
+
+        df = fxx + faa + ftt + fzz
+        df /= self.norm
+        return df.reshape(vector.shape)
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
+
+
+@lx.is_symmetric.register(DKELaplacian)
+@lx.is_diagonal.register(DKELaplacian)
+@lx.is_tridiagonal.register(DKELaplacian)
 @lx.is_symmetric.register(DKEJacobiSmoother)
 @lx.is_diagonal.register(DKEJacobiSmoother)
 @lx.is_tridiagonal.register(DKEJacobiSmoother)

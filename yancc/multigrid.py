@@ -9,10 +9,15 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from jaxtyping import Array, Float, Int
+from jaxtyping import Array, Int
 
 from .linalg import InverseLinearOperator
-from .smoothers import DKEJacobi2Smoother, DKEJacobiSmoother, MDKEJacobiSmoother
+from .smoothers import (
+    DKEJacobi2Smoother,
+    DKEJacobiSmoother,
+    DKELaplacian,
+    MDKEJacobiSmoother,
+)
 from .trajectories import DKE, MDKE
 
 
@@ -325,7 +330,7 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
@@ -342,16 +347,6 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
             dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
             x += dx
-            if verbose:
-                r = rhs - operator.mv(x)
-                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
-                jax.debug.print(
-                    "v={k} after {a} err: {err:.3e}",
-                    err=err,
-                    k=k,
-                    a=Mi.axorder,
-                    ordered=True,
-                )
 
         Ax = operator.mv(x)
         r = rhs - Ax
@@ -382,45 +377,116 @@ def krylov_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov_smooth2(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+    """Apply smoothing operators to operator @ x = rhs"""
+    if not isinstance(smoothers, (tuple, list)):
+        smoothers = [smoothers]
+
+    L = DKELaplacian(
+        operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
+    )
+
+    def body(k, x0):
+        rs = jnp.empty((len(smoothers), rhs.size))
+        dxs = jnp.empty((len(smoothers), rhs.size))
+        x = x0
+
+        for i, Mi in enumerate(smoothers):
+            Ax = operator.mv(x)
+            r = rhs - Ax
+            rs = rs.at[i].set(r)
+            dx = Mi.mv(r)
+            dxs = dxs.at[i].set(dx)
+            x += dx
+
+        Ldxs = jax.vmap(L.mv)(dxs)
+        dxs = jnp.concatenate([dxs, Ldxs])
+        Adxs = jax.vmap(operator.mv)(dxs)
+        alpha = jnp.linalg.lstsq(Adxs.T, rs[0])[0]
+        x = x0 + dxs.T @ alpha
+
+        if verbose:
+            Ax = operator.mv(x)
+            r = rhs - Ax
+            err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+            jax.debug.print(
+                "v={k} err: {err:.3e} alpha: {alpha}",
+                err=err,
+                k=k,
+                alpha=alpha,
+                ordered=True,
+            )
+
+        return x
+
+    x = jax.lax.fori_loop(0, nsteps, body, x)
+    return x
+
+
+@functools.partial(jax.jit, static_argnames=["verbose"])
+def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
     def body(k, x0):
-        rs = jnp.empty((len(smoothers) + 1, rhs.size))
         dxs = jnp.empty((len(smoothers), rhs.size))
+        Adxs = jnp.empty((len(smoothers), rhs.size))
         x = x0
         Ax = operator.mv(x)
         r = rhs - Ax
 
         for i, Mi in enumerate(smoothers):
-            rs = rs.at[i].set(r)
             dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
-            Adx = operator.mv(dx)
-            c = jnp.linalg.lstsq(Adx[:, None], r)[0][0]
-            x += c * dx
-            r -= c * Adx
-            if verbose:
-                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
-                jax.debug.print(
-                    "v={k} after {a} err: {err:.3e} c: {c:.3e}",
-                    err=err,
-                    k=k,
-                    c=c,
-                    a=Mi.axorder[-1],
-                    ordered=True,
-                )
+            Adxs = Adxs.at[i].set(operator.mv(dx))
 
+        alpha = jnp.linalg.lstsq(Adxs.T, r)[0]
+        x = x0 + dxs.T @ alpha
+
+        if verbose:
+            Ax = operator.mv(x)
+            r = rhs - Ax
+            err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+            jax.debug.print(
+                "v={k} err: {err:.3e} alpha: {alpha}",
+                err=err,
+                k=k,
+                alpha=alpha,
+                ordered=True,
+            )
+
+        return x
+
+    x = jax.lax.fori_loop(0, nsteps, body, x)
+    return x
+
+
+@functools.partial(jax.jit, static_argnames=["verbose"])
+def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+    """Apply smoothing operators to operator @ x = rhs"""
+    if not isinstance(smoothers, (tuple, list)):
+        smoothers = [smoothers]
+
+    L = DKELaplacian(
+        operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
+    )
+
+    def body(k, x0):
+        dxs = jnp.empty((len(smoothers), rhs.size))
+        Adxs = jnp.empty((len(smoothers), rhs.size))
+        x = x0
         Ax = operator.mv(x)
         r = rhs - Ax
-        rs = rs.at[-1].set(r)
 
-        rb = rs[0]
-        dr = -jnp.diff(rs, axis=0)
+        for i, Mi in enumerate(smoothers):
+            dx = Mi.mv(r)
+            dxs = dxs.at[i].set(dx)
 
-        alpha = jnp.linalg.lstsq(dr.T, rb)[0]
+        Ldxs = jax.vmap(L.mv)(dxs)
+        dxs = jnp.concatenate([dxs, Ldxs])
+        Adxs = jax.vmap(operator.mv)(dxs)
+        alpha = jnp.linalg.lstsq(Adxs.T, r)[0]
         x = x0 + dxs.T @ alpha
 
         if verbose:
@@ -585,7 +651,7 @@ def _multigrid_cycle_recursive(
     interp_method,
     smooth_method,
     coarse_opinv,
-    coarse_overweight,
+    coarse_method,
     verbose,
 ):
     """Apply multigrid cycle for solving operator @ x = rhs
@@ -612,14 +678,12 @@ def _multigrid_cycle_recursive(
         Number of pre- and post- smoothing iterations.
     interp_method : str
         Method of interpolation, passed to interpax.interp3d
-    smooth_method : {"standard", "krylov"}
+    smooth_method : {"standard", "krylov1", "krylov2", "krylov1s", "krylov2s"}
         Method to use for smoothing.
     coarse_opinv: lx.AbstractLinearOperator
-        Precomputed inverse of coarse grid operator.
-    coarse_overweight : {"auto1", "auto2"} or float
-        Factor to weight coarse grid residuals by, to improve coarse grid correction
-        for closed characteristics. If str, use an automatically determined value to
-        ensure strict decrease of the coarse grid residuals.
+        Precomputed inverse of coarsest grid operator.
+    coarse_method : {"standard", "krylov1", "krylov2", "krylov1s", "krylov2s"}
+        Method to use for coarse grid corrections.
     verbose : int
         Level of verbosity:
           - 0: no info printed.
@@ -634,12 +698,20 @@ def _multigrid_cycle_recursive(
     Ak = operators[k]
     Mk = smoothers[k]
 
-    assert smooth_method in {"standard", "krylov", "krylov2"}
     smooth = {
         "standard": standard_smooth,
-        "krylov": krylov_smooth,
-        "krylov2": krylov_smooth2,
+        "krylov1": krylov1_smooth,
+        "krylov1s": krylov1s_smooth,
+        "krylov2": krylov2_smooth,
+        "krylov2s": krylov2s_smooth,
     }[smooth_method]
+    coarse_correction = {
+        "standard": standard_coarse_correction,
+        "krylov1": krylov1_coarse_correction,
+        "krylov1s": krylov1s_coarse_correction,
+        "krylov2": krylov2_coarse_correction,
+        "krylov2s": krylov2s_coarse_correction,
+    }[coarse_method]
 
     if verbose:
         rk = rhs - Ak.mv(x)
@@ -684,7 +756,7 @@ def _multigrid_cycle_recursive(
                 interp_method=interp_method,
                 smooth_method=smooth_method,
                 coarse_opinv=coarse_opinv,
-                coarse_overweight=coarse_overweight,
+                coarse_method=coarse_method,
                 verbose=verbose,
             )
         yk = interpolate(
@@ -695,30 +767,7 @@ def _multigrid_cycle_recursive(
             operators[k].pitchgrid,
             interp_method,
         )
-        if isinstance(coarse_overweight, str):
-            if coarse_overweight == "auto1":
-                Aykm1 = operators[k - 1].mv(ykm1)
-                alpha = jnp.linalg.lstsq(Aykm1[:, None], rkm1)[0][0]
-            elif coarse_overweight == "auto2":
-                Ayk = operators[k].mv(yk)
-                alpha = jnp.linalg.lstsq(Ayk[:, None], rk)[0][0]
-            else:
-                raise ValueError
-        else:
-            alpha = coarse_overweight
-
-        if verbose:
-            err = jnp.linalg.norm(alpha * yk) / jnp.linalg.norm(x)
-            jax.debug.print(
-                "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha:.3e}",
-                err=err,
-                k=k - 1,
-                i=i,
-                alpha=alpha,
-                ordered=True,
-            )
-
-        x += alpha * yk
+        x = coarse_correction(x, k, i, Ak, yk, rk, verbose=max(verbose - 1, 0))
 
         if verbose:
             rk = rhs - Ak.mv(x)
@@ -750,6 +799,128 @@ def _multigrid_cycle_recursive(
     return x
 
 
+def standard_coarse_correction(x, k, i, operator, yk, rk, verbose):
+    """Apply coarse grid correction with standard weighting."""
+    alpha = 1.0
+    dx = alpha * yk
+
+    if verbose:
+        err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
+        jax.debug.print(
+            "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha}",
+            err=err,
+            k=k - 1,
+            i=i,
+            alpha=alpha,
+            ordered=True,
+        )
+
+    x += dx
+    return x
+
+
+def krylov1_coarse_correction(x, k, i, operator, yk, rk, verbose):
+    """Apply coarse grid correction st coarse grid residual is minimized over yk."""
+    Ayk = operator.mv(yk)
+    alpha = jnp.linalg.lstsq(Ayk[:, None], rk)[0][0]
+    dx = alpha * yk
+
+    if verbose:
+        err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
+        jax.debug.print(
+            "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha}",
+            err=err,
+            k=k - 1,
+            i=i,
+            alpha=alpha,
+            ordered=True,
+        )
+
+    x += dx
+    return x
+
+
+def krylov1s_coarse_correction(x, k, i, operator, yk, rk, verbose):
+    """Apply coarse grid correction st coarse grid residual is minimized
+    over yk, Lyk.
+    """
+    L = DKELaplacian(
+        operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
+    )
+    Lyk = L.mv(yk)
+    dxs = jnp.array([yk, Lyk])
+    Adxs = jax.vmap(operator.mv)(dxs)
+    alpha = jnp.linalg.lstsq(Adxs.T, rk)[0]
+    dx = dxs.T @ alpha
+
+    if verbose:
+        err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
+        jax.debug.print(
+            "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha}",
+            err=err,
+            k=k - 1,
+            i=i,
+            alpha=alpha,
+            ordered=True,
+        )
+
+    x += dx
+    return x
+
+
+def krylov2_coarse_correction(x, k, i, operator, yk, rk, verbose):
+    """Apply coarse grid correction st coarse grid residual is minimized
+    over yk, rk.
+    """
+    dxs = jnp.array([yk, rk])
+    Adxs = jax.vmap(operator.mv)(dxs)
+    alpha = jnp.linalg.lstsq(Adxs.T, rk)[0]
+    dx = dxs.T @ alpha
+
+    if verbose:
+        err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
+        jax.debug.print(
+            "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha}",
+            err=err,
+            k=k - 1,
+            i=i,
+            alpha=alpha,
+            ordered=True,
+        )
+
+    x += dx
+    return x
+
+
+def krylov2s_coarse_correction(x, k, i, operator, yk, rk, verbose):
+    """Apply coarse grid correction st coarse grid residual is minimized
+    over yk, rk, Lyk, Lrk.
+    """
+    L = DKELaplacian(
+        operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
+    )
+    dxs = jnp.array([yk, rk])
+    Ldxs = jax.vmap(L.mv)(dxs)
+    dxs = jnp.concatenate([dxs, Ldxs])
+    Adxs = jax.vmap(operator.mv)(dxs)
+    alpha = jnp.linalg.lstsq(Adxs.T, rk)[0]
+    dx = dxs.T @ alpha
+
+    if verbose:
+        err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
+        jax.debug.print(
+            "level={k}/{i} coarse_correction: {err:.3e}, alpha: {alpha}",
+            err=err,
+            k=k - 1,
+            i=i,
+            alpha=alpha,
+            ordered=True,
+        )
+
+    x += dx
+    return x
+
+
 class MultigridOperator(lx.AbstractLinearOperator):
     """Multigrid cycle as a linear operator.
 
@@ -773,13 +944,12 @@ class MultigridOperator(lx.AbstractLinearOperator):
         Number of pre- and post- smoothing iterations.
     interp_method : str
         Method of interpolation, passed to interpax.interp3d
-    smooth_method : {"standard", "krylov"}
+    smooth_method : {"standard", "krylov1", "krylov2", "krylov1s", "krylov2s"}
         Method to use for smoothing.
     coarse_opinv: lx.AbstractLinearOperator
         Precomputed inverse of coarse grid operator.
-    coarse_overweight : float
-        Factor to weight coarse grid residuals by, to improve coarse grid correction
-        for closed characteristics.
+    coarse_method : {"standard", "krylov1", "krylov2", "krylov1s", "krylov2s"}
+        Method to use for coarse grid corrections.
     verbose : int
         Level of verbosity:
           - 0: no into printed.
@@ -797,7 +967,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
     interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
     coarse_opinv: lx.AbstractLinearOperator
-    coarse_overweight: Union[str, jax.Array]
+    coarse_method: str = eqx.field(static=True)
     verbose: int = eqx.field(static=True)
 
     def __init__(
@@ -811,7 +981,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         interp_method: str = "linear",
         smooth_method: str = "standard",
         coarse_opinv: Optional[lx.AbstractLinearOperator] = None,
-        coarse_overweight: Union[str, float, Float[Array, ""]] = 1.0,
+        coarse_method: str = "standard",
         verbose: Union[bool, int] = False,
     ):
 
@@ -826,10 +996,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         if coarse_opinv is None:
             coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
         self.coarse_opinv = coarse_opinv
-        if not isinstance(coarse_overweight, str):
-            self.coarse_overweight = jnp.asarray(coarse_overweight)
-        else:
-            self.coarse_overweight = coarse_overweight
+        self.coarse_method = coarse_method
         self.verbose = verbose
 
     @eqx.filter_jit
@@ -848,7 +1015,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
             interp_method=self.interp_method,
             smooth_method=self.smooth_method,
             coarse_opinv=self.coarse_opinv,
-            coarse_overweight=self.coarse_overweight,
+            coarse_method=self.coarse_method,
             verbose=self.verbose,
         )
         return x
@@ -881,7 +1048,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
             self.interp_method,
             self.smooth_method,
             opit,
-            self.coarse_overweight,
+            self.coarse_method,
             self.verbose,
         )
 
