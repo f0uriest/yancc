@@ -4,7 +4,6 @@ from typing import Any, Optional, Union
 
 import jax
 import jax.numpy as jnp
-import lineax as lx
 import numpy as np
 from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
@@ -177,6 +176,7 @@ def solve_dke(
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: Union[float, Float[Any, ""]],
+    EparB: Union[float, Float[Any, ""]] = 0.0,
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
     **options,
@@ -195,6 +195,8 @@ def solve_dke(
         Species information.
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    EparB : float
+        <E||B>, flux surface average of parallel electric field times B.
     verbose: bool, int
         Level of verbosity:
           - 0: no into printed.
@@ -307,12 +309,11 @@ def solve_dke(
 
     B = DKESources(field, pitchgrid, speedgrid, species)
     C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
-    D = lx.MatrixLinearOperator(jnp.zeros((len(species) * 2, len(species) * 2)))
 
-    operator = BorderedOperator(A, B, C, D)
-    preconditioner = InverseBorderedOperator(M, B, C, D)
+    operator = BorderedOperator(A, B, C)
+    preconditioner = InverseBorderedOperator(M, B, C)
 
-    rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, True, False)
+    rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
 
     x0 = jnp.zeros_like(rhs)
     f1, j1, nmv1, res1, _, _ = gcrotmk(

@@ -508,12 +508,6 @@ def gcrotmk(
     if MR is None:
         MR = lx.IdentityLinearOperator(A.in_structure())
 
-    matvec = A.mv
-    lpsolve = ML.mv
-    rpsolve = MR.mv
-    print_every = jnp.asarray(print_every)
-    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
-
     if x0 is None:
         x = tree_map(jnp.zeros_like, A.in_structure())
     else:
@@ -521,6 +515,52 @@ def gcrotmk(
 
     if k is None:
         k = m
+
+    def _solve(A, b):
+        return _gcrotmk_solve(
+            A, b, x, ML.mv, MR.mv, rtol, atol, maxiter, m, k, C, U, print_every
+        )
+
+    def _transpose_solve(At, b):
+        return _gcrotmk_solve(
+            At,
+            b,
+            x,
+            ML.transpose().mv,
+            MR.transpose().mv,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            C,
+            U,
+            print_every,
+        )
+
+    x, (j_outer, nmv, res, C, U) = jax.lax.custom_linear_solve(
+        A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+    )
+    return x, j_outer, nmv, res, C, U
+
+
+def _gcrotmk_solve(
+    matvec,
+    b,
+    x,
+    lpsolve,
+    rpsolve,
+    rtol,
+    atol,
+    maxiter,
+    m,
+    k,
+    C,
+    U,
+    print_every,
+):
+    print_every = jnp.asarray(print_every)
+    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
@@ -647,7 +687,7 @@ def gcrotmk(
     U = tree_map(_roll_prepend, U, x)
     C = tree_map(_roll_prepend, C, _sub(b, r))
 
-    return x, j_outer, nmv, beta, C, U
+    return x, (j_outer, nmv, beta, C, U)
 
 
 @eqx.filter_jit
@@ -759,16 +799,68 @@ def lgmres(
     if MR is None:
         MR = lx.IdentityLinearOperator(A.in_structure())
 
-    matvec = A.mv
-    lpsolve = ML.mv
-    rpsolve = MR.mv
-    print_every = jnp.asarray(print_every)
-    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
-
     if x0 is None:
         x = tree_map(jnp.zeros_like, A.in_structure())
     else:
         x = x0
+
+    def _solve(A, b):
+        return _lgmres_solve(
+            A,
+            b,
+            x,
+            ML.mv,
+            MR.mv,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            outer_v,
+            outer_Av,
+            print_every,
+        )
+
+    def _transpose_solve(At, b):
+        return _lgmres_solve(
+            At,
+            b,
+            x,
+            ML.transpose().mv,
+            MR.transpose().mv,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            outer_v,
+            outer_Av,
+            print_every,
+        )
+
+    x, (j_outer, nmv, res, outer_v, outer_Av) = jax.lax.custom_linear_solve(
+        A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+    )
+    return x, j_outer, nmv, res, outer_v, outer_Av
+
+
+def _lgmres_solve(
+    matvec,
+    b,
+    x,
+    lpsolve,
+    rpsolve,
+    rtol,
+    atol,
+    maxiter,
+    m,
+    k,
+    outer_v,
+    outer_Av,
+    print_every,
+):
+    print_every = jnp.asarray(print_every)
+    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
@@ -858,4 +950,4 @@ def lgmres(
     carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
     j_outer, nmv, x, r, beta, outer_v, outer_Av, _, _ = carry
 
-    return x, j_outer, nmv, beta, outer_v, outer_Av
+    return x, (j_outer, nmv, beta, outer_v, outer_Av)
