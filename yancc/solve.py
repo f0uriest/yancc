@@ -255,7 +255,6 @@ def solve_dke(
 
     p1 = options.pop("p1", "4d")
     p2 = options.pop("p2", 4)
-    potentials = options.pop("potentials", None)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 150)
@@ -264,50 +263,45 @@ def solve_dke(
     print_every = options.pop("print_every", 10)
     operator_weights = options.pop("operator_weights", None)
     multigrid_options.setdefault("operator_weights", operator_weights)
+    nL = options.pop("nL", 4)
+    quad = options.pop("quad", False)
+    skip_init_print = options.pop("skip_init_print", False)
+    potentials = options.pop("potentials", None)
+    M = options.pop("M", None)
+    B = options.pop("B", None)
+    C = options.pop("C", None)
     U = options.pop("U", None)
     f1 = options.pop("f1", None)
 
-    if potentials is None:
-        nL = options.pop("nL", 4)
-        quad = options.pop("quad", False)
-        potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
-
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
-    if verbose:
-        for si, spec in enumerate(species):
-            jax.debug.print(
-                "Species {si}:  "
-                "m={mass: .2e} (mₚ)  "
-                "q={charge: .2e} (qₚ)  "
-                "n={dens: .2e} (m⁻³)  "
-                "T={temp: .2e} (eV)  ",
-                si=si,
-                mass=spec.species.mass / proton_mass,
-                charge=spec.species.charge / elementary_charge,
-                dens=spec.density,
-                temp=spec.temperature,
-                ordered=True,
-            )
-            tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
-            nustars = nustar(spec, field, tempx)
-            erstars = Estar(spec, field, Erho, tempx)
-            for nu, x in zip(nustars, tempx):
-                jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
-            for er, x in zip(erstars, tempx):
-                jax.debug.print("E* (x={x:.2e}): {er: .3e}", x=x, er=er, ordered=True)
+    if verbose and not skip_init_print:
+        _print_species_summary(species, field, speedgrid)
+        _print_er_summary(species, field, Erho)
 
-    M = DKEPreconditioner(
-        field=field,
-        pitchgrid=pitchgrid,
-        speedgrid=speedgrid,
-        species=species,
-        Erho=Erho,
-        potentials=potentials,
-        gauge=True,
-        verbose=verbose,
-        **multigrid_options,
-    )
+    if potentials is None:
+        potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
+
+    if M is None:
+        multigrid_options.setdefault("operator_weights", operator_weights)
+        multigrid_options.setdefault("field", field)
+        multigrid_options.setdefault("pitchgrid", pitchgrid)
+        multigrid_options.setdefault("speedgrid", speedgrid)
+        multigrid_options.setdefault("species", species)
+        multigrid_options.setdefault("Erho", Erho)
+        multigrid_options.setdefault("potentials", potentials)
+        multigrid_options.setdefault("gauge", True)
+        multigrid_options.setdefault("verbose", verbose)
+        M = DKEPreconditioner(**multigrid_options)
+
+    if verbose and not skip_init_print:
+        _print_dke_resolutions(M)
+
+    if B is None:
+        B = DKESources(field, pitchgrid, speedgrid, species)
+    if C is None:
+        C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
+
     A = DKE(
         field=field,
         pitchgrid=pitchgrid,
@@ -320,9 +314,6 @@ def solve_dke(
         gauge=False,
         operator_weights=operator_weights,
     )
-
-    B = DKESources(field, pitchgrid, speedgrid, species)
-    C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
 
     operator = BorderedOperator(A, B, C)
     preconditioner = InverseBorderedOperator(M, B, C)
@@ -350,6 +341,7 @@ def solve_dke(
         atol=atol,
         maxiter=maxiter,
         print_every=print_every if verbose > 1 else 0,
+        U=U,
     )
     info = {
         "niter": j1,
@@ -389,3 +381,47 @@ def solve_dke(
         fluxes,
         info,
     )
+
+
+def _print_species_summary(species, field, speedgrid):
+    for si, spec in enumerate(species):
+        jax.debug.print(
+            "Species {si}:  "
+            "m={mass: .2e} (mₚ)  "
+            "q={charge: .2e} (qₚ)  "
+            "n={dens: .2e} (m⁻³)  "
+            "T={temp: .2e} (eV)  ",
+            si=si,
+            mass=spec.species.mass / proton_mass,
+            charge=spec.species.charge / elementary_charge,
+            dens=spec.density,
+            temp=spec.temperature,
+            ordered=True,
+        )
+        tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
+        nustars = nustar(spec, field, tempx)
+        for nu, x in zip(nustars, tempx):
+            jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
+
+
+def _print_er_summary(species, field, Erho):
+    erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
+    s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *erstars, ordered=True)
+
+
+def _print_dke_resolutions(preconditioner):
+    for i, op in enumerate(preconditioner.operators):
+        ns = len(op.species)
+        nx = op.speedgrid.nx
+        na = op.pitchgrid.nxi
+        nt = op.field.ntheta
+        nz = op.field.nzeta
+        # these values aren't traced so we can use regular print
+        print(
+            f"Grid {i}: nx={nx:4d}, "
+            f"na={na:4d}, "
+            f"nt={nt:4d}, "
+            f"nz={nz:4d}, "
+            f"N={ns*nx*na*nt*nz}"
+        )

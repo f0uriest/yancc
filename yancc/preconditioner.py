@@ -232,18 +232,6 @@ class DKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
 
-        if verbose:
-            for i, res in enumerate(ress):
-                ns, nx, na, nt, nz = res
-                # these values aren't traced so we can use regular print
-                print(
-                    f"Grid {i}: nx={nx:4d}, "
-                    f"na={na:4d}, "
-                    f"nt={nt:4d}, "
-                    f"nz={nz:4d}, "
-                    f"N={ns*nx*na*nt*nz}"
-                )
-
         fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
 
         operators = get_dke_operators(
