@@ -351,6 +351,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         assert smooth_solver in {"banded", "dense"}
+        if operator_weights is None:
+            operator_weights = jnp.ones(8).at[-1].set(0)
+        operator_weights = eqx.error_if(
+            operator_weights,
+            (operator_weights[-2] != 0) & (smooth_solver == "banded"),
+            "banded solver requires dropping the field term, "
+            "set operator_weights[-2]=0",
+        )
+
         self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2

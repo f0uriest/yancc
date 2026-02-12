@@ -261,8 +261,7 @@ def solve_dke(
     k = options.pop("k", 10)
     maxiter = options.pop("maxiter", 10)
     print_every = options.pop("print_every", 10)
-    operator_weights = options.pop("operator_weights", None)
-    multigrid_options.setdefault("operator_weights", operator_weights)
+    operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
     nL = options.pop("nL", 4)
     quad = options.pop("quad", False)
     skip_init_print = options.pop("skip_init_print", False)
@@ -283,7 +282,11 @@ def solve_dke(
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
 
     if M is None:
-        multigrid_options.setdefault("operator_weights", operator_weights)
+        if len(species) > 1:
+            default_operator_weights = operator_weights.at[-2].set(0)
+        else:
+            default_operator_weights = operator_weights
+        multigrid_options.setdefault("operator_weights", default_operator_weights)
         multigrid_options.setdefault("field", field)
         multigrid_options.setdefault("pitchgrid", pitchgrid)
         multigrid_options.setdefault("speedgrid", speedgrid)
