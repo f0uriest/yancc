@@ -286,7 +286,7 @@ def solve_dke(
             default_operator_weights = operator_weights.at[-2].set(0)
         else:
             default_operator_weights = operator_weights
-            multigrid_options.setdefault("operator_weights", default_operator_weights)
+        multigrid_options.setdefault("operator_weights", default_operator_weights)
         multigrid_options.setdefault("field", field)
         multigrid_options.setdefault("pitchgrid", pitchgrid)
         multigrid_options.setdefault("speedgrid", speedgrid)
