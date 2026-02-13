@@ -8,6 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 import orthax
 import quadax
 from jaxtyping import Array, ArrayLike, Bool, Float
@@ -2331,26 +2332,61 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d1 = self.CD.diagonal()
-        d2 = self.CG.diagonal()
-        d3 = self.CH.diagonal()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n1 = np.prod(list(sizes.values()))
+        x = jnp.zeros(n1)
+        intermediates = [
+            lambda x: x + self.CD.diagonal(),
+            lambda x: x + self.CG.diagonal(),
+            lambda x: x + self.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CD.block_diagonal()
-        d2 = self.CG.block_diagonal()
-        d3 = self.CH.block_diagonal()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.CD.block_diagonal(),
+            lambda x: x + self.CG.block_diagonal(),
+            lambda x: x + self.CH.block_diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CD.block_diagonal2()
-        d2 = self.CG.block_diagonal2()
-        d3 = self.CH.block_diagonal2()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.CD.block_diagonal2(),
+            lambda x: x + self.CG.block_diagonal2(),
+            lambda x: x + self.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -2473,38 +2509,67 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d1 = self.CL.diagonal()
-        d2 = self.CE.diagonal()
-        d3 = self.CF.diagonal()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n1 = np.prod(list(sizes.values()))
+        x = jnp.zeros(n1)
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.diagonal(),
+            lambda x: x + self.operator_weights[1] * self.CE.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CL.block_diagonal()
-        d2 = self.CE.block_diagonal()
-        d3 = self.CF.block_diagonal()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.block_diagonal(),
+            lambda x: x + self.operator_weights[1] * self.CE.block_diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.block_diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.block_diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.block_diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CL.block_diagonal2()
-        d2 = self.CE.block_diagonal2()
-        d3 = self.CF.block_diagonal2()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.block_diagonal2(),
+            lambda x: x + self.operator_weights[1] * self.CE.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

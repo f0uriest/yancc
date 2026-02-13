@@ -1,5 +1,6 @@
 """Tests for MDKE operators."""
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -10,6 +11,8 @@ from yancc.collisions import (
     FieldPartCD,
     FieldPartCG,
     FieldPartCH,
+    FieldParticleScattering,
+    FokkerPlanckLandau,
     MDKEPitchAngleScattering,
     PitchAngleScattering,
 )
@@ -260,6 +263,55 @@ def test_diagonals_dke_CH(
 
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+def test_diagonals_dke_CF(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FieldParticleScattering(
+        field, pitchgrid, speedgrid, species2, potentials2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+def test_diagonals_dke_FokkerPlanck(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FokkerPlanckLandau(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        potentials2,
+        axorder=axorder,
+        gauge=gauge,
+        operator_weights=jnp.linspace(1, 2, 3),
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
 def test_diagonals_dke_full(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -283,6 +335,7 @@ def test_diagonals_dke_full(
         4,
         axorder=axorder,
         gauge=gauge,
+        operator_weights=jnp.linspace(1, 5, 8),
     )
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
@@ -637,6 +690,53 @@ def test_diagonals2_dke_CH(
 
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_CF(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FieldParticleScattering(
+        field, pitchgrid, speedgrid, species2, potentials2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
+def test_diagonals2_dke_FokkerPlanck(
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    sizes = {
+        "s": len(species2),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    f = FokkerPlanckLandau(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        potentials2,
+        axorder=axorder,
+        gauge=gauge,
+        operator_weights=jnp.linspace(1, 2, 3),
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
 def test_diagonals2_dke_full(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -660,6 +760,7 @@ def test_diagonals2_dke_full(
         4,
         axorder=axorder,
         gauge=gauge,
+        operator_weights=jnp.linspace(1, 5, 8),
     )
     A = f.as_matrix()
     B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
