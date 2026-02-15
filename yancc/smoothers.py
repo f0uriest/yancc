@@ -213,7 +213,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         p2: int = 2,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver: str = "banded",
+        smooth_solver: Optional[str] = None,
         weight: Optional[jax.Array] = None,
     ):
         self.field = field
@@ -221,11 +221,23 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
-        self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            sizes = {
+                "a": self.pitchgrid.nxi,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            # use banded solver if its more efficient. This size is a heuristic that
+            # could probably be improved
+            if sizes[self.axorder[-1]] > 50:
+                smooth_solver = "banded"
+            else:
+                smooth_solver = "dense"
+        self.smooth_solver = smooth_solver
         if weight is None:
             weight = optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder[-1])
         self.weight = jnp.atleast_1d(jnp.array(weight))
@@ -233,6 +245,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         mats = MDKE(
             field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge
         ).block_diagonal()
+        # TODO: implement banded block diagonal for MDKE
 
         if self.smooth_solver == "banded":
             mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
@@ -340,7 +353,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         p2=2,
         axorder="sxatz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver="dense",
+        smooth_solver: Optional[str] = None,
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
     ):
@@ -352,25 +365,35 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
-        if operator_weights is None:
-            operator_weights = jnp.ones(8).at[-1].set(0)
-        operator_weights = eqx.error_if(
-            operator_weights,
-            (operator_weights[-2] != 0) & (smooth_solver == "banded"),
-            "banded solver requires dropping the field term, "
-            "set operator_weights[-2]=0",
-        )
-
-        self.smooth_solver = smooth_solver
         if self.axorder[-1] == "s":
-            self.bandwidth = len(self.species)
+            self.bandwidth = len(self.species) // 2
         elif self.axorder[-1] == "x":
-            self.bandwidth = self.speedgrid.nx
+            self.bandwidth = self.speedgrid.nx // 2
         else:
             self.bandwidth = max(
                 fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
             )
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            sizes = {
+                "s": len(self.species),
+                "x": self.speedgrid.nx,
+                "a": self.pitchgrid.nxi,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            # use banded solver if its more efficient. This size is a heuristic that
+            # could probably be improved
+            if sizes[self.axorder[-1]] > 50:
+                smooth_solver = "banded"
+            else:
+                smooth_solver = "dense"
+        if operator_weights is None:
+            operator_weights = jnp.ones(8).at[-1].set(0)
+            if smooth_solver == "banded":
+                operator_weights = operator_weights.at[-2].set(0)
+
+        self.smooth_solver = smooth_solver
 
         if weight is None:
             x = speedgrid.x
@@ -401,10 +424,9 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
-        ).block_diagonal()
+        ).block_diagonal(self.smooth_solver, self.bandwidth)
 
         if self.smooth_solver == "banded":
-            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
             self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
