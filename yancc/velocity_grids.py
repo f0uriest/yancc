@@ -4,6 +4,10 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import orthax
+from jax import config
+
+# need this here as well so that const default_xrec uses 64 bit
+config.update("jax_enable_x64", True)
 
 
 # save some time by precomputing this, usually only need nx <= 5-8

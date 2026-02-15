@@ -9,11 +9,12 @@ import interpax
 import jax
 import jax.numpy as jnp
 import lineax as lx
+from jax import config
 from jaxtyping import ArrayLike, Bool, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
-from .finite_diff import fd_coeffs
+from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
     lu_factor_banded_periodic,
@@ -22,6 +23,114 @@ from .linalg import (
 from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
+
+# need this here as well so that consts use 64 bit
+config.update("jax_enable_x64", True)
+
+
+OPTIMAL_SMOOTHING_COEFFS_3D = {
+    "1a": {
+        "z": jnp.array([0.73684211, 0.73684211, 0.68421053, 0.63157895, 0.63157895]),
+        "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
+        "a": jnp.array([0.52631579, 0.57894737, 0.68421053, 0.94736842, 1.00000000]),
+    },
+    "1b": {
+        "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.63157895, 0.63157895]),
+        "t": jnp.array([0.21052632, 0.21052632, 0.52631579, 0.63157895, 0.63157895]),
+        "a": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.89473684, 0.89473684]),
+    },
+    "2a": {
+        "z": jnp.array([0.57894737, 0.57894737, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.89473684, 0.94736842]),
+    },
+    "2b": {
+        "z": jnp.array([0.52631579, 0.52631579, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.31578947, 0.31578947, 0.52631579, 0.89473684, 0.94736842]),
+    },
+    "2c": {
+        "z": jnp.array([0.42105263, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.21052632, 0.21052632, 0.42105263, 0.89473684, 0.89473684]),
+    },
+    "2d": {
+        "z": jnp.array([0.52631579, 0.57894737, 0.63157895, 0.63157895, 0.63157895]),
+        "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
+        "a": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.68421053, 0.78947368]),
+    },
+    "3a": {
+        "z": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.52631579, 0.52631579]),
+        "t": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.52631579, 0.52631579]),
+        "a": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.84210526, 0.94736842]),
+    },
+    "3b": {
+        "z": jnp.array([0.47368421, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.89473684]),
+    },
+    "3c": {
+        "z": jnp.array([0.63157895, 0.63157895, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.89473684, 0.94736842]),
+    },
+    "3d": {
+        "z": jnp.array([0.68421053, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
+    },
+    "3e": {
+        "z": jnp.array([0.73684211, 0.73684211, 0.73684211, 0.63157895, 0.57894737]),
+        "t": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.84210526, 0.94736842]),
+    },
+    "4a": {
+        "z": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.47368421, 0.47368421]),
+        "t": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.47368421, 0.47368421]),
+        "a": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.73684211, 0.84210526]),
+    },
+    "4b": {
+        "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.94736842]),
+    },
+    "4d": {
+        "z": jnp.array([0.63157895, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
+    },
+    "5a": {
+        "z": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.42105263, 0.42105263]),
+        "t": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.42105263, 0.42105263]),
+        "a": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.57894737, 0.73684211]),
+    },
+    "5b": {
+        "z": jnp.array([0.31578947, 0.31578947, 0.63157895, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.10526316, 0.10526316, 0.36842105, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.10526316, 0.10526316, 0.31578947, 0.78947368, 0.78947368]),
+    },
+    "5c": {
+        "z": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.89473684, 0.94736842]),
+    },
+    "5d": {
+        "z": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
+        "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
+        "a": jnp.array([0.42105263, 0.42105263, 0.63157895, 0.94736842, 0.94736842]),
+    },
+}
+
+
+OPTIMAL_SMOOTHING_COEFFS_4D = {
+    "2d": {
+        "z": jnp.array([0.3503, 0.7894, 0.6710, 0.8939, 0.7280, 0.6392, 0.5938]),
+        "t": jnp.array([0.6291, 0.5176, 0.5524, 0.5782, 0.6513, 0.6728, 0.5910]),
+        "a": jnp.array([0.5874, 0.5275, 0.5701, 0.5591, 0.8001, 0.6630, 0.0100]),
+        "x": jnp.array([0.5641, 0.5275, 0.5330, 0.5623, 0.6604, 0.6867, 0.5982]),
+        "s": jnp.array([0.5797, 0.5254, 0.5435, 0.5641, 0.6617, 0.6698, 0.5938]),
+    }
+}
 
 
 def permute_f_3d(
@@ -242,6 +351,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         assert smooth_solver in {"banded", "dense"}
+        if operator_weights is None:
+            operator_weights = jnp.ones(8).at[-1].set(0)
+        operator_weights = eqx.error_if(
+            operator_weights,
+            (operator_weights[-2] != 0) & (smooth_solver == "banded"),
+            "banded solver requires dropping the field term, "
+            "set operator_weights[-2]=0",
+        )
+
         self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
@@ -249,8 +367,9 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if weight is None:
             x = speedgrid.x
             nus = []
-            for spa in species:
-                nu = nustar(spa, field, x)
+            for i, spa in enumerate(species):
+                others = species[:i] + species[i + 1 :]
+                nu = nustar(spa, field, x, *others)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
@@ -416,8 +535,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         if weight is None:
             x = speedgrid.x
             nus = []
-            for spa in species:
-                nu = nustar(spa, field, x)
+            for i, spa in enumerate(species):
+                others = species[:i] + species[i + 1 :]
+                nu = nustar(spa, field, x, *others)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
@@ -498,6 +618,108 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+class DKELaplacian(lx.AbstractLinearOperator):
+    """Normalized Laplacian operator on 4d phase space."""
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: MaxwellSpeedGrid
+    species: list[LocalMaxwellian]
+    norm: jax.Array
+
+    def __init__(self, field, pitchgrid, speedgrid, species, normalize=True):
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        if normalize:
+            na = self.pitchgrid.nxi
+            nt = self.field.ntheta
+            nz = self.field.nzeta
+            ha = jnp.pi / na
+            ht = 2 * jnp.pi / nt
+            hz = 2 * jnp.pi / nz / self.field.NFP
+            # want |L@f| / |L| ~ |f|
+            # uses approx 2 norm for matrix, though a bit off because D2x is not
+            # symmetric like the others
+            self.norm = (
+                4 / ha**2 * jnp.sin(jnp.pi / 2 * (na - 1) / na) ** 2
+                + 4 / ht**2 * jnp.sin(jnp.pi / 2 * (nt - 1) / nt) ** 2
+                + 4 / hz**2 * jnp.sin(jnp.pi / 2 * (nz - 1) / nz) ** 2
+                + jnp.max(
+                    jnp.linalg.svd(self.speedgrid.D2x_pseudospectral, compute_uv=False)
+                )
+            )
+        else:
+            self.norm = jnp.array(1)
+
+    def mv(self, vector):
+        """Matrix vector product."""
+        f = vector
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nxi,
+            self.field.ntheta,
+            self.field.nzeta,
+        )
+
+        na = self.pitchgrid.nxi
+        nt = self.field.ntheta
+        nz = self.field.nzeta
+        ha = jnp.pi / na
+        ht = 2 * jnp.pi / nt
+        hz = 2 * jnp.pi / nz / self.field.NFP
+
+        f = f.reshape(shape)
+        fxx = jnp.einsum("yx,sxatz->syatz", self.speedgrid.D2x_pseudospectral, f)
+        faa = fd2(f, 2, h=ha, bc="symmetric", axis=2)
+        ftt = fd2(f, 2, h=ht, bc="periodic", axis=3)
+        fzz = fd2(f, 2, h=hz, bc="periodic", axis=4)
+
+        df = fxx + faa + ftt + fzz
+        df /= self.norm
+        return df.reshape(vector.shape)
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.zeros(self.in_size())
+        return jax.jacfwd(self.mv)(x)
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nxi
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
+
+
+@lx.is_symmetric.register(DKELaplacian)
+@lx.is_diagonal.register(DKELaplacian)
+@lx.is_tridiagonal.register(DKELaplacian)
 @lx.is_symmetric.register(DKEJacobiSmoother)
 @lx.is_diagonal.register(DKEJacobiSmoother)
 @lx.is_tridiagonal.register(DKEJacobiSmoother)
@@ -553,108 +775,3 @@ def optimal_smoothing_parameter_4d(p1, p2, nuhat, ax):
     c = OPTIMAL_SMOOTHING_COEFFS_4D[method][ax]
     w = interpax.interp1d(nu, nus, c, method="linear", extrap=(c[0], c[-1]))
     return jnp.clip(w, 0.01, 1.0)
-
-
-OPTIMAL_SMOOTHING_COEFFS_3D = {
-    "1a": {
-        "z": jnp.array([0.73684211, 0.73684211, 0.68421053, 0.63157895, 0.63157895]),
-        "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
-        "a": jnp.array([0.52631579, 0.57894737, 0.68421053, 0.94736842, 1.00000000]),
-    },
-    "1b": {
-        "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.63157895, 0.63157895]),
-        "t": jnp.array([0.21052632, 0.21052632, 0.52631579, 0.63157895, 0.63157895]),
-        "a": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.89473684, 0.89473684]),
-    },
-    "2a": {
-        "z": jnp.array([0.57894737, 0.57894737, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.89473684, 0.94736842]),
-    },
-    "2b": {
-        "z": jnp.array([0.52631579, 0.52631579, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.31578947, 0.31578947, 0.52631579, 0.89473684, 0.94736842]),
-    },
-    "2c": {
-        "z": jnp.array([0.42105263, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.21052632, 0.21052632, 0.42105263, 0.89473684, 0.89473684]),
-    },
-    "2d": {
-        "z": jnp.array([0.52631579, 0.57894737, 0.63157895, 0.63157895, 0.63157895]),
-        "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
-        "a": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.68421053, 0.78947368]),
-    },
-    "3a": {
-        "z": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.52631579, 0.52631579]),
-        "t": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.52631579, 0.52631579]),
-        "a": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.84210526, 0.94736842]),
-    },
-    "3b": {
-        "z": jnp.array([0.47368421, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.89473684]),
-    },
-    "3c": {
-        "z": jnp.array([0.63157895, 0.63157895, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.89473684, 0.94736842]),
-    },
-    "3d": {
-        "z": jnp.array([0.68421053, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
-    },
-    "3e": {
-        "z": jnp.array([0.73684211, 0.73684211, 0.73684211, 0.63157895, 0.57894737]),
-        "t": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.84210526, 0.94736842]),
-    },
-    "4a": {
-        "z": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.47368421, 0.47368421]),
-        "t": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.47368421, 0.47368421]),
-        "a": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.73684211, 0.84210526]),
-    },
-    "4b": {
-        "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.94736842]),
-    },
-    "4d": {
-        "z": jnp.array([0.63157895, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
-    },
-    "5a": {
-        "z": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.42105263, 0.42105263]),
-        "t": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.42105263, 0.42105263]),
-        "a": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.57894737, 0.73684211]),
-    },
-    "5b": {
-        "z": jnp.array([0.31578947, 0.31578947, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.10526316, 0.10526316, 0.36842105, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.10526316, 0.10526316, 0.31578947, 0.78947368, 0.78947368]),
-    },
-    "5c": {
-        "z": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.89473684, 0.94736842]),
-    },
-    "5d": {
-        "z": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.42105263, 0.42105263, 0.63157895, 0.94736842, 0.94736842]),
-    },
-}
-
-
-OPTIMAL_SMOOTHING_COEFFS_4D = {
-    "2d": {
-        "z": jnp.array([0.3456, 0.7818, 0.6856, 0.7294, 0.6506, 0.5000, 0.6335]),
-        "t": jnp.array([0.1962, 0.5219, 0.5338, 0.5514, 0.6170, 0.5053, 0.6260]),
-        "a": jnp.array([0.4418, 0.5479, 0.5318, 0.3574, 0.3098, 0.0352, 0.9998]),
-        "x": jnp.array([0.4088, 0.5394, 0.5159, 0.5210, 0.6574, 0.5978, 0.6168]),
-        "s": jnp.array([0.4319, 0.5291, 0.5256, 0.5168, 0.6084, 0.5030, 0.6307]),
-    }
-}

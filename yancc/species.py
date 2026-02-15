@@ -5,13 +5,18 @@ from collections.abc import Callable
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from jax import config
 from jax.typing import ArrayLike
 from scipy.constants import Boltzmann, elementary_charge, epsilon_0, hbar, proton_mass
 
 from .field import Field
 
-JOULE_PER_EV = 11606 * Boltzmann
-EV_PER_JOULE = 1 / JOULE_PER_EV
+# need this here as well so that consts use 64 bit
+config.update("jax_enable_x64", True)
+
+
+JOULE_PER_EV = jnp.array(11606 * Boltzmann)
+EV_PER_JOULE = jnp.array(1 / JOULE_PER_EV)
 
 
 class Species(eqx.Module):
@@ -31,8 +36,8 @@ class Species(eqx.Module):
     charge: jax.Array
 
     def __init__(self, mass: ArrayLike, charge: ArrayLike):
-        self.mass = jnp.asarray(mass) * proton_mass
-        self.charge = jnp.asarray(charge) * elementary_charge
+        self.mass = (jnp.asarray(mass) * proton_mass).astype(jnp.float64)
+        self.charge = (jnp.asarray(charge) * elementary_charge).astype(jnp.float64)
 
 
 Electron = Species(1 / 1836.15267343, -1)
@@ -340,7 +345,9 @@ def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike 
     return Er / v / field.Bmag_fsa
 
 
-def nustar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
+def nustar(
+    species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0, *others: LocalMaxwellian
+):
     """Normalized collisionality ν* = ν R₀ /(v ι).
 
     Parameters
@@ -354,6 +361,6 @@ def nustar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     """
     x = jnp.asarray(x)
     v = x * species.v_thermal
-    nu = collisionality(species, v)
+    nu = collisionality(species, v, *others)
     nustar = field.R_major * nu / v / jnp.abs(field.iota)
     return nustar
