@@ -17,6 +17,7 @@ from .field import Field
 from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
+    dense_to_banded,
     lu_factor_banded_periodic,
     lu_solve_banded_periodic,
 )
@@ -234,7 +235,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         ).block_diagonal()
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, mats)
+            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -248,7 +250,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
             x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.mats, x)
+            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
         else:
             size, N, M = self.mats.shape
             x = x.reshape(size, M)
@@ -361,9 +363,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         )
 
         self.smooth_solver = smooth_solver
-        self.bandwidth = max(
-            fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
-        )
+        if self.axorder[-1] == "s":
+            self.bandwidth = len(self.species)
+        elif self.axorder[-1] == "x":
+            self.bandwidth = self.speedgrid.nx
+        else:
+            self.bandwidth = max(
+                fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+            )
+
         if weight is None:
             x = speedgrid.x
             nus = []
@@ -396,7 +404,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         ).block_diagonal()
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, mats)
+            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -412,7 +421,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
             x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.mats, x)
+            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
         else:
             size, N, M = self.mats.shape
             x = x.reshape(size, M)
