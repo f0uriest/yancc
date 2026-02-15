@@ -436,6 +436,7 @@ def gcrotmk(
     C: Optional[PyTree[ArrayLike]] = None,
     U: Optional[PyTree[ArrayLike]] = None,
     print_every: ArrayLike = False,
+    refine: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -518,7 +519,20 @@ def gcrotmk(
 
     def _solve(A, b):
         return _gcrotmk_solve(
-            A, b, x, ML.mv, MR.mv, rtol, atol, maxiter, m, k, C, U, print_every
+            A,
+            b,
+            x,
+            ML.mv,
+            MR.mv,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            C,
+            U,
+            print_every,
+            refine,
         )
 
     def _transpose_solve(At, b):
@@ -536,6 +550,7 @@ def gcrotmk(
             C,
             U,
             print_every,
+            refine,
         )
 
     x, (j_outer, nmv, res, C, U) = jax.lax.custom_linear_solve(
@@ -615,6 +630,7 @@ def _gcrotmk_solve(
     C,
     U,
     print_every,
+    refine,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -681,10 +697,31 @@ def _gcrotmk_solve(
         Hy = H.T @ y
         c = tree_map(lambda x: _dot(x, Hy), V)
 
-        x = _add(x, u)
-        r = _sub(b, matvec(x))
+        x1 = _add(x, u)
+        r1 = _sub(b, matvec(x1))
         nmv += 1
-        beta = _norm(r)
+        beta1 = _norm(r1)
+
+        def _refine(u, c, x, r, x1, r1, nmv, beta):
+            # if the inner solve suffers from roundoff error, u may not actually
+            # decrease the residual. In that case we do a simple line search
+            # to damp the update and ensure the residual doesn't increase.
+            Au = matvec(u)
+            damp = jnp.linalg.lstsq(Au[:, None], r)[0][0]
+            u = damp * u
+            c = damp * c
+            x = _add(x, u)
+            r = _sub(b, matvec(x))
+            beta = _norm(r)
+            nmv += 1
+            return u, c, x, r, nmv, beta
+
+        def _norefine(u, c, x, r, x1, r1, nmv, beta):
+            return u, c, x1, r1, nmv, beta
+
+        u, c, x, r, nmv, beta = jax.lax.cond(
+            refine & (beta1 > beta), _refine, _norefine, u, c, x, r, x1, r1, nmv, beta1
+        )
 
         # Normalize cx, maintaining cx = A ux
         # This new cx is orthogonal to the previous C, by construction
@@ -723,6 +760,7 @@ def lgmres(
     outer_v: Optional[PyTree[ArrayLike]] = None,
     outer_Av: Optional[PyTree[ArrayLike]] = None,
     print_every: ArrayLike = False,
+    refine: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -836,6 +874,7 @@ def lgmres(
             outer_v,
             outer_Av,
             print_every,
+            refine,
         )
 
     def _transpose_solve(At, b):
@@ -853,6 +892,7 @@ def lgmres(
             outer_v,
             outer_Av,
             print_every,
+            refine,
         )
 
     x, (j_outer, nmv, res, outer_v, outer_Av) = jax.lax.custom_linear_solve(
@@ -875,6 +915,7 @@ def _lgmres_solve(
     outer_v,
     outer_Av,
     print_every,
+    refine,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -944,20 +985,51 @@ def _lgmres_solve(
         # -- GMRES terminated: eval solution
         # dx = Z y
         dx = tree_map(lambda x: _dot(x, y), Z)
+        # ax = V H y
+        ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
+
+        # -- Apply step
+        x1 = _add(x, dx)
+        r1 = _sub(b, matvec(x1))
+        nmv += 1
+        beta1 = _norm(r1)
+
+        def _refine(dx, ax, x, r, x1, r1, nmv, beta):
+            # if the inner solve suffers from roundoff error, u may not actually
+            # decrease the residual. In that case we do a simple line search
+            # to damp the update and ensure the residual doesn't increase.
+            Adx = matvec(dx)
+            damp = jnp.linalg.lstsq(Adx[:, None], r)[0][0]
+            dx = damp * dx
+            ax = damp * ax
+            x = _add(x, dx)
+            r = _sub(b, matvec(x))
+            beta = _norm(r)
+            nmv += 1
+            return dx, ax, x, r, nmv, beta
+
+        def _norefine(dx, ax, x, r, x1, r1, nmv, beta):
+            return dx, ax, x1, r1, nmv, beta
+
+        dx, ax, x, r, nmv, beta = jax.lax.cond(
+            refine & (beta1 > beta),
+            _refine,
+            _norefine,
+            dx,
+            ax,
+            x,
+            r,
+            x1,
+            r1,
+            nmv,
+            beta1,
+        )
 
         # -- Store LGMRES augmentation vectors
         nx = _norm(dx)
-        # ax = V H y
-        ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
         outer_v = tree_map(_roll_prepend, outer_v, _mul(1 / nx, dx))
         outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
         lv = jnp.minimum(lv + 1, k)
-
-        # -- Apply step
-        x = _add(x, dx)
-        r = _sub(b, matvec(x))
-        nmv += 1
-        beta = _norm(r)
 
         _maybe_print(print_every < jnp.inf, j_outer + 1, beta / b_norm, pre="LGMRES  ")
 
