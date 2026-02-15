@@ -1984,55 +1984,81 @@ class DKE(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d0 = self._opx.diagonal()
-        d1 = self._opa.diagonal()
-        d2 = self._opt.diagonal()
-        d3 = self._opz.diagonal()
-        d4 = self._C.diagonal()
-        return (
-            self.operator_weights[0] * d0
-            + self.operator_weights[1] * d1
-            + self.operator_weights[2] * d2
-            + self.operator_weights[3] * d3
-            + d4
-            + self.operator_weights[-1] * jnp.ones_like(d0)
+        size = (
+            len(self.species)
+            * self.speedgrid.nx
+            * self.pitchgrid.nxi
+            * self.field.ntheta
+            * self.field.nzeta
         )
+        x = self.operator_weights[-1] * jnp.ones(size)
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self._opx.diagonal(),
+            lambda x: x + self.operator_weights[1] * self._opa.diagonal(),
+            lambda x: x + self.operator_weights[2] * self._opt.diagonal(),
+            lambda x: x + self.operator_weights[3] * self._opz.diagonal(),
+            # could just call C.diagonal() but we prefer to flatten those extra loops
+            lambda x: x + self.operator_weights[4] * self._C.CL.diagonal(),
+            lambda x: x + self.operator_weights[5] * self._C.CE.diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CD.diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CG.diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d0 = self._opx.block_diagonal()
-        d1 = self._opa.block_diagonal()
-        d2 = self._opt.block_diagonal()
-        d3 = self._opz.block_diagonal()
-        d4 = self._C.block_diagonal()
-        eye = jnp.broadcast_to(jnp.identity(d0.shape[1]), d0.shape)
-        return (
-            self.operator_weights[0] * d0
-            + self.operator_weights[1] * d1
-            + self.operator_weights[2] * d2
-            + self.operator_weights[3] * d3
-            + d4
-            + self.operator_weights[-1] * eye
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = self.operator_weights[-1] * jnp.broadcast_to(jnp.eye(n2), (n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self._opx.block_diagonal(),
+            lambda x: x + self.operator_weights[1] * self._opa.block_diagonal(),
+            lambda x: x + self.operator_weights[2] * self._opt.block_diagonal(),
+            lambda x: x + self.operator_weights[3] * self._opz.block_diagonal(),
+            # could just call C.diagonal() but we prefer to flatten those extra loops
+            lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal(),
+            lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CD.block_diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CG.block_diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CH.block_diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d0 = self._opx.block_diagonal2()
-        d1 = self._opa.block_diagonal2()
-        d2 = self._opt.block_diagonal2()
-        d3 = self._opz.block_diagonal2()
-        d4 = self._C.block_diagonal2()
-        eye = jnp.broadcast_to(jnp.identity(d0.shape[1]), d0.shape)
-        return (
-            self.operator_weights[0] * d0
-            + self.operator_weights[1] * d1
-            + self.operator_weights[2] * d2
-            + self.operator_weights[3] * d3
-            + d4
-            + self.operator_weights[-1] * eye
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nxi,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = self.operator_weights[-1] * jnp.broadcast_to(jnp.eye(n2), (n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self._opx.block_diagonal2(),
+            lambda x: x + self.operator_weights[1] * self._opa.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self._opt.block_diagonal2(),
+            lambda x: x + self.operator_weights[3] * self._opz.block_diagonal2(),
+            # could just call C.diagonal() but we prefer to flatten those extra loops
+            lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal2(),
+            lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal2(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CD.block_diagonal2(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CG.block_diagonal2(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
