@@ -339,8 +339,7 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 
     def cond(state):
         k, x, res0, res1 = state
-        # if nsteps > 0, go full # of iterations
-        # if nsteps < 0, do at least 1 but may stop early if residuals are increasing
+        # do at least 1 step but may stop early if residuals are increasing
         # note that this is just a heuristic. Residuals may increase even though error
         # decreases, but increasing residual can cause problems when used as a
         # preconditioner with GMRES.
