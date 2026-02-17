@@ -9,6 +9,21 @@ import scipy
 import yancc.linalg
 
 
+def _random_banded(p, q, n, rng, periodic=True):
+    A = np.diag(p + q + rng.random(n))  # make it diagonally dominant
+    for i in range(1, p + 1):
+        A += np.diag(rng.random(n - i), k=-i)
+    for i in range(1, q + 1):
+        A += np.diag(rng.random(n - i), k=i)
+
+    if periodic:
+        if q > 0:
+            A[-q:, 0] = q
+        if p > 0:
+            A[0, -p:] = p
+    return A
+
+
 def test_bordered_operator():
     """Test for BorderedOperator."""
     n, k = 5, 2
@@ -64,98 +79,106 @@ def test_tridiagonal():
     )
 
 
-@pytest.mark.parametrize(
-    "nr", [(n, r) for n in [1, 4, 8, 16] for r in np.arange(5) if r <= n]
-)
-def test_banded_to_dense(nr):
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [2, 5, 10])
+@pytest.mark.parametrize("periodic", [True, False])
+def test_banded_to_dense(p, q, n, periodic):
     """Test conversion between banded and dense formats."""
-    n, r = nr
-    p = r
-    q = r
     rng = np.random.default_rng(123)
 
-    A = np.diag(np.random.random(n))
-    for i in range(1, p + 1):
-        A += np.diag(np.random.random(n - i), k=-i)
-    for i in range(1, q + 1):
-        A += np.diag(np.random.random(n - i), k=i)
-
-    b = rng.random(n)
+    A = _random_banded(p, q, n, rng, periodic)
 
     C = yancc.linalg.dense_to_banded(p, q, A)
     B = yancc.linalg.banded_to_dense(p, q, C)
 
     np.testing.assert_allclose(A, B)
 
-    if n > 2 * r:
+    if not periodic:
+        b = rng.random(n)
         np.testing.assert_allclose(
-            yancc.linalg.banded_to_dense(
-                p, q, yancc.linalg.dense_to_banded(p, q, A, True), True
-            ),
-            A,
+            scipy.linalg.solve_banded((p, q), C, b), np.linalg.solve(B, b)
         )
-    np.testing.assert_allclose(
-        yancc.linalg.banded_to_dense(p, q, yancc.linalg.dense_to_banded(p, q, B)), B
-    )
-    np.testing.assert_allclose(
-        scipy.linalg.solve_banded((p, q), C, b), np.linalg.solve(B, b)
-    )
 
 
 def test_lu_factor_banded():
     """Test that LU is the same without pivoting for diagonally dominance matrix."""
     rng = np.random.default_rng(123)
-
-    A = (
-        np.diag(rng.random(8), k=-2)
-        + np.diag(rng.random(8), k=2)
-        + np.diag(rng.random(9), k=-1)
-        + np.diag(rng.random(9), k=1)
-        + np.diag(3 + rng.random(10), k=0)
-    )
+    A = _random_banded(2, 2, 10, rng, False)
     B = yancc.linalg.dense_to_banded(2, 2, A)
     lu1 = scipy.linalg.lu_factor(A)[0]
     lu2 = yancc.linalg.lu_factor_banded(2, 2, B)
     np.testing.assert_allclose(lu1, yancc.linalg.banded_to_dense(2, 2, lu2))
 
 
-@pytest.mark.parametrize(
-    "nr", [(n, r) for n in [1, 4, 8, 16] for r in np.arange(5) if r <= n]
-)
-def test_solve_banded(nr):
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [2, 5, 10])  # need n > max(p,q)
+def test_solve_banded(p, q, n):
     """Test solving regular banded system."""
-    n, r = nr
-    p = r
-    q = r
     rng = np.random.default_rng(123)
-
-    A = 0.5 - rng.random((p + q + 1, n))
+    A = _random_banded(p, q, n, rng, False)
+    a = yancc.linalg.dense_to_banded(p, q, A)
     b = rng.random(n)
-
-    np.testing.assert_allclose(
-        scipy.linalg.solve_banded((p, q), A, b), yancc.linalg.solve_banded(p, q, A, b)
-    )
+    x = yancc.linalg.solve_banded(p, q, a, b)
+    np.testing.assert_allclose(yancc.linalg.banded_mv(p, q, a, x), b)
 
 
-@pytest.mark.parametrize(
-    "nr", [(n, r) for n in [1, 4, 8, 16] for r in np.arange(5) if r <= n]
-)
-def test_solve_banded_periodic(nr):
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [2, 5, 10])  # need n > max(p,q)
+@pytest.mark.parametrize("periodic", [True, False])
+def test_solve_banded_periodic(p, q, n, periodic):
     """Test solving periodic banded system."""
-    n, r = nr
     rng = np.random.default_rng(123)
-    A = np.diag(np.random.random(n))
-    for i in range(1, r + 1):
-        A += np.diag(np.random.random(n - i), k=-i)
-    for i in range(1, r + 1):
-        A += np.diag(np.random.random(n - i), k=i)
-    if r > 0:
-        F = np.triu(np.random.random((r, r)))
-        G = np.tril(np.random.random((r, r)))
-        A[:r, -r:] = F
-        A[-r:, :r] = G
+    A = _random_banded(p, q, n, rng, periodic)
+    a = yancc.linalg.dense_to_banded(p, q, A)
     b = rng.random(n)
 
-    x = yancc.linalg.solve_banded_periodic(r, A, b)
+    x = yancc.linalg.solve_banded_periodic(p, q, a, b)
     np.testing.assert_allclose(A @ x, b)
     np.testing.assert_allclose(x, np.linalg.solve(A, b))
+
+
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [2, 5, 10])  # need n > max(p,q)
+@pytest.mark.parametrize("periodic", [True, False])
+def test_banded_mv(p, q, n, periodic):
+    """Test for banded matrix vector multiply."""
+    rng = np.random.default_rng(123)
+    A = _random_banded(p, q, n, rng, periodic)
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    x = rng.random(n)
+    np.testing.assert_allclose(A @ x, yancc.linalg.banded_mv(p, q, a, x))
+
+
+@pytest.mark.parametrize("p", [(0, 0), (0, 1), (2, 2)])
+@pytest.mark.parametrize("q", [(0, 0), (1, 0), (1, 1)])
+@pytest.mark.parametrize("n", [2, 4, 10])  # need n > max(p,q)
+@pytest.mark.parametrize("periodic", [True, False])
+def test_banded_mm(p, q, n, periodic):
+    """Test for banded matrix matrix multiply."""
+    rng = np.random.default_rng(123)
+    p1, p2 = p
+    q1, q2 = q
+    A = _random_banded(p1, q1, n, rng, periodic)
+    B = _random_banded(p2, q2, n, rng, periodic)
+    a = yancc.linalg.dense_to_banded(p1, q1, A)
+    b = yancc.linalg.dense_to_banded(p2, q2, B)
+    c, pc, qc = yancc.linalg.banded_mm(p1, q1, p2, q2, a, b)
+    C = yancc.linalg.banded_to_dense(int(pc), int(qc), c)
+    np.testing.assert_allclose(A @ B, C)
+
+
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [2, 5, 10])  # need n > max(p,q)
+@pytest.mark.parametrize("periodic", [True, False])
+def test_banded_transpose(p, q, n, periodic):
+    """Test for banded matrix transpose."""
+    rng = np.random.default_rng(123)
+    A = _random_banded(p, q, n, rng, periodic)
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    at, pt, qt = yancc.linalg.banded_transpose(p, q, a)
+    np.testing.assert_allclose(A.T, yancc.linalg.banded_to_dense(int(pt), int(qt), at))
