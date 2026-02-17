@@ -330,6 +330,49 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
+    """Apply smoothing operators to operator @ x = rhs"""
+    if not isinstance(smoothers, (tuple, list)):
+        smoothers = [smoothers]
+
+    res0 = res1 = jnp.linalg.norm(rhs - operator.mv(x))
+
+    def cond(state):
+        k, x, res0, res1 = state
+        # if nsteps > 0, go full # of iterations
+        # if nsteps < 0, do at least 1 but may stop early if residuals are increasing
+        # note that this is just a heuristic. Residuals may increase even though error
+        # decreases, but increasing residual can cause problems when used as a
+        # preconditioner with GMRES.
+        return (k < jnp.abs(nsteps)) & (res1 <= res0)
+
+    def body(state):
+        k, x, res0, res1 = state
+        r = jnp.zeros_like(x)
+        for i, Mi in enumerate(smoothers):
+            Ax = operator.mv(x)
+            r = rhs - Ax
+            dx = Mi.mv(r)
+            x += dx
+            if verbose:
+                r = rhs - operator.mv(x)
+                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+                jax.debug.print(
+                    "v={k} after {a} err: {err:.3e}",
+                    err=err,
+                    k=k,
+                    a=Mi.axorder,
+                    ordered=True,
+                )
+        res0 = res1
+        res1 = jnp.linalg.norm(r)
+        return k + 1, x, res0, res1
+
+    _, x, _, _ = jax.lax.while_loop(cond, body, (0, x, res0, res1))
+    return x
+
+
+@functools.partial(jax.jit, static_argnames=["verbose"])
 def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
     if not isinstance(smoothers, (tuple, list)):
@@ -700,6 +743,7 @@ def _multigrid_cycle_recursive(
 
     smooth = {
         "standard": standard_smooth,
+        "adaptive": adpative_smooth,
         "krylov1": krylov1_smooth,
         "krylov1s": krylov1s_smooth,
         "krylov2": krylov2_smooth,
