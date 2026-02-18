@@ -310,6 +310,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -333,6 +335,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -348,6 +351,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p1="2d",
         p2=2,
@@ -362,6 +366,9 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -399,7 +406,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             x = speedgrid.x
             nus = []
             for i, spa in enumerate(species):
-                others = species[:i] + species[i + 1 :]
+                others = species[:i] + species[i + 1 :] + background
                 nu = nustar(spa, field, x, *others)
                 nus.append(nu)
             nus = jnp.asarray(nus)
@@ -418,6 +425,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             speedgrid,
             species,
             Erho,
+            background=background,
             potentials=potentials,
             p1=p1,
             p2=p2,
@@ -502,6 +510,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -525,6 +535,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -540,6 +551,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p1="2d",
         p2=2,
@@ -555,6 +567,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -567,7 +582,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             x = speedgrid.x
             nus = []
             for i, spa in enumerate(species):
-                others = species[:i] + species[i + 1 :]
+                others = species[:i] + species[i + 1 :] + background
                 nu = nustar(spa, field, x, *others)
                 nus.append(nu)
             nus = jnp.asarray(nus)
@@ -582,6 +597,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             speedgrid,
             species,
             Erho,
+            background=background,
             potentials=potentials,
             p1=p1,
             p2=p2,
@@ -786,11 +802,11 @@ def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
     return jnp.clip(w, 0.1, 1.0)
 
 
-def optimal_smoothing_parameter_4d(p1, p2, nuhat, ax):
+def optimal_smoothing_parameter_4d(p1, p2, nustar, ax):
     """Approximate best relaxation parameter for block jacobi smoother for DKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
     nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
-    nu = jnp.log10(nuhat)
+    nu = jnp.log10(nustar)
     if method not in OPTIMAL_SMOOTHING_COEFFS_4D:
         warnings.warn(
             f"No optimal smoothing parameter for stencil={method}, using "

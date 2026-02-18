@@ -2009,6 +2009,8 @@ class DKE(lx.AbstractLinearOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
     axorder : {"atz", "zat", "tza"}
@@ -2026,6 +2028,7 @@ class DKE(lx.AbstractLinearOperator):
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     Erho: Float[Array, ""]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -2044,6 +2047,7 @@ class DKE(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p1: str = "4d",
         p2: int = 4,
@@ -2059,6 +2063,9 @@ class DKE(lx.AbstractLinearOperator):
         if potentials is None:
             potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
+        if background is None:
+            background = []
+        self.background = background
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
@@ -2086,6 +2093,7 @@ class DKE(lx.AbstractLinearOperator):
             pitchgrid,
             speedgrid,
             species,
+            background,
             potentials,
             p2,
             axorder,

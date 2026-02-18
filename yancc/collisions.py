@@ -571,6 +571,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     p2 : int
         Order of approximation for second derivatives.
     axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
@@ -581,6 +583,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -592,6 +595,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
+        background: Optional[list[LocalMaxwellian]] = None,
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
@@ -601,6 +605,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
@@ -608,7 +615,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         x = speedgrid.x
         for spa in species:
             nu = 0.0
-            for spb in species:
+            for spb in species + background:
                 nu += nuD_ab(spa, spb, x * spa.v_thermal)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
@@ -869,6 +876,8 @@ class EnergyScattering(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         Ordering for variables in f, eg how the 5d array is flattened
     """
@@ -877,6 +886,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     coeff0: jax.Array
@@ -889,6 +899,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
+        background: Optional[list[LocalMaxwellian]] = None,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
@@ -897,6 +908,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         coeff0 = []
@@ -910,7 +924,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             term0 = 0.0
             term1 = 0.0
             term2 = 0.0
-            for spb in species:
+            for spb in species + background:
                 nupar = nupar_ab(spa, spb, v)
                 nuD = nuD_ab(spa, spb, v)
                 gamma = gamma_ab(spa, spb)
@@ -2493,6 +2507,8 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
     p2 : int
@@ -2506,6 +2522,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -2521,6 +2538,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p2: int = 4,
         axorder: str = "sxatz",
@@ -2532,6 +2550,9 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         if potentials is None:
             potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
@@ -2543,9 +2564,11 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.operator_weights = jnp.asarray(operator_weights)
 
         self.CL = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species, p2, axorder, gauge
+            field, pitchgrid, speedgrid, species, background, p2, axorder, gauge
         )
-        self.CE = EnergyScattering(field, pitchgrid, speedgrid, species, axorder, gauge)
+        self.CE = EnergyScattering(
+            field, pitchgrid, speedgrid, species, background, axorder, gauge
+        )
         self.CF = FieldParticleScattering(
             field, pitchgrid, speedgrid, species, potentials, axorder, gauge
         )
