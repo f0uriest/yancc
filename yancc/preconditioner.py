@@ -1,6 +1,6 @@
 """Stuff for preconditioners."""
 
-from typing import Union
+from typing import Optional, Union
 
 import equinox as eqx
 import jax
@@ -165,13 +165,14 @@ def _(operator):
 
 
 class DKEPreconditioner(MultigridOperator):
-    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+    """Preconditioner for the DKE."""
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
 
@@ -182,6 +183,7 @@ class DKEPreconditioner(MultigridOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]],
         potentials: RosenbluthPotentials,
         verbose: Union[bool, int] = False,
         **options,
@@ -191,6 +193,9 @@ class DKEPreconditioner(MultigridOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.Erho = jnp.asarray(Erho)
 
         self.p1 = options.pop("p1", "2d")
@@ -240,6 +245,7 @@ class DKEPreconditioner(MultigridOperator):
             speedgrid=speedgrid,
             species=species,
             Erho=Erho,
+            background=background,
             potentials=potentials,
             p1=self.p1,
             p2=self.p2,
@@ -254,6 +260,7 @@ class DKEPreconditioner(MultigridOperator):
                 speedgrid=speedgrid,
                 species=species,
                 Erho=Erho,
+                background=background,
                 potentials=potentials,
                 p1=self.p1,
                 p2=self.p2,
@@ -270,6 +277,7 @@ class DKEPreconditioner(MultigridOperator):
                 speedgrid=speedgrid,
                 species=species,
                 Erho=Erho,
+                background=background,
                 potentials=potentials,
                 p1=self.p1,
                 p2=self.p2,
@@ -309,6 +317,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
+    background: list[LocalMaxwellian]
     M: MultigridOperator
     vs: jax.Array
 
@@ -319,6 +328,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         **options,
     ):
 
@@ -326,18 +336,22 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        background = background
         self.Erho = jnp.asarray(Erho)
 
         Ers = []
         nus = []
         vs = []
-        for spec in species:
+        for i, spec in enumerate(species):
             temp_nu = []
             temp_Er = []
             temp_vs = []
+            others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
-                nu = collisionality(spec, v, *species)
+                nu = collisionality(spec, v, *others)
                 Erhat = Erho / v
                 nuhat = nu / v
                 temp_Er.append(Erhat)
