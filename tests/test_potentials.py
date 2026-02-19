@@ -1,5 +1,6 @@
 """Tests for computing Rosenbluth potentials."""
 
+import jax
 import jax.numpy as jnp
 import mpmath
 import numpy as np
@@ -149,19 +150,39 @@ def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
 
 
 @np.vectorize
-def mplGammainc(s, x):
+def mplGammainc(s, x, cast=True):
     f = mpmath.gammainc(s, 0, x)
     s = mpmath.sign(f)
     lf = mpmath.log(mpmath.fabs(f))
-    return int(s), float(lf)
+    if cast:
+        return int(s), float(lf)
+    return s, lf
 
 
 @np.vectorize
-def mplGammaincc(s, x):
+def mplGammaincc(s, x, cast=True):
     f = mpmath.gammainc(s, x, mpmath.inf)
     s = mpmath.sign(f)
     lf = mpmath.log(mpmath.fabs(f))
-    return int(s), float(lf)
+    if cast:
+        return int(s), float(lf)
+    return s, lf
+
+
+@np.vectorize
+def mpdlGammainc(s, x):
+    h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
+    f1 = mplGammainc(s, x + h, False)[1]
+    f2 = mplGammainc(s, x - h, False)[1]
+    return int(0), float((f1 - f2) / h / 2)
+
+
+@np.vectorize
+def mpdlGammaincc(s, x):
+    h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
+    f1 = mplGammaincc(s, x + h, False)[1]
+    f2 = mplGammaincc(s, x - h, False)[1]
+    return int(0), float((f1 - f2) / h / 2)
 
 
 def test_lower_Gamma():
@@ -173,8 +194,39 @@ def test_lower_Gamma():
 
     s1, f1 = lGammainc(s, x0**2)
     s2, f2 = mplGammainc(s, x0**2)
-    np.testing.assert_allclose(f1, f2, rtol=1e-10, atol=1e-10)
+    rtol = 1e-12
+    atol = 1e-12
+    mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
+    np.testing.assert_allclose(
+        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+    )
     assert np.all(s1 == s2)
+
+
+def test_lower_Gamma_derivative():
+    """Test derivative rule for lower incomplete gamma."""
+    l = np.arange(7)[:, None, None]
+    k = np.arange(11)[None, :, None]
+    x0 = np.logspace(-4, 3, 50)[None, None, :]
+    s = l / 2 + k / 2 + 5 / 2  # for I_4
+
+    s, x0 = np.broadcast_arrays(s, x0)
+
+    sf, ff = jnp.vectorize(jax.jacfwd(lGammainc, 1))(s, x0**2)
+    sr, fr = jnp.vectorize(jax.jacrev(lGammainc, 1))(s, x0**2)
+    s2, f2 = mpdlGammainc(s, x0**2)
+    rtol = 1e-12
+    atol = 1e-12
+    mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
+    np.testing.assert_allclose(
+        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+    )
+    mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
+    np.testing.assert_allclose(
+        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+    )
+    assert np.all(sf == s2)
+    assert np.all(sr == s2)
 
 
 def test_upper_Gamma():
@@ -184,10 +236,43 @@ def test_upper_Gamma():
     x0 = np.logspace(-4, 3, 50)[None, None, :]
     s = -l / 2 + k / 2 + 1  # for I_1
 
+    s, x0 = np.broadcast_arrays(s, x0)
+
     s1, f1 = lGammaincc(s, x0**2)
     s2, f2 = mplGammaincc(s, x0**2)
-    np.testing.assert_allclose(f1, f2, rtol=5e-8, atol=5e-8)
+    rtol = 5e-8
+    atol = 5e-8
+    mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
+    np.testing.assert_allclose(
+        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+    )
     assert np.all(s1 == s2)
+
+
+def test_upper_Gamma_derivative():
+    """Test derivative rule for upper incomplete gamma."""
+    l = np.arange(7)[:, None, None]
+    k = np.arange(11)[None, :, None]
+    x0 = np.logspace(-4, 3, 50)[None, None, :]
+    s = -l / 2 + k / 2 + 1  # for I_1
+
+    s, x0 = np.broadcast_arrays(s, x0)
+
+    sf, ff = jnp.vectorize(jax.jacfwd(lGammaincc, 1))(s, x0**2)
+    sr, fr = jnp.vectorize(jax.jacrev(lGammaincc, 1))(s, x0**2)
+    s2, f2 = mpdlGammaincc(s, x0**2)
+    rtol = 5e-7
+    atol = 5e-7
+    mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
+    np.testing.assert_allclose(
+        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+    )
+    mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
+    np.testing.assert_allclose(
+        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+    )
+    assert np.all(sf == s2)
+    assert np.all(sr == s2)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
