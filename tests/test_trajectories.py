@@ -316,9 +316,9 @@ def test_diagonals_dke_full(
         speedgrid,
         species2,
         Erho,
-        potentials2,
-        "2d",
-        4,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
         axorder=axorder,
         gauge=gauge,
     )
@@ -338,9 +338,9 @@ def test_diagonals_dke_full(
         speedgrid,
         species2,
         Erho,
-        potentials2,
-        "2d",
-        4,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
         axorder=axorder,
         gauge=gauge,
         operator_weights=jnp.ones(8).at[-2:].set(0),
@@ -712,12 +712,61 @@ def test_diagonals2_dke_full(
         speedgrid,
         species2,
         Erho,
-        potentials2,
-        "2d",
-        4,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
         axorder=axorder,
         gauge=gauge,
     )
     A = f.as_matrix()
     B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("weight", [0, 1])
+def test_background_species(field, pitchgrid, speedgrid, species2, gauge, weight):
+    """Test that background species are included correctly."""
+    # first we get the full 2 species DKE operator
+    operator_weights = jnp.ones(8).at[-1].set(0).at[-2].set(weight)
+    Erho = jnp.array(1e3)
+    Aboth = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        gauge=gauge,
+        operator_weights=operator_weights,
+    )
+    # then single species w/ other as background
+    Ai = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        [species2[0]],
+        Erho,
+        [species2[1]],
+        gauge=gauge,
+        operator_weights=operator_weights,
+    )
+    Ae = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        [species2[1]],
+        Erho,
+        [species2[0]],
+        gauge=gauge,
+        operator_weights=operator_weights,
+    )
+    Aboth = Aboth.as_matrix()
+    Ai = Ai.as_matrix()
+    Ae = Ae.as_matrix()
+    # the diagonal blocks of the full operator should be the same as the single species
+    # operators with the background included
+    n = Aboth.shape[0] // 2
+    Aboth_i = Aboth[:n, :n]
+    Aboth_e = Aboth[n:, n:]
+    np.testing.assert_allclose(Ai, Aboth_i)
+    np.testing.assert_allclose(Ae, Aboth_e)

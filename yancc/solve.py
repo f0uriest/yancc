@@ -189,6 +189,7 @@ def solve_dke(
     species: list[LocalMaxwellian],
     Erho: Union[float, Float[Any, ""]],
     EparB: Union[float, Float[Any, ""]] = 0.0,
+    background: Optional[list[LocalMaxwellian]] = None,
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
     **options,
@@ -209,6 +210,9 @@ def solve_dke(
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     EparB : float
         <E||B>, flux surface average of parallel electric field times B.
+    background : list[LocalMaxwellian]
+        Additional background species to include in the collision operator without
+        solving for df.
     verbose: bool, int
         Level of verbosity:
           - 0: no into printed.
@@ -274,8 +278,11 @@ def solve_dke(
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
+    if background is None:
+        background = []
+
     if verbose and not skip_init_print:
-        _print_species_summary(species, field, speedgrid)
+        _print_species_summary(species, field, speedgrid, background)
         _print_er_summary(species, field, Erho)
 
     if potentials is None:
@@ -291,6 +298,7 @@ def solve_dke(
         multigrid_options.setdefault("pitchgrid", pitchgrid)
         multigrid_options.setdefault("speedgrid", speedgrid)
         multigrid_options.setdefault("species", species)
+        multigrid_options.setdefault("background", background)
         multigrid_options.setdefault("Erho", Erho)
         multigrid_options.setdefault("potentials", potentials)
         multigrid_options.setdefault("gauge", True)
@@ -311,6 +319,7 @@ def solve_dke(
         speedgrid=speedgrid,
         species=species,
         Erho=Erho,
+        background=background,
         potentials=potentials,
         p1=p1,
         p2=p2,
@@ -386,7 +395,7 @@ def solve_dke(
     )
 
 
-def _print_species_summary(species, field, speedgrid):
+def _print_species_summary(species, field, speedgrid, background):
     for si, spec in enumerate(species):
         jax.debug.print(
             "Species {si}:  "
@@ -401,8 +410,9 @@ def _print_species_summary(species, field, speedgrid):
             temp=spec.temperature,
             ordered=True,
         )
+        others = species[:si] + species[si + 1 :] + background
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
-        nustars = nustar(spec, field, tempx)
+        nustars = nustar(spec, field, tempx, *others)
         for nu, x in zip(nustars, tempx):
             jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
 

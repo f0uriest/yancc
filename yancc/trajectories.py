@@ -861,7 +861,7 @@ class DKETheta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -903,7 +903,7 @@ class DKETheta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -961,16 +961,16 @@ class DKETheta(lx.AbstractLinearOperator):
         bd = jax.jacfwd(fdbwd)(f, self.p1, h=h, bc="periodic")
         fd = dense_to_banded(bw, bw, fd)
         bd = dense_to_banded(bw, bw, bd)
-        w = jnp.moveaxis(w, 3, -1)[..., None, :]
-        wf = w * (w <= 0)
-        wb = w * (w > 0)
+        w1 = jnp.moveaxis(w, 3, -1)[..., None, :]
+        wf = w1 * (w1 <= 0)
+        wb = w1 * (w1 > 0)
         dff, _, _ = banded_mm(0, 0, bw, bw, wf, fd)
         dfb, _, _ = banded_mm(0, 0, bw, bw, wb, bd)
         df = dff + dfb
 
         idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
         bandwidth = 2 * bw + 1
         # 1. Band indices cover the entire bandwidth
@@ -978,7 +978,8 @@ class DKETheta(lx.AbstractLinearOperator):
         # 2. Column indices for row 0, using modulo to wrap the periodic corners!
         cols = (bw - bands) % self.field.ntheta
         # 3. Create the replacement values: zeros with 'scale' on the main diagonal
-        vals = jnp.zeros(bandwidth).at[bw].set(scale)
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
+        vals = scale[:, :, None] * basis[None, None, :]
         # 4. Reshape indices for orthogonal broadcasting across dimensions
         idxx_mesh = idxx[:, None]
         idxa_mesh = idxa[:, None]
@@ -1040,9 +1041,9 @@ class DKETheta(lx.AbstractLinearOperator):
         ff = functools.reduce(jnp.kron, ff)
         bb = functools.reduce(jnp.kron, bb)
 
-        w = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
-        w = w.reshape(w.shape[0] * w.shape[1], -1, 1)
-        df = w * ((w > 0) * bb + (w <= 0) * ff)
+        w1 = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
+        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
+        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
         df = df.reshape(*shape, self.field.ntheta, len(self.species), self.speedgrid.nx)
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
         idxa = self.pitchgrid.nxi // 2
@@ -1051,7 +1052,7 @@ class DKETheta(lx.AbstractLinearOperator):
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
         idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
 
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[idxs, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
@@ -1191,7 +1192,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -1233,7 +1234,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -1291,24 +1292,24 @@ class DKEZeta(lx.AbstractLinearOperator):
         bd = jax.jacfwd(fdbwd)(f, self.p1, h=h, bc="periodic")
         fd = dense_to_banded(bw, bw, fd)
         bd = dense_to_banded(bw, bw, bd)
-        w = jnp.moveaxis(w, 4, -1)[..., None, :]
-        wf = w * (w <= 0)
-        wb = w * (w > 0)
+        w1 = jnp.moveaxis(w, 4, -1)[..., None, :]
+        wf = w1 * (w1 <= 0)
+        wb = w1 * (w1 > 0)
         dff, _, _ = banded_mm(0, 0, bw, bw, wf, fd)
         dfb, _, _ = banded_mm(0, 0, bw, bw, wb, bd)
         df = dff + dfb
 
         idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
-
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         bandwidth = 2 * bw + 1
         # 1. Band indices cover the entire bandwidth
         bands = jnp.arange(bandwidth)
         # 2. Column indices for row 0, using modulo to wrap the periodic corners!
         cols = (bw - bands) % self.field.nzeta
         # 3. Create the replacement values: zeros with 'scale' on the main diagonal
-        vals = jnp.zeros(bandwidth).at[bw].set(scale)
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
+        vals = scale[:, :, None] * basis[None, None, :]
         # 4. Reshape indices for orthogonal broadcasting across dimensions
         idxx_mesh = idxx[:, None]
         idxa_mesh = idxa[:, None]
@@ -1369,9 +1370,9 @@ class DKEZeta(lx.AbstractLinearOperator):
         ff = functools.reduce(jnp.kron, ff)
         bb = functools.reduce(jnp.kron, bb)
 
-        w = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
-        w = w.reshape(w.shape[0] * w.shape[1], -1, 1)
-        df = w * ((w > 0) * bb + (w <= 0) * ff)
+        w1 = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
+        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
+        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
         df = df.reshape(*shape, self.field.nzeta, len(self.species), self.speedgrid.nx)
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
         idxa = self.pitchgrid.nxi // 2
@@ -1380,7 +1381,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
         idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
 
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[idxs, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
@@ -1520,7 +1521,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -1562,7 +1563,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -1620,16 +1621,16 @@ class DKEPitch(lx.AbstractLinearOperator):
         bd = jax.jacfwd(fdbwd)(f, self.p1, h=h, bc="symmetric")
         fd = dense_to_banded(bw, bw, fd)
         bd = dense_to_banded(bw, bw, bd)
-        w = jnp.moveaxis(w, 2, -1)[..., None, :]
-        wf = w * (w <= 0)
-        wb = w * (w > 0)
+        w1 = jnp.moveaxis(w, 2, -1)[..., None, :]
+        wf = w1 * (w1 <= 0)
+        wb = w1 * (w1 > 0)
         dff, _, _ = banded_mm(0, 0, bw, bw, wf, fd)
         dfb, _, _ = banded_mm(0, 0, bw, bw, wb, bd)
         df = dff + dfb
 
         idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
         bandwidth = 2 * bw + 1
         # 1. Band indices cover the entire bandwidth
@@ -1638,7 +1639,8 @@ class DKEPitch(lx.AbstractLinearOperator):
         # idxa is (M,), bands is (bandwidth,). This broadcasts to shape (M, bandwidth)
         cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nxi
         # 3. Create the replacement values: zeros with 'scale' on the main diagonal
-        vals = jnp.zeros(bandwidth).at[bw].set(scale)
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
+        vals = scale[:, :, None] * basis[None, None, :]
         # 4. Reshape indices for orthogonal broadcasting across dimensions
         idxx_mesh = idxx[:, None]
         bands_mesh = bands[None, :]
@@ -1693,9 +1695,9 @@ class DKEPitch(lx.AbstractLinearOperator):
         ff = functools.reduce(jnp.kron, ff)
         bb = functools.reduce(jnp.kron, bb)
 
-        w = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
-        w = w.reshape(w.shape[0] * w.shape[1], -1, 1)
-        df = w * ((w > 0) * bb + (w <= 0) * ff)
+        w1 = jnp.moveaxis(w, (0, 1, 2, 3, 4), caxorder)
+        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
+        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
         df = df.reshape(
             *shape, self.pitchgrid.nxi, len(self.species), self.speedgrid.nx
         )
@@ -1706,7 +1708,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
         idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
 
-        scale = jnp.mean(jnp.abs(w)) / h
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[idxs, idxx] / h
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
@@ -1827,7 +1829,9 @@ class DKESpeed(lx.AbstractLinearOperator):
         df = w * df
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
+            self.speedgrid.wx
+        )
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -1861,7 +1865,9 @@ class DKESpeed(lx.AbstractLinearOperator):
         df = w * df
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
+            self.speedgrid.wx
+        )
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
@@ -1916,11 +1922,13 @@ class DKESpeed(lx.AbstractLinearOperator):
             self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
         )
         df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
-        w = w[:, :, :, :, :, None]
-        df = w * df
+        w1 = w[:, :, :, :, :, None]
+        df = w1 * df
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w)) / jnp.mean(self.speedgrid.wx)
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
+            self.speedgrid.wx
+        )
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :]
@@ -2001,6 +2009,8 @@ class DKE(lx.AbstractLinearOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
     axorder : {"atz", "zat", "tza"}
@@ -2018,6 +2028,7 @@ class DKE(lx.AbstractLinearOperator):
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     Erho: Float[Array, ""]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -2036,6 +2047,7 @@ class DKE(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p1: str = "4d",
         p2: int = 4,
@@ -2051,6 +2063,9 @@ class DKE(lx.AbstractLinearOperator):
         if potentials is None:
             potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
+        if background is None:
+            background = []
+        self.background = background
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
@@ -2078,6 +2093,7 @@ class DKE(lx.AbstractLinearOperator):
             pitchgrid,
             speedgrid,
             species,
+            background,
             potentials,
             p2,
             axorder,
