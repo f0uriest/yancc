@@ -109,7 +109,6 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
             self.gauge,
             df.at[idx, 0, 0].set(
                 scale * f[idx, 0, 0],
-                indices_are_sorted=True,
                 unique_indices=True,
             ),
             df,
@@ -146,7 +145,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         scale = self.nuhat / h**2
         df = jnp.where(
             self.gauge,
-            df.at[idx, 0, 0].set(scale, indices_are_sorted=True, unique_indices=True),
+            df.at[idx, 0, 0].set(scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
@@ -185,9 +184,9 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
+            .set(0, unique_indices=True)
             .at[idx, 0, 0, idx]
-            .set(scale, indices_are_sorted=True, unique_indices=True),
+            .set(scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
@@ -268,16 +267,16 @@ class RosenbluthPotentials(eqx.Module):
                 # ddG is in normalized units, needs to be scaled by vb^4
                 # but ddG is dG/dx^2, want dG/dv^2 so gives extra factor of 1/vb^2
                 self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(
-                    ddG * vb**2, indices_are_sorted=True, unique_indices=True
+                    ddG * vb**2, unique_indices=True
                 )
                 # dH is in normalized units, needs to be scaled by vb^2
                 # but dH is dH/dx, want dH/dv so gives extra factor of 1/vb
                 self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(
-                    dH * vb, indices_are_sorted=True, unique_indices=True
+                    dH * vb, unique_indices=True
                 )
                 # H is in normalized units, needs to be scaled by vb^2
                 self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(
-                    H * vb**2, indices_are_sorted=True, unique_indices=True
+                    H * vb**2, unique_indices=True
                 )
 
     @eqx.filter_jit
@@ -393,11 +392,7 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand1(self, z, l, k):
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         return (
             z ** (-l + 1)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -407,11 +402,7 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand2(self, z, l, k):
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         return (
             z ** (l + 2)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -421,11 +412,7 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand3(self, z, l, k):
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         return (
             z ** (-l + 3)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -435,11 +422,7 @@ class RosenbluthPotentials(eqx.Module):
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
     def _integrand4(self, z, l, k):
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         return (
             z ** (l + 4)
             * orthax.orthval(z, c, self.speedgrid.xrec)
@@ -461,11 +444,7 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammaincc(-l / 2 + n / 2 + 1, x**2)
@@ -487,11 +466,7 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammainc(l / 2 + n / 2 + 3 / 2, x**2)
@@ -513,11 +488,7 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammaincc(-l / 2 + n / 2 + 2, x**2)
@@ -539,11 +510,7 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = (
-            jnp.zeros(self.speedgrid.nx)
-            .at[k]
-            .set(1, indices_are_sorted=True, unique_indices=True)
-        )
+        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
         p = orthax.orth2poly(c, self.speedgrid.xrec)
         n = jnp.arange(self.speedgrid.nx)
         sgn, lg = lGammainc(l / 2 + n / 2 + 5 / 2, x**2)
@@ -604,6 +571,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     p2 : int
         Order of approximation for second derivatives.
     axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
@@ -614,6 +583,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
@@ -625,6 +595,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
+        background: Optional[list[LocalMaxwellian]] = None,
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
@@ -634,6 +605,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
@@ -641,7 +615,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         x = speedgrid.x
         for spa in species:
             nu = 0.0
-            for spb in species:
+            for spb in species + background:
                 nu += nuD_ab(spa, spb, x * spa.v_thermal)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
@@ -678,7 +652,6 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
                 scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
                 unique_indices=True,
             ),
             df,
@@ -719,9 +692,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         scale = self.nus[:, idxx] / h**2
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                scale, indices_are_sorted=True, unique_indices=True
-            ),
+            df.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -846,9 +817,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
+            .set(0, unique_indices=True)
             .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-            .set(scale, indices_are_sorted=True, unique_indices=True),
+            .set(scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -905,6 +876,8 @@ class EnergyScattering(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         Ordering for variables in f, eg how the 5d array is flattened
     """
@@ -913,6 +886,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     coeff0: jax.Array
@@ -925,6 +899,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
+        background: Optional[list[LocalMaxwellian]] = None,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
@@ -933,6 +908,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         coeff0 = []
@@ -946,7 +924,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             term0 = 0.0
             term1 = 0.0
             term2 = 0.0
-            for spb in species:
+            for spb in species + background:
                 nupar = nupar_ab(spa, spb, v)
                 nuD = nuD_ab(spa, spb, v)
                 gamma = gamma_ab(spa, spb)
@@ -998,7 +976,6 @@ class EnergyScattering(lx.AbstractLinearOperator):
             self.gauge,
             out.at[:, idxx, idxa, 0, 0].set(
                 scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
                 unique_indices=True,
             ),
             out,
@@ -1038,9 +1015,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         )
         out = jnp.where(
             self.gauge,
-            out.at[:, idxx, idxa, 0, 0].set(
-                scale, indices_are_sorted=True, unique_indices=True
-            ),
+            out.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
             out,
         )
         out = jnp.moveaxis(out, (0, 1, 2, 3, 4), caxorder)
@@ -1105,9 +1080,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
         out = jnp.where(
             self.gauge,
             out.at[:, idxx, idxa, 0, 0, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
+            .set(0, unique_indices=True)
             .at[:, idxx, idxa, 0, 0, idxx]
-            .set(scale, indices_are_sorted=True, unique_indices=True),
+            .set(scale, unique_indices=True),
             out,
         )
         out = jnp.moveaxis(out, (0, 1, 2, 3, 4), caxorder)
@@ -1265,12 +1240,12 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = jnp.einsum("psyx,sxatz->pyatz", self.C, f)
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(self.C))
+        idxs = jnp.arange(len(self.species))
+        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
                 scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
                 unique_indices=True,
             ),
             df,
@@ -1296,12 +1271,11 @@ class FieldPartCD(lx.AbstractLinearOperator):
         )
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(self.C))
+        idxs = jnp.arange(len(self.species))
+        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                scale, indices_are_sorted=True, unique_indices=True
-            ),
+            df.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1330,6 +1304,13 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 op = lambda x: jnp.pad(x[:, None, :], [(0, 0), (bw, bw), (0, 0)])
             return op(df)
 
+        idxa = self.pitchgrid.nxi // 2
+        idxx = self.speedgrid.gauge_idx
+        idxs = jnp.arange(len(self.species))
+        idxs_mesh = idxs[:, None]
+        idxx_mesh = idxx[None, :]
+        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[idxs_mesh, idxx_mesh]
+
         # nx is basically always small and these matrices are usually dense
         # so we always compute it using dense fmt and convert to banded at the
         # end if needed.
@@ -1350,24 +1331,20 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 diag[:, :, None, None, None, :],
                 (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1),
             )
-            idxa = self.pitchgrid.nxi // 2
-            idxx = self.speedgrid.gauge_idx
-            idxs = jnp.arange(len(self.species))
-            scale = jnp.mean(jnp.abs(self.C))
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx[0], idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx[0], idxa, 0, 0, idxs]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
-                df,
-            )
-            df = jnp.where(
-                self.gauge,
-                df.at[:, idxx[-1], idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx[-1], idxa, 0, 0, idxs]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                # Step A: Zero out the rows at all 'idxx' locations
+                # We use idxx directly here; it broadcasts to update all
+                # rows at those locations
+                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                # Step B: Set the diagonals
+                # We update specific (row, col) pairs at specific x locations.
+                # Dimensions: (row=idxs, x=idxx, col=idxs)
+                # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
+                # diagonal elements.
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh].set(
+                    scale, unique_indices=True
+                ),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1391,15 +1368,20 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 diag[:, :, None, None, None, :],
                 (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1),
             )
-            idxa = self.pitchgrid.nxi // 2
-            idxx = self.speedgrid.gauge_idx
-            scale = jnp.mean(jnp.abs(self.C))
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx, idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[:, idxx, idxa, 0, 0, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                # Step A: Zero out the rows at all 'idxx' locations
+                # We use idxx directly here; it broadcasts to update all
+                # rows at those locations
+                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                # Step B: Set the diagonals
+                # We update specific (row, col) pairs at specific x locations.
+                # Dimensions: (row=idxs, x=idxx, col=idxx)
+                # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
+                # diagonal elements.
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxx_mesh].set(
+                    scale, unique_indices=True
+                ),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1442,15 +1424,14 @@ class FieldPartCD(lx.AbstractLinearOperator):
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        scale = jnp.mean(jnp.abs(self.C))
+        idxs1, idxx1 = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
+        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[idxs1, idxx1]
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, idxs, idxx]
-            .set(scale, indices_are_sorted=True, unique_indices=True),
+            df.at[:, idxx1, idxa, 0, 0, :, :]
+            .set(0, unique_indices=True)
+            .at[idxs1, idxx1, idxa, 0, 0, idxs1, idxx1]
+            .set(scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1603,12 +1584,12 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Gabxlk))
+        idxs = jnp.arange(len(self.species))
+        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
                 scale * f0[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
                 unique_indices=True,
             ),
             df,
@@ -1643,12 +1624,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Gabxlk))
+        idxs = jnp.arange(len(self.species))
+        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                scale, indices_are_sorted=True, unique_indices=True
-            ),
+            df.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
             df,
         )
 
@@ -1693,7 +1673,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         idxs = jnp.arange(len(self.species))
         idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Gabxlk))
+        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
 
         # nx, ns are basically always small and these matrices are usually dense
         # so we always compute it using dense fmt and convert to banded at the
@@ -1711,20 +1691,22 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 G[:, :, :, None, None, :],
                 (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
             )
+            idxs_mesh = idxs[:, None]
+            idxx_mesh = idxx[None, :]
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx[0], idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx[0], idxa, 0, 0, idxs]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
-                df,
-            )
-            df = jnp.where(
-                self.gauge,
-                df.at[:, idxx[-1], idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx[-1], idxa, 0, 0, idxs]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                # Step A: Zero out the rows at all 'idxx' locations
+                # We use idxx directly here; it broadcasts to update all
+                # rows at those locations
+                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                # Step B: Set the diagonals
+                # We update specific (row, col) pairs at specific x locations.
+                # Dimensions: (row=idxs, x=idxx, col=idxs)
+                # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
+                # diagonal elements.
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh].set(
+                    scale, unique_indices=True
+                ),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1748,9 +1730,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
+                .set(0, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1807,9 +1789,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 df = jnp.where(
                     self.gauge,
                     df.at[:, idxx, idxa, 0, 0, :]
-                    .set(0, indices_are_sorted=True, unique_indices=True)
+                    .set(0, unique_indices=True)
                     .at[:, idxx, idxa, 0, 0, idxa]
-                    .set(scale, indices_are_sorted=True, unique_indices=True),
+                    .set(scale, unique_indices=True),
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1838,8 +1820,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-        scale = jnp.mean(jnp.abs(Gabxlk))
+        idxs1, idxx1 = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
+        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[idxs1, idxx1]
 
         if self.axorder[2] == "a":
             Gabxyl = jnp.einsum("abxlk,ky->abxyl", Gabxlk, self.speedgrid.xvander_inv)
@@ -1852,10 +1834,10 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx, idxa, 0, 0, :, :, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                df.at[:, idxx1, idxa, 0, 0, :, :, :]
+                .set(0, unique_indices=True)
+                .at[idxs1, idxx1, idxa, 0, 0, idxa, idxs1, idxx1]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1876,10 +1858,10 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx, idxa, 0, 0, :, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx, idxa, 0, 0, idxs, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                df.at[:, idxx1, idxa, 0, 0, :, :]
+                .set(0, unique_indices=True)
+                .at[idxs1, idxx1, idxa, 0, 0, idxs1, idxx1]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2042,12 +2024,12 @@ class FieldPartCH(lx.AbstractLinearOperator):
 
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Habxlk + dHabxlk))
+        idxs = jnp.arange(len(self.species))
+        scale = jnp.mean(jnp.abs(Habxlk + dHabxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
                 scale * f0[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
                 unique_indices=True,
             ),
             df,
@@ -2081,12 +2063,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
         )
         idxa = self.pitchgrid.nxi // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Habxlk))
+        idxs = jnp.arange(len(self.species))
+        scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                scale, indices_are_sorted=True, unique_indices=True
-            ),
+            df.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
             df,
         )
 
@@ -2131,7 +2112,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         idxs = jnp.arange(len(self.species))
         idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Habxlk))
+        scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
 
         # nx, ns are basically always small and these matrices are usually dense
         # so we always compute it using dense fmt and convert to banded at the
@@ -2149,20 +2130,22 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 H[:, :, :, None, None, :],
                 (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
             )
+            idxs_mesh = idxs[:, None]
+            idxx_mesh = idxx[None, :]
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx[0], idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx[0], idxa, 0, 0, idxs]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
-                df,
-            )
-            df = jnp.where(
-                self.gauge,
-                df.at[:, idxx[-1], idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx[-1], idxa, 0, 0, idxs]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                # Step A: Zero out the rows at all 'idxx' locations
+                # We use idxx directly here; it broadcasts to update all
+                # rows at those locations
+                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                # Step B: Set the diagonals
+                # We update specific (row, col) pairs at specific x locations.
+                # Dimensions: (row=idxs, x=idxx, col=idxs)
+                # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
+                # diagonal elements.
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh].set(
+                    scale, unique_indices=True
+                ),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2186,9 +2169,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.where(
                 self.gauge,
                 df.at[:, idxx, idxa, 0, 0, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
+                .set(0, unique_indices=True)
                 .at[:, idxx, idxa, 0, 0, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2243,9 +2226,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 df = jnp.where(
                     self.gauge,
                     df.at[:, idxx, idxa, 0, 0, :]
-                    .set(0, indices_are_sorted=True, unique_indices=True)
+                    .set(0, unique_indices=True)
                     .at[:, idxx, idxa, 0, 0, idxa]
-                    .set(scale, indices_are_sorted=True, unique_indices=True),
+                    .set(scale, unique_indices=True),
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2274,8 +2257,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-        scale = jnp.mean(jnp.abs(Habxlk))
+        idxs1, idxx1 = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
+        scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[idxs1, idxx1]
 
         if self.axorder[2] == "a":
             Habxyl = jnp.einsum("abxlk,ky->abxyl", Habxlk, self.speedgrid.xvander_inv)
@@ -2288,10 +2271,10 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx, idxa, 0, 0, :, :, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                df.at[:, idxx1, idxa, 0, 0, :, :, :]
+                .set(0, unique_indices=True)
+                .at[idxs1, idxx1, idxa, 0, 0, idxa, idxs1, idxx1]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2312,10 +2295,10 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             df = jnp.where(
                 self.gauge,
-                df.at[:, idxx, idxa, 0, 0, :, :]
-                .set(0, indices_are_sorted=True, unique_indices=True)
-                .at[idxs, idxx, idxa, 0, 0, idxs, idxx]
-                .set(scale, indices_are_sorted=True, unique_indices=True),
+                df.at[:, idxx1, idxa, 0, 0, :, :]
+                .set(0, unique_indices=True)
+                .at[idxs1, idxx1, idxa, 0, 0, idxs1, idxx1]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2524,6 +2507,8 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
     p2 : int
@@ -2537,6 +2522,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -2552,6 +2538,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p2: int = 4,
         axorder: str = "sxatz",
@@ -2563,6 +2550,9 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.pitchgrid = pitchgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         if potentials is None:
             potentials = RosenbluthPotentials(speedgrid, species)
         self.potentials = potentials
@@ -2574,9 +2564,11 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.operator_weights = jnp.asarray(operator_weights)
 
         self.CL = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species, p2, axorder, gauge
+            field, pitchgrid, speedgrid, species, background, p2, axorder, gauge
         )
-        self.CE = EnergyScattering(field, pitchgrid, speedgrid, species, axorder, gauge)
+        self.CE = EnergyScattering(
+            field, pitchgrid, speedgrid, species, background, axorder, gauge
+        )
         self.CF = FieldParticleScattering(
             field, pitchgrid, speedgrid, species, potentials, axorder, gauge
         )
