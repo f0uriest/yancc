@@ -268,7 +268,7 @@ def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
         n, T, dn, dT, Er = inputs
         species = [yancc.species.LocalMaxwellian(yancc.species.Hydrogen, T, n, dT, dn)]
         f, r, fluxes, info = solve_dke(
-            field, pitchgrid, speedgrid, species, Er, verbose=0, rtol=1e-12
+            field, pitchgrid, speedgrid, species, Er, verbose=2, rtol=1e-12
         )
         return jnp.array(
             [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<BV||>"]]

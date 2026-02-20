@@ -122,10 +122,11 @@ def solve_mdke(
         MR=M,
         m=m,
         k=k,
-        rtol=rtol,
-        atol=atol,
-        maxiter=maxiter,
-        print_every=print_every if verbose > 1 else 0,
+        rtol=jnp.asarray(rtol),
+        atol=jnp.asarray(atol),
+        maxiter=jnp.asarray(maxiter),
+        verbose=verbose > 1,
+        print_every_inner=jnp.asarray(print_every),
         U=U1,
     )
     if f2 is None:
@@ -137,10 +138,11 @@ def solve_mdke(
         MR=M,
         m=m,
         k=k,
-        rtol=rtol,
-        atol=atol,
-        maxiter=maxiter,
-        print_every=print_every if verbose > 1 else 0,
+        rtol=jnp.asarray(rtol),
+        atol=jnp.asarray(atol),
+        maxiter=jnp.asarray(maxiter),
+        verbose=verbose > 1,
+        print_every_inner=jnp.asarray(print_every),
         U=U2,
     )
     info = {
@@ -349,10 +351,11 @@ def solve_dke(
         MR=preconditioner,
         m=m,
         k=k,
-        rtol=rtol,
-        atol=atol,
-        maxiter=maxiter,
-        print_every=print_every if verbose > 1 else 0,
+        rtol=jnp.asarray(rtol),
+        atol=jnp.asarray(atol),
+        maxiter=jnp.asarray(maxiter),
+        verbose=verbose > 1,
+        print_every_inner=jnp.asarray(print_every),
         U=U,
     )
     info = {

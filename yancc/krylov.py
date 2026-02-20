@@ -229,7 +229,9 @@ def _fgmres(
     outer_v: Optional[PyTree[ArrayLike]] = None,
     outer_Av: Optional[PyTree[ArrayLike]] = None,
     lv: Optional[int] = None,
-    print_every: ArrayLike = jnp.inf,
+    verbose: bool = False,
+    *,
+    print_every: ArrayLike = jnp.array(1),
 ) -> tuple[Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array]:
     """FGMRES Arnoldi process, with optional projection or augmentation
 
@@ -401,12 +403,14 @@ def _fgmres(
         R = R.at[j, :].set(R_row)
         beta_vec = _rotate_vectors(beta_vec, j, *givens[j, :])
         res = abs(beta_vec[j + 1])
-        _maybe_print(
-            jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
-            j,
-            res,
-            pre="    FGMRES  ",
-        )
+
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
+                j,
+                res,
+                pre="    FGMRES  ",
+            )
         breakdown = H[j, j + 1] < eps * w_norm
 
         return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown
@@ -435,7 +439,9 @@ def gcrotmk(
     k: Optional[int] = None,
     C: Optional[PyTree[ArrayLike]] = None,
     U: Optional[PyTree[ArrayLike]] = None,
-    print_every: ArrayLike = False,
+    verbose: bool = False,
+    print_every: ArrayLike = jnp.array(1),
+    print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
@@ -531,7 +537,9 @@ def gcrotmk(
             k,
             C,
             U,
+            verbose,
             print_every,
+            print_every_inner,
             refine,
         )
 
@@ -549,7 +557,9 @@ def gcrotmk(
             k,
             C,
             U,
+            verbose,
             print_every,
+            print_every_inner,
             refine,
         )
 
@@ -629,11 +639,15 @@ def _gcrotmk_solve(
     k,
     C,
     U,
+    verbose,
     print_every,
+    print_every_inner,
     refine,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+    print_every_inner = jnp.asarray(print_every_inner)
+    print_every_inner = jnp.where(print_every_inner == 0, jnp.inf, print_every_inner)
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
@@ -649,8 +663,8 @@ def _gcrotmk_solve(
     x, r, beta = lax.cond(
         lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
     )
-
-    _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
+    if verbose:
+        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
 
     def gcrotmk_cond(carry):
         j_outer, _, _, _, beta, _, _, _, _ = carry
@@ -675,7 +689,8 @@ def _gcrotmk_solve(
             atol=ptol,
             C=C,
             lc=lc,
-            print_every=print_every,
+            verbose=verbose,
+            print_every=print_every_inner,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -730,8 +745,15 @@ def _gcrotmk_solve(
         C = tree_map(_roll_prepend, C, _mul(alpha, c))
         lc = jnp.minimum(lc + 1, k)
 
-        _maybe_print(print_every < jnp.inf, j_outer + 1, beta / b_norm, pre="GCROT  ")
-
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(
+                    print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
+                ),
+                j_outer + 1,
+                beta / b_norm,
+                pre="GCROT  ",
+            )
         return j_outer + 1, nmv, x, r, beta, C, U, lc, ptol_max_factor
 
     carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
@@ -759,7 +781,9 @@ def lgmres(
     k: int = 3,
     outer_v: Optional[PyTree[ArrayLike]] = None,
     outer_Av: Optional[PyTree[ArrayLike]] = None,
-    print_every: ArrayLike = False,
+    verbose: bool = False,
+    print_every: ArrayLike = jnp.array(1),
+    print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
@@ -873,7 +897,9 @@ def lgmres(
             k,
             outer_v,
             outer_Av,
+            verbose,
             print_every,
+            print_every_inner,
             refine,
         )
 
@@ -891,7 +917,9 @@ def lgmres(
             k,
             outer_v,
             outer_Av,
+            verbose,
             print_every,
+            print_every_inner,
             refine,
         )
 
@@ -914,11 +942,15 @@ def _lgmres_solve(
     k,
     outer_v,
     outer_Av,
+    verbose,
     print_every,
+    print_every_inner,
     refine,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+    print_every_inner = jnp.asarray(print_every_inner)
+    print_every_inner = jnp.where(print_every_inner == 0, jnp.inf, print_every_inner)
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
@@ -928,7 +960,8 @@ def _lgmres_solve(
     eps = jnp.finfo(dtype).eps
     nmv = 1
     beta = _norm(r)
-    _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
+    if verbose:
+        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
 
     if outer_v is None:
         assert outer_Av is None
@@ -970,7 +1003,8 @@ def _lgmres_solve(
             outer_v=outer_v,
             outer_Av=outer_Av,
             lv=lv,
-            print_every=print_every,
+            verbose=verbose,
+            print_every=print_every_inner,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -1031,7 +1065,15 @@ def _lgmres_solve(
         outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
         lv = jnp.minimum(lv + 1, k)
 
-        _maybe_print(print_every < jnp.inf, j_outer + 1, beta / b_norm, pre="LGMRES  ")
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(
+                    print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
+                ),
+                j_outer + 1,
+                beta / b_norm,
+                pre="LGMRES  ",
+            )
 
         return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor
 
