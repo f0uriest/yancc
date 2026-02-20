@@ -252,7 +252,8 @@ def _fgmres(
     rpsolve : callable
         Right preconditioner R
     C : pytree of jax.Array
-        Matrix C in GCROT(m,k) algorithm.
+        Matrix C in GCROT(m,k) algorithm. Assumes the first `lc` columns are
+        orthonormal, all others are zero.
     lc : int
         Number of nonzero columns of C. Default C.shape[1]
     outer_v : pytree of jax.Array

@@ -61,6 +61,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     lc = 3
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
@@ -83,6 +84,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     lc = 3
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
@@ -107,6 +109,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     lc = 3
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
@@ -131,6 +134,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     C[-1] = 0
     lc = 2
 
