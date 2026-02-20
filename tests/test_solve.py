@@ -250,3 +250,39 @@ def test_solve_dke_ncsx(idx):
         sfincs_data["heatFlux_vm_rHat"][idx],
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rHat"]))),
     )
+
+
+def _jvp_1_arg(fun, x0, argnum, rel_step, abs_step):
+    xh = x0.copy().at[argnum].add(abs_step + rel_step * abs(x0[argnum]))
+    xl = x0.copy().at[argnum].add(-abs_step - rel_step * abs(x0[argnum]))
+    h = xh[argnum] - xl[argnum]
+    fh = fun(xh)
+    fl = fun(xl)
+    return (fh - fl) / h
+
+
+def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
+    # these are super low res, just to test jax logic, not physical correctness
+
+    def foo(inputs):
+        n, T, dn, dT, Er = inputs
+        species = [yancc.species.LocalMaxwellian(yancc.species.Hydrogen, T, n, dT, dn)]
+        f, r, fluxes, info = solve_dke(
+            field, pitchgrid, speedgrid, species, Er, verbose=0, rtol=1e-12
+        )
+        return jnp.array(
+            [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<BV||>"]]
+        ).squeeze()
+
+    n = 1e19
+    T = 1e3
+    dn = -1e19
+    dT = -1e3
+    Er = 1e3
+    inputs = jnp.array([n, T, dn, dT, Er])
+    Jfd = jnp.array([_jvp_1_arg(foo, inputs, i, 1e-3, 0.0) for i in range(len(inputs))])
+    Jf = jax.jacfwd(foo)(inputs)
+    Jr = jax.jacrev(foo)(inputs)
+    np.testing.assert_allclose(Jr, Jf, rtol=1e-10)
+    np.testing.assert_allclose(Jr, Jfd.T, rtol=1e-6)
+    np.testing.assert_allclose(Jf, Jfd.T, rtol=1e-6)
