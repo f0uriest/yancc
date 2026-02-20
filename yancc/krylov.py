@@ -232,7 +232,9 @@ def _fgmres(
     verbose: bool = False,
     *,
     print_every: ArrayLike = jnp.array(1),
-) -> tuple[Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array]:
+) -> tuple[
+    Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
+]:
     """FGMRES Arnoldi process, with optional projection or augmentation
 
     Parameters
@@ -327,12 +329,13 @@ def _fgmres(
         lambda x: jnp.pad(x[..., None], ((0, 0),) * x.ndim + ((0, size),)),
         v0,
     )
-    # preconditioned krylov space [Mv0, M(AM)v0, M(AM)^2 v0, ...]
+    # preconditioned krylov space [Mv0, (MA)Mv0, (MA)^2Mv0, ...]
     Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
 
     dtype = jnp.result_type(*tree_leaves(v0))
     eps = jnp.finfo(dtype).eps
     res = jnp.array(_norm(v0))
+    res_arr = jnp.full(size, res)
 
     # Orthogonal projection coefficients
     B = jnp.zeros((tree_leaves(C)[0].shape[1], size), dtype=v0.dtype)
@@ -349,12 +352,12 @@ def _fgmres(
     # FGMRES Arnoldi process
 
     def arnoldi_cond(carry):
-        j, _, _, _, _, _, _, _, _, res, breakdown = carry
+        j, _, _, _, _, _, _, _, _, res, breakdown, _ = carry
         return jnp.logical_and(jnp.logical_and(j < maxiter, res > atol), ~breakdown)
 
     def arnoldi_loop(carry):
         # L A Z = C B + V H
-        j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown = carry
+        j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr = carry
 
         def outer_v_iteration(j, nmv, V):
             z = lax.cond(
@@ -404,6 +407,7 @@ def _fgmres(
         R = R.at[j, :].set(R_row)
         beta_vec = _rotate_vectors(beta_vec, j, *givens[j, :])
         res = abs(beta_vec[j + 1])
+        res_arr = res_arr.at[j + 1].set(res)
 
         if verbose:
             _maybe_print(
@@ -414,15 +418,15 @@ def _fgmres(
             )
         breakdown = H[j, j + 1] < eps * w_norm
 
-        return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown
+        return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr
 
-    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown)
-    j, nmv, V, Z, B, R, H, _, beta_vec, res, _ = lax.while_loop(
+    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr)
+    j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr = lax.while_loop(
         arnoldi_cond, arnoldi_loop, carry
     )
     y = jsp.linalg.solve_triangular(R[:, :-1].T, beta_vec[:-1])
 
-    return H, B, V, Z, y, j, nmv, res
+    return H, B, V, Z, y, j, nmv, res, breakdown, res_arr
 
 
 @eqx.filter_jit
@@ -680,7 +684,7 @@ def _gcrotmk_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
+        H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -993,7 +997,7 @@ def _lgmres_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
+        H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
             v0=v0,
             m=m,
