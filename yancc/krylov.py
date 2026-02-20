@@ -10,9 +10,10 @@ import jax
 import jax.flatten_util
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 from jax import lax
 from jax import scipy as jsp
-from jax.tree_util import tree_leaves, tree_map, tree_reduce
+from jax.tree_util import tree_leaves, tree_map
 from jaxtyping import Array, ArrayLike, Float, Int, PyTree
 
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
@@ -73,82 +74,6 @@ def _safe_normalize(x, thresh=None):
     normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, 0.0), x)
     norm = jnp.where(use_norm, norm, 0.0)
     return normalized_x, norm
-
-
-def _project_on_columns(A, v):
-    """Returns A.T.conj() @ v."""
-    v_proj = tree_map(
-        lambda X, y: _einsum("...n,...->n", X.conj(), y),
-        A,
-        v,
-    )
-    return tree_reduce(operator.add, v_proj)
-
-
-def _iterative_classical_gram_schmidt(Q, x, xnorm, max_iterations=2):
-    """
-    Orthogonalize x against the columns of Q. The process is repeated
-    up to `max_iterations` times, or fewer if the condition
-    ||r|| < (1/sqrt(2)) ||x|| is met earlier (see below for the meaning
-    of r and x).
-
-    Parameters
-    ----------
-    Q : array or tree of arrays
-        A matrix of orthonormal columns.
-    x : array or tree of arrays
-        A vector. It will be replaced with a new vector q which is orthonormal
-        to the columns of Q, such that x in span(col(Q), q).
-    xnorm : float
-        Norm of x.
-
-    Returns
-    -------
-    q : array or tree of arrays
-        A unit vector, orthonormal to each column of Q, such that
-        x in span(col(Q), q).
-    r : array
-        Stores the overlaps of x with each vector in Q.
-    """
-    # "twice is enough"
-    # http://slepc.upv.es/documentation/reports/str1.pdf
-
-    # This assumes that Q's leaves all have the same dimension in the last
-    # axis.
-    Q0 = tree_leaves(Q)[0]
-    r = jnp.zeros(Q0.shape[-1], dtype=Q0.dtype)
-    q = x
-    xnorm_scaled = xnorm / jnp.sqrt(2.0)
-
-    def body_function(carry):
-        k, q, r, qnorm_scaled = carry
-        h = _project_on_columns(Q, q)
-        Qh = tree_map(lambda X: _dot(X, h), Q)
-        q = _sub(q, Qh)
-        r = _add(r, h)
-
-        def qnorm_cond(carry):
-            k, not_done, _, _ = carry
-            return jnp.logical_and(not_done, k < (max_iterations - 1))
-
-        def qnorm(carry):
-            k, _, q, qnorm_scaled = carry
-            _, qnorm = _safe_normalize(q)
-            qnorm_scaled = qnorm / jnp.sqrt(2.0)
-            return (k, False, q, qnorm_scaled)
-
-        init = (k, True, q, qnorm_scaled)
-        _, _, q, qnorm_scaled = lax.while_loop(qnorm_cond, qnorm, init)
-        return (k + 1, q, r, qnorm_scaled)
-
-    def cond_function(carry):
-        k, _, r, qnorm_scaled = carry
-        _, rnorm = _safe_normalize(r)
-        return jnp.logical_and(k < (max_iterations - 1), rnorm < qnorm_scaled)
-
-    k, q, r, qnorm_scaled = body_function((0, q, r, xnorm_scaled))
-    k, q, r, _ = lax.while_loop(cond_function, body_function, (k, q, r, qnorm_scaled))
-    return q, r
 
 
 def _rotate_vectors(H, i, cs, sn):
@@ -215,6 +140,95 @@ def _maybe_print(flag, j, res, pre=""):
     jax.lax.cond(flag, truefun, falsefun)
 
 
+def _gram_schmidt(Q, x, k, method="cgs2"):
+    """Orthogonalize x against the columns of Q.
+
+    Parameters
+    ----------
+    Q : array or tree of arrays
+        A matrix of orthonormal columns.
+    x : array or tree of arrays
+        A vector. It will be replaced with a new vector q which is orthonormal
+        to the columns of Q, such that x in span(col(Q), q).
+    k : int
+        Number of columns of Q to orthogonalize against.
+    method : {"cgs", "cgs2", "mgs"}
+        Classical gram schmidt, classical gram schmidt with re-orthogonalization, or
+        modified gram schmidt. Classical is the fastest but can be unstable,
+        classical with re-orthogonalization is usually the most accurate. The speed
+        improvement on CPU is marginal, and on GPU is basically nill.
+
+    Returns
+    -------
+    q : array or tree of arrays
+        A unit vector, orthonormal to the first k columns of Q, such that
+        x in span(col(Q), q).
+    r : array
+        Stores the overlaps of x with the fist k vectors in Q.
+    """
+    assert method in ["cgs", "cgs2", "mgs"]
+    # flatten trees into dense 1D/2D arrays
+    leaves_Q, treedef_Q = jax.tree_util.tree_flatten(Q)
+    leaves_x, treedef_x = jax.tree_util.tree_flatten(x)
+
+    def prepare_Q_leaf(leaf):
+        leaf_transposed = jnp.moveaxis(leaf, -1, 0)
+        return jnp.reshape(leaf_transposed, (leaf_transposed.shape[0], -1))
+
+    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=-1)
+    x_flat = jnp.concatenate([jnp.reshape(l, (-1,)) for l in leaves_x], axis=-1)
+
+    max_k = Q_mat.shape[0]
+    if method in ["cgs", "cgs2"]:
+
+        # dynamic mask to handle the dynamic k
+        mask = jnp.arange(max_k) < k
+
+        # --- PASS 1: Classical Gram-Schmidt ---
+        # .conj() ensures complex numbers are handled correctly
+        h1 = Q_mat.conj() @ x_flat
+        h1 = jnp.where(mask, h1, 0.0)  # Apply mask for dynamic k
+        x1 = x_flat - (h1 @ Q_mat)  # Vectorized subtraction
+
+        if method == "cgs":
+            h_final = h1
+            x_flat_final = x1
+        else:
+            # --- PASS 2: Re-orthogonalization ("Twice is Enough") ---
+            h2 = Q_mat.conj() @ x1
+            h2 = jnp.where(mask, h2, 0.0)  # Apply mask for dynamic k
+            x_flat_final = x1 - (h2 @ Q_mat)
+
+            h_final = h1 + h2
+
+    else:  # method == "mgs"
+        h = jnp.zeros(max_k, dtype=Q_mat.dtype)
+
+        def loop(i, carry):
+            h_carry, x_carry = carry
+            q_i = Q_mat[i]
+            alpha = jnp.vdot(q_i, x_carry)
+            h_carry = h_carry.at[i].set(alpha)
+            x_carry = x_carry - alpha * q_i
+
+            return h_carry, x_carry
+
+        h_final, x_flat_final = jax.lax.fori_loop(0, k, loop, (h, x_flat))
+
+    # 3. Unflatten using numpy for static indices
+    split_indices = np.cumsum([l.size for l in leaves_x])[:-1]
+    x_flat_split = jnp.split(x_flat_final, split_indices)
+
+    x_final_leaves = [
+        jnp.reshape(flat_leaf, orig_leaf.shape)
+        for flat_leaf, orig_leaf in zip(x_flat_split, leaves_x)
+    ]
+
+    x_final = jax.tree_util.tree_unflatten(treedef_x, x_final_leaves)
+
+    return x_final, h_final
+
+
 @eqx.filter_jit
 def _fgmres(
     matvec: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]],
@@ -232,6 +246,7 @@ def _fgmres(
     verbose: bool = False,
     *,
     print_every: ArrayLike = jnp.array(1),
+    gs_method: str = "cgs2",
 ) -> tuple[
     Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
 ]:
@@ -385,17 +400,10 @@ def _fgmres(
 
         # GCROT projection: L A -> (1 - C C^H) L A
         # i.e. orthogonalize against C
-        def _C_loop(i, carry):
-            B, w = carry
-            c = tree_map(lambda x: jnp.asarray(x)[..., i], C)
-            alpha = _tree_vdot(c, w)
-            B = B.at[i, j].set(alpha)
-            w = _sub(w, _mul(alpha, c))
-            return B, w
+        w, Bj = _gram_schmidt(C, w, lc, gs_method)
+        B = B.at[:, j].set(Bj)
 
-        B, w = lax.fori_loop(0, lc, _C_loop, (B, w))
-
-        w, h = _iterative_classical_gram_schmidt(V, w, w_norm, max_iterations=2)
+        w, h = _gram_schmidt(V, w, j + 1, gs_method)
         unit_w, w_norm_1 = _safe_normalize(w, thresh=eps * w_norm)
         V = tree_map(lambda X, y: X.at[..., j + 1].set(y), V, unit_w)
         Z = tree_map(lambda X, y: X.at[..., j].set(y), Z, z)
