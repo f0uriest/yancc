@@ -432,7 +432,7 @@ def _fgmres(
     j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr = lax.while_loop(
         arnoldi_cond, arnoldi_loop, carry
     )
-    y = jsp.linalg.solve_triangular(R[:, :-1].T, beta_vec[:-1])
+    y = jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
 
     return H, B, V, Z, y, j, nmv, res, breakdown, res_arr
 
