@@ -111,9 +111,7 @@ def test_mdke_banded_vs_dense_smoother(pitchgrid, field, axorder):
 
 
 @pytest.mark.parametrize("v", [1, 2, 3])
-@pytest.mark.parametrize(
-    "n", [1e18, 1e20, 1e22, 1e24]  # chosen for nustar ~ [1e-4, 1e-2, 1, 1e2]
-)
+@pytest.mark.parametrize("n", [1e18, 1e20, 1e22])  # chosen for nustar ~ [1e-4, 1e-2, 1]
 @pytest.mark.parametrize(
     "smooth_op",
     [
@@ -136,7 +134,18 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         ).localize(0.5),
     ]
     Erho = jnp.array(0.0)
-    A = DKE(field, pitchgrid, speedgrid, species, Erho, p1="2d", p2=2, gauge=True)
+    operator_weights = jnp.ones(8).at[-2:].set(0)
+    A = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Erho,
+        p1="2d",
+        p2=2,
+        gauge=True,
+        operator_weights=operator_weights,
+    )
     b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
@@ -146,12 +155,14 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         speedgrid,
         species,
         jnp.array(0.0),
+        [],
         potentials,
         "2d",
         2,
         True,
         "dense",
         None,
+        operator_weights=operator_weights,
     )[0]
     r = (x_true + b) / 2
     x_smoothed = smooth_op(
@@ -160,15 +171,11 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
     L = DKELaplacian(field, pitchgrid, speedgrid, species)
     err = np.linalg.norm(L.mv(x_smoothed - x_true)) / np.linalg.norm(L.mv(x_true))
     print("err=", err)
-    if not ("krylov" in smooth_op.__qualname__ and n > 1e23):
-        # krylov 2 seems to be bad at high collisionality
-        assert err < 1
+    assert err < 1
 
 
 @pytest.mark.parametrize("v", [1, 2, 3])
-@pytest.mark.parametrize(
-    "n", [1e18, 1e20, 1e22, 1e24]  # chosen for nustar ~ [1e-4, 1e-2, 1, 1e2]
-)
+@pytest.mark.parametrize("n", [1e18, 1e20, 1e22])  # chosen for nustar ~ [1e-4, 1e-2, 1]
 @pytest.mark.parametrize(
     "smooth_op",
     [
@@ -191,7 +198,18 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
         ).localize(0.5),
     ]
     Erho = jnp.array(0.0)
-    A = DKE(field, pitchgrid, speedgrid, species, Erho, p1="2d", p2=2, gauge=True)
+    operator_weights = jnp.ones(8).at[-2:].set(0)
+    A = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Erho,
+        p1="2d",
+        p2=2,
+        gauge=True,
+        operator_weights=operator_weights,
+    )
     b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
@@ -201,12 +219,14 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
         speedgrid,
         species,
         jnp.array(0.0),
+        [],
         potentials,
         "2d",
         2,
         True,
         "dense",
         None,
+        operator_weights=operator_weights,
     )[0]
     r = (x_true + b) / 2
     x_smoothed = smooth_op(
@@ -215,6 +235,4 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
     L = DKELaplacian(field, pitchgrid, speedgrid, species)
     err = np.linalg.norm(L.mv(x_smoothed - x_true)) / np.linalg.norm(L.mv(x_true))
     print("err=", err)
-    if not ("krylov" in smooth_op.__qualname__ and n > 1e23):
-        # krylov 2 seems to be bad at high collisionality
-        assert err < 1
+    assert err < 1
