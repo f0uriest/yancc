@@ -1,8 +1,13 @@
 """Simple utility functions."""
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+
+###################################
+### Lower incomplete Gamma function
+###################################
 
 
 def _lgammastar(s, z, kmax=1000):
@@ -13,43 +18,6 @@ def _lgammastar(s, z, kmax=1000):
     y, sgn = jax.scipy.special.logsumexp(x, b=gammasn, return_sign=True)
     t = -z + y
     return sgn, t
-
-
-@jax.jit
-@jnp.vectorize
-def _exp1(x):
-    """Exponential integral E1."""
-    # adapted from
-    # https://github.com/scipy/scipy/blob/b9b8b8171fd1453b42fc4492a279c71b54141c51/scipy/special/xsf/expint.h#L54 # noqa:E501
-
-    def xlt2():
-        e1 = 1.0
-        r = 1.0
-
-        def body(k, er):
-            e1, r = er
-            r = -r * k * x / (k + 1.0) ** 2
-            e1 += r
-            return e1, r
-
-        e1, r = jax.lax.fori_loop(1, 100, body, (e1, r), unroll=True)
-        return -jnp.euler_gamma - jnp.log(x) + x * e1
-
-    def xgt2():
-        m = 100
-        t0 = 0.0
-
-        def body(i, t0):
-            k = m - i
-            t0 = k / (1.0 + k / (x + t0))
-            return t0
-
-        t0 = jax.lax.fori_loop(0, m, body, t0, unroll=True)
-        t = 1.0 / (x + t0)
-        return jnp.exp(-x) * t
-
-    e1 = jax.lax.cond(x <= 2, xlt2, xgt2)
-    return jnp.where(x == 0, jnp.inf, e1)
 
 
 @jnp.vectorize
@@ -99,6 +67,48 @@ def Gammainc(s, x):
     return sgn * jnp.exp(gammarg)
 
 
+###################################
+### Upper incomplete Gamma function
+###################################
+
+
+@jax.jit
+@jnp.vectorize
+def _exp1(x):
+    """Exponential integral E1."""
+    # adapted from
+    # https://github.com/scipy/scipy/blob/b9b8b8171fd1453b42fc4492a279c71b54141c51/scipy/special/xsf/expint.h#L54 # noqa:E501
+
+    def xlt2():
+        e1 = 1.0
+        r = 1.0
+
+        def body(k, er):
+            e1, r = er
+            r = -r * k * x / (k + 1.0) ** 2
+            e1 += r
+            return e1, r
+
+        e1, r = jax.lax.fori_loop(1, 100, body, (e1, r), unroll=True)
+        return -jnp.euler_gamma - jnp.log(x) + x * e1
+
+    def xgt2():
+        m = 100
+        t0 = 0.0
+
+        def body(i, t0):
+            k = m - i
+            t0 = k / (1.0 + k / (x + t0))
+            return t0
+
+        t0 = jax.lax.fori_loop(0, m, body, t0, unroll=True)
+        t = 1.0 / (x + t0)
+        return jnp.exp(-x) * t
+
+    e1 = jax.lax.cond(x <= 2, xlt2, xgt2)
+    return jnp.where(x == 0, jnp.inf, e1)
+
+
 def _lGammaincc_large_x_correction(s, x, kmax=20):
     k = jnp.arange(0, kmax)
     arg = s - k
@@ -117,15 +127,8 @@ def _lGammaincc_large_x(s, x, kmax=20):
     return sgn, ((s - 1) * jnp.log(x) - x) + t
 
 
-@jax.jit
-@jnp.vectorize
-def lGammaincc(s, x):
-    """Log of upper incomplete gamma function.
-
-    Valid for real x>0 and real s (any sign)
-
-    Returns (sign, lGammaincc) st Gammaincc = sign * exp(lGammaincc)
-    """
+@jax.custom_jvp
+def _lGammaincc(s, x):
 
     def spos():
         # using Gamma(s,x) = Gamma(s) - gamma(s,x) = Gamma(s)(1 - x^s gammastar(s,x))
@@ -155,7 +158,11 @@ def lGammaincc(s, x):
             si, _ = state
             return si > s
 
-        _, gincc = jax.lax.while_loop(cond, body, (si, Gamma_sx))
+        # limit to 10 steps, so only valid for s > -10. In practice, min(s) ~ -1.5
+        # even for extreme resolution (nx=20, nL=20) min(s) = -8.5
+        _, gincc = eqx.internal.while_loop(
+            cond, body, (si, Gamma_sx), kind="bounded", max_steps=10
+        )
 
         sgn = jnp.sign(gincc)
         return sgn, jnp.log(jnp.abs(gincc))
@@ -169,15 +176,47 @@ def lGammaincc(s, x):
     return jax.lax.cond(x > 20, large_x, small_x)
 
 
+@_lGammaincc.defjvp
+def _lGammaincc_jvp(primals, tangents):
+    s, x = primals
+    s_dot, x_dot = tangents
+
+    sign_out, log_mag_out = _lGammaincc(s, x)
+
+    # Exact analytical derivative for x
+    dx_val = -jnp.exp((s - 1.0) * jnp.log(x) - x - log_mag_out)
+    tangent_x = dx_val * x_dot
+
+    # s is discrete for our purposes, derivative is 0
+    return (sign_out, log_mag_out), (jnp.zeros_like(s_dot), tangent_x)
+
+
+@jax.jit
+@jnp.vectorize
+def lGammaincc(s, x):
+    """Log of upper incomplete gamma function.
+
+    Valid for real x>0 and real s > -10
+
+    Returns (sign, lGammaincc) st Gammaincc = sign * exp(lGammaincc)
+    """
+    return _lGammaincc(s, x)
+
+
 @jax.jit
 @jnp.vectorize
 def Gammaincc(s, x):
     """Upper incomplete gamma function.
 
-    Valid for real x>0 and real s (any sign)
+    Valid for real x>0 and real s > -10
     """
     sgn, gammarg = lGammaincc(s, x)
     return sgn * jnp.exp(gammarg)
+
+
+###############################
+### reshape / permutation utils
+###############################
 
 
 def _parse_axorder_shape_3d(
