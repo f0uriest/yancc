@@ -55,6 +55,7 @@ jobs:
         run: |
           pwd
           lscpu
+          pip list
           python -m pytest -v  \
             --durations=0 \
             --cov-report xml:cov.xml \
