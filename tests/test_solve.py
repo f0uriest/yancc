@@ -1,5 +1,6 @@
 """Regression tests comparing yancc to monkes/sfincs etc."""
 
+import os
 import time
 
 import jax
@@ -51,6 +52,8 @@ def _read_monkes_dat(path):
 # this is a reasonable range for testing at low resolution
 @pytest.mark.parametrize("idx", [15, 20, 25, 51, 56, 61])
 def test_solve_mdke_w7x_eim(idx):
+    if os.environ.get("CI"):
+        jax.clear_caches()
     config = {
         "dat_path": "tests/data/monkes_Monoenergetic_Database_w7x_eim.dat",
         "booz_path": "tests/data/boozmn_wout_w7x_eim.nc",
@@ -132,6 +135,8 @@ def test_solve_mdke_w7x_eim(idx):
 @pytest.mark.parametrize("erhohat", [0.0, 1e-3])
 def test_solve_field_types(nuhat, erhohat):
     """Test solving the MDKE with the same physical field in different coordinates."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
     import desc  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
@@ -172,6 +177,8 @@ def test_solve_field_types(nuhat, erhohat):
 @pytest.mark.parametrize("idx", [0, 10, 20])
 def test_solve_dke_ncsx(idx):
     """Test solving DKE vs sfincs."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
     rho = 0.5
     # hydrogen ion charge and mass (no electrons)
     # n = 1.5e20 / m^3     # noqa E800
@@ -263,6 +270,8 @@ def _jvp_1_arg(fun, x0, argnum, rel_step, abs_step):
 
 def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     # these are super low res, just to test jax logic, not physical correctness
+    if os.environ.get("CI"):
+        jax.clear_caches()
 
     def foo(inputs):
         n, T, dn, dT, Er = inputs
