@@ -57,7 +57,7 @@ jobs:
           pwd
           lscpu
           pip list
-          python -m pytest -v  \
+          python -m pytest -v -s  \
             --durations=0 \
             --cov-report xml:cov.xml \
             --cov-config=setup.cfg \
