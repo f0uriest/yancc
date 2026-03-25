@@ -280,7 +280,7 @@ def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
             field, pitchgrid, speedgrid, species, Er, verbose=0, rtol=1e-12
         )
         return jnp.array(
-            [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<BV||>"]]
+            [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<V||B>"]]
         ).squeeze()
 
     n = 1e19

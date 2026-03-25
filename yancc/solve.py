@@ -241,8 +241,8 @@ def solve_dke(
             Qₐ = FSA heat flux for each species, in Joules/(meter² second)
         V|| : jax.Array, shape(ns, nt, nz)
             V|| = Parallel velocity for each species, in meters/second
-        <BV||>: jax.Array, shape(ns)
-            <BV||> = Flux surface average field*parallel velocity for each species,
+        <V||B>: jax.Array, shape(ns)
+            <V||B> = Flux surface average field*parallel velocity for each species,
             in Tesla*meter/second
         <J||B>: float
             <J||B> = Bootstrap current, in Tesla*Amps/meter².
