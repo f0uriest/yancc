@@ -236,57 +236,76 @@ class DKEPreconditioner(MultigridOperator):
                 max_grids=max_grids,
                 coarsening_factor=coarsening_factor,
             )
+        ress = jax.block_until_ready(ress)
+        if verbose:
+            print("Determined multigrid resolutions")
 
-        fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
-
-        operators = get_dke_operators(
-            fields=fields,
-            pitchgrids=grids,
-            speedgrid=speedgrid,
-            species=species,
-            Erho=Erho,
-            background=background,
-            potentials=potentials,
-            p1=self.p1,
-            p2=self.p2,
-            gauge=gauge,
-            operator_weights=operator_weights,
-            **options,
+        fields, grids = jax.block_until_ready(
+            get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
         )
+        if verbose:
+            print("Got coarse fields and grids for multigrid preconditioner")
+
+        operators = jax.block_until_ready(
+            get_dke_operators(
+                fields=fields,
+                pitchgrids=grids,
+                speedgrid=speedgrid,
+                species=species,
+                Erho=Erho,
+                background=background,
+                potentials=potentials,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                operator_weights=operator_weights,
+                **options,
+            )
+        )
+        if verbose:
+            print("Got coarse grid operators")
         if smooth_type == 1:
-            smoothers = get_dke_jacobi_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                **options,
+            smoothers = jax.block_until_ready(
+                get_dke_jacobi_smoothers(
+                    fields=fields,
+                    pitchgrids=grids,
+                    speedgrid=speedgrid,
+                    species=species,
+                    Erho=Erho,
+                    background=background,
+                    potentials=potentials,
+                    p1=self.p1,
+                    p2=self.p2,
+                    gauge=gauge,
+                    smooth_solver=smooth_solver,
+                    weight=smooth_weights,
+                    operator_weights=smoother_weights,
+                    **options,
+                )
             )
+            if verbose:
+                print("Got jacobi smoothers")
         else:
-            smoothers = get_dke_jacobi2_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                **options,
+            smoothers = jax.block_until_ready(
+                get_dke_jacobi2_smoothers(
+                    fields=fields,
+                    pitchgrids=grids,
+                    speedgrid=speedgrid,
+                    species=species,
+                    Erho=Erho,
+                    background=background,
+                    potentials=potentials,
+                    p1=self.p1,
+                    p2=self.p2,
+                    gauge=gauge,
+                    smooth_solver=smooth_solver,
+                    weight=smooth_weights,
+                    operator_weights=smoother_weights,
+                    **options,
+                )
             )
+            if verbose:
+                print("Got jacobi2 smoothers")
         super().__init__(
             operators=operators,
             smoothers=smoothers,

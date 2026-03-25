@@ -1000,7 +1000,11 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.interp_method = interp_method
         self.smooth_method = smooth_method
         if coarse_opinv is None:
-            coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            coarse_opinv = jax.block_until_ready(
+                InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            )
+            if verbose:
+                print("Factorized coarsest grid operator")
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
         self.verbose = verbose
