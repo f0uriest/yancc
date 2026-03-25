@@ -211,8 +211,8 @@ def test_solve_dke_ncsx(idx):
     sfincs_data = {
         "Er": sfincs_data[:, 0],
         "FSABFlow": sfincs_data[:, 1],
-        "particleFlux_vm_rHat": sfincs_data[:, 2] / field.a_minor,
-        "heatFlux_vm_rHat": sfincs_data[:, 3] / field.a_minor,
+        "particleFlux_vm_rN": sfincs_data[:, 2] / field.a_minor,
+        "heatFlux_vm_rN": sfincs_data[:, 3] / field.a_minor,
         "energy_source": sfincs_data[:, 4],
     }
 
@@ -248,14 +248,14 @@ def test_solve_dke_ncsx(idx):
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["FSABFlow"]))),
     )
     np.testing.assert_allclose(
-        normalized_fluxes["particleFlux_vm_rHat"],
-        sfincs_data["particleFlux_vm_rHat"][idx],
-        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_vm_rHat"]))),
+        normalized_fluxes["particleFlux_vm_rN"],
+        sfincs_data["particleFlux_vm_rN"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_vm_rN"]))),
     )
     np.testing.assert_allclose(
-        normalized_fluxes["heatFlux_vm_rHat"],
-        sfincs_data["heatFlux_vm_rHat"][idx],
-        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rHat"]))),
+        normalized_fluxes["heatFlux_vm_rN"],
+        sfincs_data["heatFlux_vm_rN"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rN"]))),
     )
 
 

@@ -574,17 +574,17 @@ def normalize_fluxes_sfincs(
     vbar = jnp.sqrt(2 * Tbar / mbar)
     density = jnp.array([sp.density for sp in species])
     sfincs_fluxes = {}
-    sfincs_fluxes["particleFlux_vm_rHat"] = (
+    sfincs_fluxes["particleFlux_vm_rN"] = (
         fluxes["<particle_flux>"] * Rbar / (nbar * vbar)
     )
-    sfincs_fluxes["heatFlux_vm_rHat"] = (
+    sfincs_fluxes["heatFlux_vm_rN"] = (
         fluxes["<heat_flux>"] * Rbar / (nbar * vbar**3 * mbar)
     )
     sfincs_fluxes["flow"] = fluxes["V||"] * density[:, None, None] / (nbar * vbar)
-    sfincs_fluxes["FSABFlow"] = fluxes["<BV||>"] / (vbar * Bbar) * density / nbar
+    sfincs_fluxes["FSABFlow"] = fluxes["<V||B>"] / (vbar * Bbar) * density / nbar
     sfincs_fluxes["FSABjHat"] = fluxes["<J||B>"] / (
         elementary_charge * nbar * vbar * Bbar
     )
-    sfincs_fluxes["j_rHat"] = fluxes["J_rho"] * Rbar / (elementary_charge * nbar * vbar)
+    sfincs_fluxes["j_rN"] = fluxes["J_rho"] * Rbar / (elementary_charge * nbar * vbar)
     sfincs_fluxes["jHat"] = fluxes["J||"] / (elementary_charge * nbar * vbar)
     return sfincs_fluxes
