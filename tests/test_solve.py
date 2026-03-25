@@ -232,6 +232,7 @@ def test_solve_dke_ncsx(idx):
         operator_weights=operator_weights,
         verbose=2,
         rtol=1e-5,
+        multigrid_options={"max_grids": 2, "coarse_N": 4000},
     )
     t1 = time.perf_counter()
     print("TIME:", t1 - t0)
