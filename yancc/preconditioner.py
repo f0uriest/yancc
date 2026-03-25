@@ -10,6 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
     get_dke_jacobi2_smoothers,
@@ -306,6 +307,12 @@ class DKEPreconditioner(MultigridOperator):
             )
             if verbose:
                 print("Got jacobi2 smoothers")
+        coarse_opinv = jax.block_until_ready(
+            InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        )
+        if verbose:
+            print("Factorized coarsest grid operator")
+
         super().__init__(
             operators=operators,
             smoothers=smoothers,
@@ -315,7 +322,7 @@ class DKEPreconditioner(MultigridOperator):
             v2=v2,
             interp_method=interp_method,
             smooth_method=smooth_method,
-            coarse_opinv=None,
+            coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )

@@ -230,7 +230,7 @@ def test_solve_dke_ncsx(idx):
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
         operator_weights=operator_weights,
-        verbose=2,
+        verbose=5,
         rtol=1e-5,
         multigrid_options={"max_grids": 2, "coarse_N": 4000},
     )
