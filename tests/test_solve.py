@@ -223,18 +223,17 @@ def test_solve_dke_ncsx(idx):
     print("Er:", Er)
 
     t0 = time.perf_counter()
-    with jax.log_compiles():
-        f, r, flux, info = solve_dke(
-            field,
-            pitchgrid,
-            speedgrid,
-            species,
-            Erho=Er * field.a_minor * 1000,  # Er in kV/m
-            operator_weights=operator_weights,
-            verbose=5,
-            rtol=1e-5,
-            multigrid_options={"max_grids": 2, "coarse_N": 2000},
-        )
+    f, r, flux, info = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Erho=Er * field.a_minor * 1000,  # Er in kV/m
+        operator_weights=operator_weights,
+        verbose=3,
+        rtol=1e-5,
+        multigrid_options={"max_grids": 3, "coarse_N": 2000},
+    )
     t1 = time.perf_counter()
     print("TIME:", t1 - t0)
     normalized_fluxes = normalize_fluxes_sfincs(

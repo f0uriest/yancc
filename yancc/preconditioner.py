@@ -236,18 +236,24 @@ class DKEPreconditioner(MultigridOperator):
                 max_grids=max_grids,
                 coarsening_factor=coarsening_factor,
             )
-        ress = jax.block_until_ready(ress)
-        if verbose > 2:
-            jax.debug.print("Determined multigrid resolutions")
 
-        fields, grids = jax.block_until_ready(
-            get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
+        fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
+        operators = get_dke_operators(
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            Erho=Erho,
+            background=background,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            operator_weights=operator_weights,
+            **options,
         )
-        if verbose > 2:
-            jax.debug.print("Got coarse fields and grids for multigrid preconditioner")
-
-        operators = jax.block_until_ready(
-            get_dke_operators(
+        if smooth_type == 1:
+            smoothers = get_dke_jacobi_smoothers(
                 fields=fields,
                 pitchgrids=grids,
                 speedgrid=speedgrid,
@@ -258,65 +264,29 @@ class DKEPreconditioner(MultigridOperator):
                 p1=self.p1,
                 p2=self.p2,
                 gauge=gauge,
-                operator_weights=operator_weights,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+                operator_weights=smoother_weights,
                 **options,
             )
-        )
-        if verbose > 2:
-            jax.debug.print("Got coarse grid operators")
-        if smooth_type == 1:
-            smoothers = jax.block_until_ready(
-                get_dke_jacobi_smoothers(
-                    fields=fields,
-                    pitchgrids=grids,
-                    speedgrid=speedgrid,
-                    species=species,
-                    Erho=Erho,
-                    background=background,
-                    potentials=potentials,
-                    p1=self.p1,
-                    p2=self.p2,
-                    gauge=gauge,
-                    smooth_solver=smooth_solver,
-                    weight=smooth_weights,
-                    operator_weights=smoother_weights,
-                    **options,
-                )
-            )
-            if verbose > 2:
-                jax.debug.print("Got jacobi smoothers")
         else:
-            smoothers = jax.block_until_ready(
-                get_dke_jacobi2_smoothers(
-                    fields=fields,
-                    pitchgrids=grids,
-                    speedgrid=speedgrid,
-                    species=species,
-                    Erho=Erho,
-                    background=background,
-                    potentials=potentials,
-                    p1=self.p1,
-                    p2=self.p2,
-                    gauge=gauge,
-                    smooth_solver=smooth_solver,
-                    weight=smooth_weights,
-                    operator_weights=smoother_weights,
-                    **options,
-                )
+            smoothers = get_dke_jacobi2_smoothers(
+                fields=fields,
+                pitchgrids=grids,
+                speedgrid=speedgrid,
+                species=species,
+                Erho=Erho,
+                background=background,
+                potentials=potentials,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+                operator_weights=smoother_weights,
+                **options,
             )
-            if verbose > 2:
-                jax.debug.print("Got jacobi2 smoothers")
-        A_coarse = jax.block_until_ready(operators[0].as_matrix())
-        if verbose > 2:
-            jax.debug.print("Materialized coarsest grid operator")
-
-        coarse_opinv = jax.block_until_ready(
-            InverseLinearOperator(
-                lx.MatrixLinearOperator(A_coarse), lx.LU(), throw=False
-            )
-        )
-        if verbose > 2:
-            jax.debug.print("Factorized coarsest grid operator")
+        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
 
         super().__init__(
             operators=operators,

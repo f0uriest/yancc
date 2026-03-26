@@ -2,7 +2,7 @@
 -r ./requirements.txt
 
 sympy
-desc-opt <= 0.17.0
+desc-opt <= 0.17.1
 mpmath
 
 # building the docs

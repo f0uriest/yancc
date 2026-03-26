@@ -286,11 +286,7 @@ def solve_dke(  # noqa: C901
         _print_er_summary(species, field, Erho)
 
     if potentials is None:
-        potentials = jax.block_until_ready(
-            RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
-        )
-        if verbose > 2 and not skip_init_print:
-            jax.debug.print("Calculated Rosenbluth potential Greens functions.")
+        potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
 
     if M is None:
         if len(species) > 1:
@@ -307,49 +303,32 @@ def solve_dke(  # noqa: C901
         multigrid_options.setdefault("potentials", potentials)
         multigrid_options.setdefault("gauge", True)
         multigrid_options.setdefault("verbose", verbose)
-        M = jax.block_until_ready(DKEPreconditioner(**multigrid_options))
-        if verbose > 2 and not skip_init_print:
-            jax.debug.print("Formed multigrid preconditioner")
+        M = DKEPreconditioner(**multigrid_options)
 
     if verbose and not skip_init_print:
         _print_dke_resolutions(M)
 
     if B is None:
-        B = jax.block_until_ready(DKESources(field, pitchgrid, speedgrid, species))
-        if verbose > 2 and not skip_init_print:
-            jax.debug.print("Formed source term")
+        B = DKESources(field, pitchgrid, speedgrid, species)
     if C is None:
-        C = jax.block_until_ready(
-            DKEConstraint(field, pitchgrid, speedgrid, species, True)
-        )
-        if verbose > 2 and not skip_init_print:
-            jax.debug.print("Formed constraint term")
+        C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
 
-    A = jax.block_until_ready(
-        DKE(
-            field=field,
-            pitchgrid=pitchgrid,
-            speedgrid=speedgrid,
-            species=species,
-            Erho=Erho,
-            background=background,
-            potentials=potentials,
-            p1=p1,
-            p2=p2,
-            gauge=False,
-            operator_weights=operator_weights,
-        )
+    A = DKE(
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species,
+        Erho=Erho,
+        background=background,
+        potentials=potentials,
+        p1=p1,
+        p2=p2,
+        gauge=False,
+        operator_weights=operator_weights,
     )
-    if verbose > 2 and not skip_init_print:
-        jax.debug.print("Formed DKE matrix")
 
-    operator = jax.block_until_ready(BorderedOperator(A, B, C))
-    if verbose > 2 and not skip_init_print:
-        jax.debug.print("Formed block operator")
-
-    preconditioner = jax.block_until_ready(InverseBorderedOperator(M, B, C))
-    if verbose > 2 and not skip_init_print:
-        jax.debug.print("Formed block preconditioner")
+    operator = BorderedOperator(A, B, C)
+    preconditioner = InverseBorderedOperator(M, B, C)
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
