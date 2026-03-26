@@ -108,8 +108,7 @@ class MDKEPreconditioner(MultigridOperator):
         if verbose:
             for i, res in enumerate(ress):
                 ns, nx, na, nt, nz = res
-                # these values aren't traced so we can use regular print
-                print(
+                jax.debug.print(
                     f"Grid {i}: na={na:4d}, "
                     f"nt={nt:4d}, "
                     f"nz={nz:4d}, "
@@ -238,14 +237,14 @@ class DKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
         ress = jax.block_until_ready(ress)
-        if verbose:
-            print("Determined multigrid resolutions")
+        if verbose > 2:
+            jax.debug.print("Determined multigrid resolutions")
 
         fields, grids = jax.block_until_ready(
             get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
         )
-        if verbose:
-            print("Got coarse fields and grids for multigrid preconditioner")
+        if verbose > 2:
+            jax.debug.print("Got coarse fields and grids for multigrid preconditioner")
 
         operators = jax.block_until_ready(
             get_dke_operators(
@@ -263,8 +262,8 @@ class DKEPreconditioner(MultigridOperator):
                 **options,
             )
         )
-        if verbose:
-            print("Got coarse grid operators")
+        if verbose > 2:
+            jax.debug.print("Got coarse grid operators")
         if smooth_type == 1:
             smoothers = jax.block_until_ready(
                 get_dke_jacobi_smoothers(
@@ -284,8 +283,8 @@ class DKEPreconditioner(MultigridOperator):
                     **options,
                 )
             )
-            if verbose:
-                print("Got jacobi smoothers")
+            if verbose > 2:
+                jax.debug.print("Got jacobi smoothers")
         else:
             smoothers = jax.block_until_ready(
                 get_dke_jacobi2_smoothers(
@@ -305,13 +304,19 @@ class DKEPreconditioner(MultigridOperator):
                     **options,
                 )
             )
-            if verbose:
-                print("Got jacobi2 smoothers")
+            if verbose > 2:
+                jax.debug.print("Got jacobi2 smoothers")
+        A_coarse = jax.block_until_ready(operators[0].as_matrix())
+        if verbose > 2:
+            jax.debug.print("Materialized coarsest grid operator")
+
         coarse_opinv = jax.block_until_ready(
-            InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            InverseLinearOperator(
+                lx.MatrixLinearOperator(A_coarse), lx.LU(), throw=False
+            )
         )
-        if verbose:
-            print("Factorized coarsest grid operator")
+        if verbose > 2:
+            jax.debug.print("Factorized coarsest grid operator")
 
         super().__init__(
             operators=operators,

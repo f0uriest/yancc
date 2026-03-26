@@ -289,8 +289,8 @@ def solve_dke(  # noqa: C901
         potentials = jax.block_until_ready(
             RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
         )
-        if verbose and not skip_init_print:
-            print("Calculated Rosenbluth potential Greens functions.")
+        if verbose > 2 and not skip_init_print:
+            jax.debug.print("Calculated Rosenbluth potential Greens functions.")
 
     if M is None:
         if len(species) > 1:
@@ -308,22 +308,22 @@ def solve_dke(  # noqa: C901
         multigrid_options.setdefault("gauge", True)
         multigrid_options.setdefault("verbose", verbose)
         M = jax.block_until_ready(DKEPreconditioner(**multigrid_options))
-        if verbose and not skip_init_print:
-            print("Formed multigrid preconditioner")
+        if verbose > 2 and not skip_init_print:
+            jax.debug.print("Formed multigrid preconditioner")
 
     if verbose and not skip_init_print:
         _print_dke_resolutions(M)
 
     if B is None:
         B = jax.block_until_ready(DKESources(field, pitchgrid, speedgrid, species))
-        if verbose and not skip_init_print:
-            print("Formed source term")
+        if verbose > 2 and not skip_init_print:
+            jax.debug.print("Formed source term")
     if C is None:
         C = jax.block_until_ready(
             DKEConstraint(field, pitchgrid, speedgrid, species, True)
         )
-        if verbose and not skip_init_print:
-            print("Formed constraint term")
+        if verbose > 2 and not skip_init_print:
+            jax.debug.print("Formed constraint term")
 
     A = jax.block_until_ready(
         DKE(
@@ -340,16 +340,16 @@ def solve_dke(  # noqa: C901
             operator_weights=operator_weights,
         )
     )
-    if verbose and not skip_init_print:
-        print("Formed DKE matrix")
+    if verbose > 2 and not skip_init_print:
+        jax.debug.print("Formed DKE matrix")
 
     operator = jax.block_until_ready(BorderedOperator(A, B, C))
-    if verbose and not skip_init_print:
-        print("Formed block operator")
+    if verbose > 2 and not skip_init_print:
+        jax.debug.print("Formed block operator")
 
     preconditioner = jax.block_until_ready(InverseBorderedOperator(M, B, C))
-    if verbose and not skip_init_print:
-        print("Formed block preconditioner")
+    if verbose > 2 and not skip_init_print:
+        jax.debug.print("Formed block preconditioner")
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
@@ -451,8 +451,7 @@ def _print_dke_resolutions(preconditioner):
         na = op.pitchgrid.nxi
         nt = op.field.ntheta
         nz = op.field.nzeta
-        # these values aren't traced so we can use regular print
-        print(
+        jax.debug.print(
             f"Grid {i}: nx={nx:4d}, "
             f"na={na:4d}, "
             f"nt={nt:4d}, "
