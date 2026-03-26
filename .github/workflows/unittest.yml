@@ -67,7 +67,6 @@ jobs:
             --splits 8 \
             --group ${{ matrix.combos.group }} \
             --splitting-algorithm least_duration \
-            --db ./prof.db
       - name: save coverage file and plot comparison results
         if: always()
         uses: actions/upload-artifact@v7
@@ -75,7 +74,6 @@ jobs:
           name: unit_test_artifact-${{ matrix.combos.python_version }}-${{ matrix.combos.group }}
           path: |
             ./cov.xml
-            ./prof.db
       - name: Upload coverage
         id : codecov
         uses: codecov/codecov-action@v5
