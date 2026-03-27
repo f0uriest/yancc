@@ -10,6 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
     get_dke_jacobi2_smoothers,
@@ -107,8 +108,7 @@ class MDKEPreconditioner(MultigridOperator):
         if verbose:
             for i, res in enumerate(ress):
                 ns, nx, na, nt, nz = res
-                # these values aren't traced so we can use regular print
-                print(
+                jax.debug.print(
                     f"Grid {i}: na={na:4d}, "
                     f"nt={nt:4d}, "
                     f"nz={nz:4d}, "
@@ -238,7 +238,6 @@ class DKEPreconditioner(MultigridOperator):
             )
 
         fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
-
         operators = get_dke_operators(
             fields=fields,
             pitchgrids=grids,
@@ -287,6 +286,8 @@ class DKEPreconditioner(MultigridOperator):
                 operator_weights=smoother_weights,
                 **options,
             )
+        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+
         super().__init__(
             operators=operators,
             smoothers=smoothers,
@@ -296,7 +297,7 @@ class DKEPreconditioner(MultigridOperator):
             v2=v2,
             interp_method=interp_method,
             smooth_method=smooth_method,
-            coarse_opinv=None,
+            coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )

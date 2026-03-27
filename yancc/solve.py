@@ -182,7 +182,7 @@ def solve_mdke(
     )
 
 
-def solve_dke(
+def solve_dke(  # noqa: C901
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
@@ -241,8 +241,8 @@ def solve_dke(
             Qₐ = FSA heat flux for each species, in Joules/(meter² second)
         V|| : jax.Array, shape(ns, nt, nz)
             V|| = Parallel velocity for each species, in meters/second
-        <BV||>: jax.Array, shape(ns)
-            <BV||> = Flux surface average field*parallel velocity for each species,
+        <V||B>: jax.Array, shape(ns)
+            <V||B> = Flux surface average field*parallel velocity for each species,
             in Tesla*meter/second
         <J||B>: float
             <J||B> = Bootstrap current, in Tesla*Amps/meter².
@@ -430,8 +430,7 @@ def _print_dke_resolutions(preconditioner):
         na = op.pitchgrid.nxi
         nt = op.field.ntheta
         nz = op.field.nzeta
-        # these values aren't traced so we can use regular print
-        print(
+        jax.debug.print(
             f"Grid {i}: nx={nx:4d}, "
             f"na={na:4d}, "
             f"nt={nt:4d}, "
