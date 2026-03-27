@@ -1,5 +1,6 @@
 """Regression tests comparing yancc to monkes/sfincs etc."""
 
+import os
 import time
 
 import jax
@@ -51,6 +52,8 @@ def _read_monkes_dat(path):
 # this is a reasonable range for testing at low resolution
 @pytest.mark.parametrize("idx", [15, 20, 25, 51, 56, 61])
 def test_solve_mdke_w7x_eim(idx):
+    if os.environ.get("CI"):
+        jax.clear_caches()
     config = {
         "dat_path": "tests/data/monkes_Monoenergetic_Database_w7x_eim.dat",
         "booz_path": "tests/data/boozmn_wout_w7x_eim.nc",
@@ -132,6 +135,8 @@ def test_solve_mdke_w7x_eim(idx):
 @pytest.mark.parametrize("erhohat", [0.0, 1e-3])
 def test_solve_field_types(nuhat, erhohat):
     """Test solving the MDKE with the same physical field in different coordinates."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
     import desc  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
@@ -172,6 +177,8 @@ def test_solve_field_types(nuhat, erhohat):
 @pytest.mark.parametrize("idx", [0, 10, 20])
 def test_solve_dke_ncsx(idx):
     """Test solving DKE vs sfincs."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
     rho = 0.5
     # hydrogen ion charge and mass (no electrons)
     # n = 1.5e20 / m^3     # noqa E800
@@ -204,8 +211,8 @@ def test_solve_dke_ncsx(idx):
     sfincs_data = {
         "Er": sfincs_data[:, 0],
         "FSABFlow": sfincs_data[:, 1],
-        "particleFlux_vm_rHat": sfincs_data[:, 2] / field.a_minor,
-        "heatFlux_vm_rHat": sfincs_data[:, 3] / field.a_minor,
+        "particleFlux_vm_rN": sfincs_data[:, 2] / field.a_minor,
+        "heatFlux_vm_rN": sfincs_data[:, 3] / field.a_minor,
         "energy_source": sfincs_data[:, 4],
     }
 
@@ -223,8 +230,9 @@ def test_solve_dke_ncsx(idx):
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
         operator_weights=operator_weights,
-        verbose=2,
+        verbose=3,
         rtol=1e-5,
+        multigrid_options={"max_grids": 3, "coarse_N": 2000},
     )
     t1 = time.perf_counter()
     print("TIME:", t1 - t0)
@@ -241,14 +249,14 @@ def test_solve_dke_ncsx(idx):
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["FSABFlow"]))),
     )
     np.testing.assert_allclose(
-        normalized_fluxes["particleFlux_vm_rHat"],
-        sfincs_data["particleFlux_vm_rHat"][idx],
-        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_vm_rHat"]))),
+        normalized_fluxes["particleFlux_vm_rN"],
+        sfincs_data["particleFlux_vm_rN"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_vm_rN"]))),
     )
     np.testing.assert_allclose(
-        normalized_fluxes["heatFlux_vm_rHat"],
-        sfincs_data["heatFlux_vm_rHat"][idx],
-        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rHat"]))),
+        normalized_fluxes["heatFlux_vm_rN"],
+        sfincs_data["heatFlux_vm_rN"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rN"]))),
     )
 
 
@@ -263,15 +271,17 @@ def _jvp_1_arg(fun, x0, argnum, rel_step, abs_step):
 
 def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     # these are super low res, just to test jax logic, not physical correctness
+    if os.environ.get("CI"):
+        jax.clear_caches()
 
     def foo(inputs):
         n, T, dn, dT, Er = inputs
         species = [yancc.species.LocalMaxwellian(yancc.species.Hydrogen, T, n, dT, dn)]
         f, r, fluxes, info = solve_dke(
-            field, pitchgrid, speedgrid, species, Er, verbose=0, rtol=1e-12
+            field, pitchgrid, speedgrid, species, Er, verbose=2, rtol=1e-12
         )
         return jnp.array(
-            [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<BV||>"]]
+            [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<V||B>"]]
         ).squeeze()
 
     n = 1e19
