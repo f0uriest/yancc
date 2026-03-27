@@ -8,6 +8,7 @@ import interpax
 import jax
 import jax.numpy as jnp
 import numpy as np
+from interpax import Interpolator2D
 from jaxtyping import Array, ArrayLike, Float, Int
 from scipy.constants import mu_0
 
@@ -597,6 +598,152 @@ class Field(eqx.Module):
             a_minor=self.a_minor,
             NFP=self.NFP,
         )
+
+
+class SplineField(Field):
+    """Splined magnetic field on a flux surface.
+
+    Field is given as 2D arrays uniformly spaced in arbitrary
+    poloidal and toroidal angles. The radial coordinate is assumed to be
+    rho = sqrt(normalized toroidal flux). Spline interpolants are constructed for
+    arbitrary evaluation.
+
+    Parameters
+    ----------
+    rho : float
+        Normalized surface label = sqrt(s).
+    B_sup_t : jax.Array, shape(ntheta, nzeta)
+        B^theta, contravariant poloidal component of field.
+    B_sup_z : jax.Array, shape(ntheta, nzeta)
+        B^zeta, contravariant toroidal component of field.
+    B_sub_t : jax.Array, shape(ntheta, nzeta)
+        B_theta, covariant poloidal component of field.
+    B_sub_z : jax.Array, shape(ntheta, nzeta)
+        B_zeta, covariant toroidal component of field.
+    Bmag : jax.Array, shape(ntheta, nzeta)
+        Magnetic field magnitude.
+    sqrtg : jax.Array, shape(ntheta, nzeta)
+        Coordinate jacobian determinant from (rho, theta, zeta) to (R, phi, Z). Units
+        of m^3
+    Psi : float
+        Total toroidal flux within the LCFS (in Webers, not divided by 2pi).
+    iota : float
+        Rotational transform.
+    R_major : float
+        Major radius.
+    a_minor : float
+        Minor radius.
+    NFP : int
+        Number of field periods.
+    dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
+        Derivative of Bmag with respect to theta/zeta. Default is to compute with fft.
+    B0 : float, optional
+        Characteristic scale for magnetic field. Default is surface average of B.
+    """
+
+    rho: Float[Array, ""]
+    B_sup_t: Interpolator2D
+    B_sup_z: Interpolator2D
+    B_sub_t: Interpolator2D
+    B_sub_z: Interpolator2D
+    sqrtg: Interpolator2D
+    Bmag: Interpolator2D
+    bdotgradB: Interpolator2D
+    BxgradrhodotgradB: Interpolator2D
+    dBdt: Interpolator2D
+    dBdz: Interpolator2D
+    Bmag_fsa: Float[Array, ""]
+    B2mag_fsa: Float[Array, ""]
+    psi_r: Float[Array, ""]
+    psi_rho: Float[Array, ""]
+    Psi: Float[Array, ""]
+    R_major: Float[Array, ""]
+    a_minor: Float[Array, ""]
+    iota: Float[Array, ""]
+    B0: Float[Array, ""]
+    ntheta: int = eqx.field(static=True)
+    nzeta: int = eqx.field(static=True)
+    NFP: Int[Array, ""]
+    theta: jax.Array
+    zeta: jax.Array
+    wtheta: jax.Array
+    wzeta: jax.Array
+
+    def __init__(
+        self,
+        rho: Float[ArrayLike, ""],
+        B_sup_t: Float[ArrayLike, "ntheta nzeta"],
+        B_sup_z: Float[ArrayLike, "ntheta nzeta"],
+        B_sub_t: Float[ArrayLike, "ntheta nzeta"],
+        B_sub_z: Float[ArrayLike, "ntheta nzeta"],
+        Bmag: Float[ArrayLike, "ntheta nzeta"],
+        sqrtg: Float[ArrayLike, "ntheta nzeta"],
+        Psi: Float[ArrayLike, ""],
+        iota: Float[ArrayLike, ""],
+        R_major: Float[ArrayLike, ""],
+        a_minor: Float[ArrayLike, ""],
+        NFP: Int[ArrayLike, ""] = 1,
+        *,
+        dBdt: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
+        dBdz: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
+        B0: Optional[Float[ArrayLike, ""]] = None,
+    ):
+        self.rho = jnp.asarray(rho)
+        self.NFP = jnp.asarray(NFP)
+
+        B_sup_t, B_sup_z, B_sub_t, B_sub_t, Bmag, sqrtg = map(
+            jnp.asarray, (B_sup_t, B_sup_z, B_sub_t, B_sub_t, Bmag, sqrtg)
+        )
+
+        self.ntheta = Bmag.shape[0]
+        self.nzeta = Bmag.shape[1]
+        assert (self.ntheta % 2 == 1) and (
+            self.nzeta % 2 == 1
+        ), "ntheta and nzeta must be odd"
+        self.theta = jnp.linspace(0, 2 * jnp.pi, self.ntheta, endpoint=False)
+        self.zeta = jnp.linspace(0, 2 * jnp.pi / self.NFP, self.nzeta, endpoint=False)
+        period = (2 * jnp.pi, 2 * jnp.pi / self.NFP)
+        self.B_sup_t = Interpolator2D(self.theta, self.zeta, B_sup_t, period=period)
+        self.B_sup_z = Interpolator2D(self.theta, self.zeta, B_sup_z, period=period)
+        self.B_sub_t = Interpolator2D(self.theta, self.zeta, B_sub_t, period=period)
+        self.B_sub_z = Interpolator2D(self.theta, self.zeta, B_sub_z, period=period)
+        self.sqrtg = Interpolator2D(self.theta, self.zeta, sqrtg, period=period)
+        self.Bmag = Interpolator2D(self.theta, self.zeta, Bmag, period=period)
+
+        if dBdt is None:
+            dBdt = self._dfdt(Bmag)
+        if dBdz is None:
+            dBdz = self._dfdz(Bmag)
+        dBdt, dBdz = map(jnp.asarray, (dBdt, dBdz))
+        self.dBdt = Interpolator2D(self.theta, self.zeta, dBdt, period=period)
+        self.dBdz = Interpolator2D(self.theta, self.zeta, dBdz, period=period)
+        if B0 is None:
+            B0 = jnp.mean(Bmag)
+        self.B0 = jnp.asarray(B0)
+        self.bdotgradB = Interpolator2D(
+            self.theta,
+            self.zeta,
+            (B_sup_t * dBdt + B_sup_z * dBdz) / Bmag,
+            period=period,
+        )
+        self.BxgradrhodotgradB = Interpolator2D(
+            self.theta,
+            self.zeta,
+            (B_sub_z * dBdt - B_sub_t * dBdz) / sqrtg,
+            period=period,
+        )
+        self.Bmag_fsa = jnp.mean(sqrtg * Bmag) / jnp.mean(sqrtg)
+        self.B2mag_fsa = jnp.mean(sqrtg * Bmag**2) / jnp.mean(sqrtg)
+        self.Psi = jnp.asarray(Psi)
+        self.iota = jnp.asarray(iota)
+        self.R_major = jnp.asarray(R_major)
+        self.a_minor = jnp.asarray(a_minor)
+        self.psi_rho = jnp.asarray(self.Psi / np.pi * self.rho)
+        self.psi_r = self.psi_rho / self.a_minor
+        self.theta = jnp.linspace(0, 2 * np.pi, self.ntheta, endpoint=False)
+        self.zeta = jnp.linspace(0, 2 * np.pi / NFP, self.nzeta, endpoint=False)
+        self.wtheta = jnp.diff(self.theta, append=jnp.array([2 * jnp.pi]))
+        self.wzeta = jnp.diff(self.zeta, append=jnp.array([2 * jnp.pi / self.NFP]))
 
 
 def vmec_eval(t, z, xc, xs, m, n, dt=0, dz=0):
