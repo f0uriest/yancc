@@ -122,10 +122,11 @@ def solve_mdke(
         MR=M,
         m=m,
         k=k,
-        rtol=rtol,
-        atol=atol,
-        maxiter=maxiter,
-        print_every=print_every if verbose > 1 else 0,
+        rtol=jnp.asarray(rtol),
+        atol=jnp.asarray(atol),
+        maxiter=jnp.asarray(maxiter),
+        verbose=verbose > 1,
+        print_every_inner=jnp.asarray(print_every),
         U=U1,
     )
     if f2 is None:
@@ -137,10 +138,11 @@ def solve_mdke(
         MR=M,
         m=m,
         k=k,
-        rtol=rtol,
-        atol=atol,
-        maxiter=maxiter,
-        print_every=print_every if verbose > 1 else 0,
+        rtol=jnp.asarray(rtol),
+        atol=jnp.asarray(atol),
+        maxiter=jnp.asarray(maxiter),
+        verbose=verbose > 1,
+        print_every_inner=jnp.asarray(print_every),
         U=U2,
     )
     info = {
@@ -182,13 +184,14 @@ def solve_mdke(
     )
 
 
-def solve_dke(
+def solve_dke(  # noqa: C901
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: Union[float, Float[Any, ""]],
     EparB: Union[float, Float[Any, ""]] = 0.0,
+    background: Optional[list[LocalMaxwellian]] = None,
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
     **options,
@@ -209,6 +212,9 @@ def solve_dke(
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     EparB : float
         <E||B>, flux surface average of parallel electric field times B.
+    background : list[LocalMaxwellian]
+        Additional background species to include in the collision operator without
+        solving for df.
     verbose: bool, int
         Level of verbosity:
           - 0: no into printed.
@@ -237,8 +243,8 @@ def solve_dke(
             Qₐ = FSA heat flux for each species, in Joules/(meter² second)
         V|| : jax.Array, shape(ns, nt, nz)
             V|| = Parallel velocity for each species, in meters/second
-        <BV||>: jax.Array, shape(ns)
-            <BV||> = Flux surface average field*parallel velocity for each species,
+        <V||B>: jax.Array, shape(ns)
+            <V||B> = Flux surface average field*parallel velocity for each species,
             in Tesla*meter/second
         <J||B>: float
             <J||B> = Bootstrap current, in Tesla*Amps/meter².
@@ -274,8 +280,11 @@ def solve_dke(
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
+    if background is None:
+        background = []
+
     if verbose and not skip_init_print:
-        _print_species_summary(species, field, speedgrid)
+        _print_species_summary(species, field, speedgrid, background)
         _print_er_summary(species, field, Erho)
 
     if potentials is None:
@@ -291,6 +300,7 @@ def solve_dke(
         multigrid_options.setdefault("pitchgrid", pitchgrid)
         multigrid_options.setdefault("speedgrid", speedgrid)
         multigrid_options.setdefault("species", species)
+        multigrid_options.setdefault("background", background)
         multigrid_options.setdefault("Erho", Erho)
         multigrid_options.setdefault("potentials", potentials)
         multigrid_options.setdefault("gauge", True)
@@ -311,6 +321,7 @@ def solve_dke(
         speedgrid=speedgrid,
         species=species,
         Erho=Erho,
+        background=background,
         potentials=potentials,
         p1=p1,
         p2=p2,
@@ -340,10 +351,11 @@ def solve_dke(
         MR=preconditioner,
         m=m,
         k=k,
-        rtol=rtol,
-        atol=atol,
-        maxiter=maxiter,
-        print_every=print_every if verbose > 1 else 0,
+        rtol=jnp.asarray(rtol),
+        atol=jnp.asarray(atol),
+        maxiter=jnp.asarray(maxiter),
+        verbose=verbose > 1,
+        print_every_inner=jnp.asarray(print_every),
         U=U,
     )
     info = {
@@ -386,7 +398,7 @@ def solve_dke(
     )
 
 
-def _print_species_summary(species, field, speedgrid):
+def _print_species_summary(species, field, speedgrid, background):
     for si, spec in enumerate(species):
         jax.debug.print(
             "Species {si}:  "
@@ -401,8 +413,9 @@ def _print_species_summary(species, field, speedgrid):
             temp=spec.temperature,
             ordered=True,
         )
+        others = species[:si] + species[si + 1 :] + background
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
-        nustars = nustar(spec, field, tempx)
+        nustars = nustar(spec, field, tempx, *others)
         for nu, x in zip(nustars, tempx):
             jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
 
@@ -420,8 +433,7 @@ def _print_dke_resolutions(preconditioner):
         na = op.pitchgrid.nxi
         nt = op.field.ntheta
         nz = op.field.nzeta
-        # these values aren't traced so we can use regular print
-        print(
+        jax.debug.print(
             f"Grid {i}: nx={nx:4d}, "
             f"na={na:4d}, "
             f"nt={nt:4d}, "

@@ -1,6 +1,6 @@
 """Stuff for preconditioners."""
 
-from typing import Union
+from typing import Optional, Union
 
 import equinox as eqx
 import jax
@@ -10,6 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
     get_dke_jacobi2_smoothers,
@@ -76,7 +77,7 @@ class MDKEPreconditioner(MultigridOperator):
         min_nt = options.pop("min_nt", 5)
         min_nz = options.pop("min_nz", 5)
         min_na = options.pop("min_na", 5)
-        smooth_solver = options.pop("smooth_solver", "dense")
+        smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
         coarse_method = options.pop("coarse_method", "standard")
@@ -107,8 +108,7 @@ class MDKEPreconditioner(MultigridOperator):
         if verbose:
             for i, res in enumerate(ress):
                 ns, nx, na, nt, nz = res
-                # these values aren't traced so we can use regular print
-                print(
+                jax.debug.print(
                     f"Grid {i}: na={na:4d}, "
                     f"nt={nt:4d}, "
                     f"nz={nz:4d}, "
@@ -165,13 +165,14 @@ def _(operator):
 
 
 class DKEPreconditioner(MultigridOperator):
-    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+    """Preconditioner for the DKE."""
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
 
@@ -182,6 +183,7 @@ class DKEPreconditioner(MultigridOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]],
         potentials: RosenbluthPotentials,
         verbose: Union[bool, int] = False,
         **options,
@@ -191,6 +193,9 @@ class DKEPreconditioner(MultigridOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.Erho = jnp.asarray(Erho)
 
         self.p1 = options.pop("p1", "2d")
@@ -203,7 +208,7 @@ class DKEPreconditioner(MultigridOperator):
         min_nt = options.pop("min_nt", 5)
         min_nz = options.pop("min_nz", 5)
         min_na = options.pop("min_na", 5)
-        smooth_solver = options.pop("smooth_solver", "dense")
+        smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
         smooth_type = options.pop("smooth_type", 1)
@@ -233,13 +238,13 @@ class DKEPreconditioner(MultigridOperator):
             )
 
         fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
-
         operators = get_dke_operators(
             fields=fields,
             pitchgrids=grids,
             speedgrid=speedgrid,
             species=species,
             Erho=Erho,
+            background=background,
             potentials=potentials,
             p1=self.p1,
             p2=self.p2,
@@ -254,6 +259,7 @@ class DKEPreconditioner(MultigridOperator):
                 speedgrid=speedgrid,
                 species=species,
                 Erho=Erho,
+                background=background,
                 potentials=potentials,
                 p1=self.p1,
                 p2=self.p2,
@@ -270,6 +276,7 @@ class DKEPreconditioner(MultigridOperator):
                 speedgrid=speedgrid,
                 species=species,
                 Erho=Erho,
+                background=background,
                 potentials=potentials,
                 p1=self.p1,
                 p2=self.p2,
@@ -279,6 +286,8 @@ class DKEPreconditioner(MultigridOperator):
                 operator_weights=smoother_weights,
                 **options,
             )
+        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+
         super().__init__(
             operators=operators,
             smoothers=smoothers,
@@ -288,7 +297,7 @@ class DKEPreconditioner(MultigridOperator):
             v2=v2,
             interp_method=interp_method,
             smooth_method=smooth_method,
-            coarse_opinv=None,
+            coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )
@@ -309,6 +318,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
+    background: list[LocalMaxwellian]
     M: MultigridOperator
     vs: jax.Array
 
@@ -319,6 +329,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         **options,
     ):
 
@@ -326,18 +337,22 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        background = background
         self.Erho = jnp.asarray(Erho)
 
         Ers = []
         nus = []
         vs = []
-        for spec in species:
+        for i, spec in enumerate(species):
             temp_nu = []
             temp_Er = []
             temp_vs = []
+            others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
-                nu = collisionality(spec, v, *species)
+                nu = collisionality(spec, v, *others)
                 Erhat = Erho / v
                 nuhat = nu / v
                 temp_Er.append(Erhat)

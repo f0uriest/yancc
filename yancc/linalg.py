@@ -9,6 +9,11 @@ import jax.numpy as jnp
 import lineax as lx
 
 
+def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
+    # need this bc type checkers are stuuuuuupid
+    return jnp.where(a, b, c)
+
+
 class BorderedOperator(lx.AbstractLinearOperator):
     """Operator for a bordered matrix.
 
@@ -124,7 +129,7 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
 
 
 class TransposedLinearOperator(lx.AbstractLinearOperator):
-    """Transpose of another linear operator using jax.tranpose"""
+    """Transpose of another linear operator using jax.transpose"""
 
     operator: lx.AbstractLinearOperator
 
@@ -306,9 +311,9 @@ def _(operator):
     return lx.is_diagonal(operator.operator)
 
 
-@functools.partial(jax.jit, static_argnames=["p", "q", "periodic"])
-@functools.partial(jnp.vectorize, signature="(m,n)->(n,n)", excluded=(0, 1, 3))
-def banded_to_dense(p, q, A, periodic=False):
+@functools.partial(jax.jit, static_argnames=["p", "q"])
+@functools.partial(jnp.vectorize, signature="(m,n)->(n,n)", excluded=(0, 1))
+def banded_to_dense(p, q, A):
     """Convert from banded representation to dense.
 
     Parameters
@@ -317,39 +322,30 @@ def banded_to_dense(p, q, A, periodic=False):
         Lower and Upper bandwidth.
     A : jax.Array, shape(...,p+q+1, N)
         Matrix in banded storage format.
-    periodic : bool
-        Whether to include periodic parts of the matrix (ie upper right and lower left
-        corners).
 
     Returns
     -------
     A : jax.Array, shape(...,N,N)
         Matrix in dense format.
     """
-    n = A.shape[1]
-    assert p <= n
-    assert q <= n
-    if periodic:
-        assert n > 2 * max(p, q)
-    B = jnp.zeros((n, n))
-    for k, a in zip(range(-p, q + 1), A[::-1]):
-        if k == 0:
-            B += jnp.diag(a, k=k)
-        elif k > 0:
-            B += jnp.diag(a[k:], k=k)
-            if periodic:
-                B += jnp.diag(a[:k], k=-n + k)
-        else:
-            B += jnp.diag(a[:k], k=k)
-            if periodic:
-                B += jnp.diag(a[k:], k=n + k)
+    H, n = A.shape
+    assert n >= max(p, q), "invalid bandwidth"
 
-    return B
+    # Create coordinate grids for the input banded matrix
+    r = jnp.arange(H)[:, None]
+    j = jnp.arange(n)[None, :]
+
+    # Calculate the target row indices in the dense matrix
+    i = (j + r - q) % n
+
+    # Initialize a dense matrix of zeros and scatter the banded elements.
+    M = jnp.zeros((n, n), dtype=A.dtype)
+    return M.at[i, j].set(A)
 
 
-@functools.partial(jax.jit, static_argnames=["p", "q", "periodic"])
-@functools.partial(jnp.vectorize, signature="(n,n)->(m,n)", excluded=(0, 1, 3))
-def dense_to_banded(p, q, A, periodic=False):
+@functools.partial(jax.jit, static_argnames=["p", "q"])
+@functools.partial(jnp.vectorize, signature="(n,n)->(m,n)", excluded=(0, 1))
+def dense_to_banded(p, q, A):
     """Convert from dense representation to banded.
 
     Parameters
@@ -367,41 +363,31 @@ def dense_to_banded(p, q, A, periodic=False):
     A : jax.Array, shape(...,p+q+1, N)
         Matrix in banded storage format.
     """
-    n = A.shape[1]
-    assert p <= n
-    assert q <= n
-    if periodic:
-        assert n > 2 * max(p, q)
-    B = jnp.zeros((p + q + 1, n))
-    for i, k in enumerate(range(q, -p - 1, -1)):
-        if k == 0:
-            B = B.at[i].set(jnp.diag(A, k=k))
-        elif k < 0:
-            if periodic:
-                B = B.at[i].set(
-                    jnp.concatenate([jnp.diag(A, k=k), jnp.diag(A, k=n - abs(k))])
-                )
-            else:
-                B = B.at[i].set(jnp.pad(jnp.diag(A, k=k), (0, abs(k))))
-        else:
-            if periodic:
-                B = B.at[i].set(
-                    jnp.concatenate([jnp.diag(A, k=-n + k), jnp.diag(A, k=k)])
-                )
-            else:
-                B = B.at[i].set(jnp.pad(jnp.diag(A, k=k), (abs(k), 0)))
-    return B
+    n = A.shape[0]
+    assert n >= max(p, q), "invalid bandwidth"
+    H = p + q + 1  # Total height of the banded format
+
+    # Create coordinate grids for the output banded matrix
+    r = jnp.arange(H)[:, None]
+    j = jnp.arange(n)[None, :]
+
+    # Calculate the corresponding row indices in the dense matrix.
+    # The modulo % n seamlessly wraps the indices for the periodic corners.
+    i = (j + r - q) % n
+
+    # Gather elements natively
+    return A[i, j]
 
 
 def _safediv(a, b):
     mask = jnp.abs(b) < jnp.finfo(b.dtype).eps
-    b = jnp.where(mask, 1, b)
-    return jnp.where(mask, 0, a / b)
+    b = _where(mask, jnp.array(1), b)
+    return _where(mask, jnp.array(0), a / b)
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
 @functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=(0, 1, 3))
-def lu_factor_banded(p, q, A, *, unroll=True):
+def lu_factor_banded(p, q, A, *, unroll=None):
     """LU factorization of banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -424,33 +410,47 @@ def lu_factor_banded(p, q, A, *, unroll=True):
     assert q <= n
     assert A.shape[0] == (p + q + 1)
 
-    def kloop(k, A):
+    # Pad A along the columns by q.
+    # This acts as a safe "run-off" area for fixed-size slices near the right edge.
+    A_padded = jnp.pad(A, ((0, 0), (0, q)))
 
-        def iloop(i, A):
-            return A.at[q + i - k, k].set(_safediv(A[q + i - k, k], A[q, k]))
+    def kloop(k, A_acc):
+        # --- 1. Vectorized L-update ---
+        pivot = A_acc[q, k]
 
-        A = jax.lax.fori_loop(k + 1, jnp.minimum(k + p + 1, n), iloop, A, unroll=unroll)
+        # Extract L multipliers: shape (p,)
+        l_vec = jax.lax.dynamic_slice_in_dim(A_acc[:, k], q + 1, p, axis=0) / pivot
 
-        def jloop(j, A):
+        # Update the L-column
+        A_acc = A_acc.at[q + 1 : q + 1 + p, k].set(l_vec)
 
-            def mloop(m, A):
-                return A.at[q + m - j, j].add(-A[q + m - k, k] * A[q + k - j, j])
+        # --- 2. Vectorized Rank-1 U-update ---
+        # Since q is static and typically small, we unroll the loop in Python.
+        # This provides XLA with constant, predictable row slice bounds.
+        for j_off in range(1, q + 1):
+            target_col = k + j_off
 
-            A = jax.lax.fori_loop(
-                k + 1, jnp.minimum(k + p + 1, n), mloop, A, unroll=unroll
-            )
-            return A
+            # U-multiplier for this specific column
+            u_val = A_acc[q - j_off, target_col]
 
-        A = jax.lax.fori_loop(k + 1, jnp.minimum(k + q + 1, n), jloop, A, unroll=unroll)
-        return A
+            # The static starting row for this column's update
+            start_row = q + 1 - j_off
 
-    A = jax.lax.fori_loop(0, n - 1, kloop, A, unroll=unroll)
-    return A
+            # Vectorized subtraction for the p elements
+            A_acc = A_acc.at[start_row : start_row + p, target_col].add(-l_vec * u_val)
+
+        return A_acc
+
+    # Execute the main loop over pivot columns
+    A_padded = jax.lax.fori_loop(0, n - 1, kloop, A_padded, unroll=unroll)
+
+    # Slice back to the original mathematical shape
+    return A_padded[:, :n]
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
 @functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, 4))
-def lu_solve_banded(p, q, lu, b, *, unroll=True):
+def lu_solve_banded(p, q, lu, b, *, unroll=None):
     """Solve a linear system with a pre-factored banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -474,29 +474,51 @@ def lu_solve_banded(p, q, lu, b, *, unroll=True):
     assert q <= n
     assert lu.shape[0] == (p + q + 1)
 
-    # first solve Ly = b, overwriting b with y
-    def jloop(j, b):
-        def iloop(i, b):
-            return b.at[i].add(-lu[q + i - j, j] * b[j])
+    # ==========================================
+    # 1. Forward Substitution: Ly = b
+    # ==========================================
+    # Pad RIGHT with 'p' zeros to prevent clamping.
+    b_padded = jnp.pad(b, (0, p))
 
-        b = jax.lax.fori_loop(j + 1, jnp.minimum(j + p + 1, n), iloop, b, unroll=unroll)
-        return b
+    def forward_step(j, b_acc):
+        y_j = b_acc[j]
+        l_vec = lu[q + 1 : q + 1 + p, j]
 
-    b = jax.lax.fori_loop(0, n, jloop, b, unroll=unroll)
+        # Grab window of size p starting at j + 1
+        window = jax.lax.dynamic_slice_in_dim(b_acc, j + 1, p, axis=0)
 
-    # now solve Ux=y, overwriting y with x
-    def kloop(k, b):
+        updated_window = window - l_vec * y_j
+
+        return jax.lax.dynamic_update_slice_in_dim(b_acc, updated_window, j + 1, axis=0)
+
+    y_padded = jax.lax.fori_loop(0, n, forward_step, b_padded, unroll=unroll)
+    y = y_padded[:n]
+
+    # ==========================================
+    # 2. Backward Substitution: Ux = y
+    # ==========================================
+    # Pad LEFT with 'q' zeros to prevent clamping.
+    y_padded_back = jnp.pad(y, (q, 0))
+
+    def backward_step(k, x_acc):
         j = n - 1 - k
-        b = b.at[j].set(_safediv(b[j], lu[q, j]))
+        diag_idx = j + q
 
-        def iloop(i, b):
-            return b.at[i].add(-lu[q + i - j, j] * b[j])
+        xj_val = x_acc[diag_idx] / lu[q, j]
+        x_acc = x_acc.at[diag_idx].set(xj_val)
 
-        b = jax.lax.fori_loop(jnp.maximum(0, j - q), j, iloop, b, unroll=unroll)
-        return b
+        u_vec = lu[0:q, j]
 
-    x = jax.lax.fori_loop(0, n, kloop, b, unroll=unroll)
-    return x
+        # Grab window of size q ending exactly before the diagonal
+        window = jax.lax.dynamic_slice_in_dim(x_acc, j, q, axis=0)
+
+        updated_window = window - u_vec * xj_val
+
+        return jax.lax.dynamic_update_slice_in_dim(x_acc, updated_window, j, axis=0)
+
+    x_padded = jax.lax.fori_loop(0, n, backward_step, y_padded_back, unroll=unroll)
+
+    return x_padded[q:]
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
@@ -524,21 +546,21 @@ def solve_banded(p, q, A, b, *, unroll=True):
     return lu_solve_banded(p, q, lu, b, unroll=unroll)
 
 
-@functools.partial(jax.jit, static_argnames=("r", "unroll"))
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
 @functools.partial(
-    jnp.vectorize, signature="(n,n)->(k,n),(n),(n,m),(m,n)", excluded=(0, 2)
+    jnp.vectorize, signature="(k,n)->(l,n),(n),(n,m),(m,n)", excluded=(0, 1, 3)
 )
-def lu_factor_banded_periodic(r, A, *, unroll=True):
+def lu_factor_banded_periodic(p, q, A, *, unroll=None):
     """LU factorization of periodic banded matrix in dense storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
 
     Parameters
     ----------
-    r: int
-        Maximum of lower and upper bandwidth.
-    A : jax.Array, shape(...,N,N)
-        Matrix in dense format.
+    p, q : int
+        Lower and upper bandwidth of A
+    A : jax.Array, shape(...,p+q+1,N)
+        Matrix in banded format.
 
     Returns
     -------
@@ -550,40 +572,78 @@ def lu_factor_banded_periodic(r, A, *, unroll=True):
     V : jax.Array, shape(...,2*r+1, N)
         Additional matrix for solving the periodic part
     """
-    nn = A.shape[0]
-    if (nn <= 2 * r) or (r == 0):
+    r = p + q
+    H, n = A.shape
+    if r == 0:  # diagonal, trivial
+        return A, jnp.arange(n).astype(jnp.int32), jnp.zeros((n, r)), jnp.zeros((r, n))
+    if n <= r:
+        # below is incorrect, so just use dense solution
+        A = banded_to_dense(p, q, A)
         lu, piv = jax.scipy.linalg.lu_factor(A)
-        return lu, piv, jnp.zeros((nn, r)), jnp.zeros((r, nn))
-    F = A[:r, -r:]
-    G = A[-r:, :r]
-    A0 = A[:r, :r]
-    U0 = jnp.eye(r)
-    V0 = -A0
-    Vn = F
-    Un = -G @ jnp.linalg.inv(A0)
-    C = jnp.eye(r)
-    U = jnp.concatenate([U0, jnp.zeros((nn - 2 * r, r)), Un], axis=0)
-    V = jnp.concatenate([V0, jnp.zeros((r, nn - 2 * r)), Vn], axis=1)
-    B = dense_to_banded(r, r, A - U @ V)
-    lu = lu_factor_banded(r, r, B, unroll=unroll)
-    BinvU = lu_solve_banded(r, r, lu, U.T, unroll=unroll).T
-    schur = jnp.linalg.inv(C + V @ BinvU)
-    BUschur = BinvU @ schur
-    piv = jnp.arange(nn)  # dummy pivots for now
-    return lu, piv, BUschur, V
+        return lu, piv, jnp.zeros((n, r)), jnp.zeros((r, n))
+
+    # ---------------------------------------------------------
+    # 1. Isolate the strictly banded part & identify wrap-arounds
+    # ---------------------------------------------------------
+    r_idx = jnp.arange(H)[:, None]
+    j_idx = jnp.arange(n)[None, :]
+
+    # Calculate virtual row indices to find wrap-around elements
+    i_linear = j_idx + r_idx - q
+    is_wrap = (i_linear < 0) | (i_linear >= n)
+    i_cyclic = i_linear % n
+
+    # A_band is the strictly banded part (wrap-around elements zeroed out)
+    A_band = _where(is_wrap, jnp.array(0.0), A)
+
+    # ---------------------------------------------------------
+    # 2. Construct U and V^T for the low-rank update
+    # ---------------------------------------------------------
+    k_dim = p + q  # Rank of the update
+
+    # Construct U (n x k_dim): Indicator matrix for the cyclic rows
+    U = jnp.zeros((n, k_dim), dtype=A.dtype)
+    # First q columns map to the bottom-left corner (rows n-q to n-1)
+    U = U.at[n - q + jnp.arange(q), jnp.arange(q)].set(1.0)
+    # Next p columns map to the top-right corner (rows 0 to p-1)
+    U = U.at[jnp.arange(p), q + jnp.arange(p)].set(1.0)
+
+    # Construct V^T (k_dim x n): Contains the actual wrap-around values
+    # Map the cyclic rows to the k_dim coordinate space
+    k_idx = _where(i_cyclic >= n - q, i_cyclic - (n - q), q + i_cyclic)
+
+    # We use scatter-add to build V^T while keeping static shapes.
+    # Non-wrap elements add 0.0 to the 0-th index (harmless).
+    safe_k = _where(is_wrap, k_idx, jnp.array(0)).flatten()
+    safe_j = jnp.broadcast_to(j_idx, (H, n)).flatten()
+    safe_vals = _where(is_wrap, A, jnp.array(0.0)).flatten()
+
+    V_T = jnp.zeros((k_dim, n), dtype=A.dtype)
+    V_T = V_T.at[safe_k, safe_j].add(safe_vals)
+
+    lu = lu_factor_banded(p, q, A_band, unroll=unroll)
+    # Z = inv(A_band), Z_U = Z@U
+    Z_U = lu_solve_banded(p, q, lu, U.T, unroll=unroll).T
+
+    # Compute the capacitance matrix C = I + V^T @ Z_U
+    C = jnp.eye(k_dim, dtype=A.dtype) + jnp.matmul(V_T, Z_U)
+    # Solve the small dense system: C @ Y = V^T @ Z_b
+    Y = jnp.linalg.solve(C, V_T)
+    piv = jnp.arange(n)  # dummy pivots for now
+    return lu, piv, Z_U, Y
 
 
-@functools.partial(jax.jit, static_argnames=("r", "unroll"))
-def lu_solve_banded_periodic(r, lu_schur_v, b, *, unroll=True):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+def lu_solve_banded_periodic(p, q, lu, b, *, unroll=None):
     """Solve a periodic banded linear system with matrix pre-factored.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
 
     Parameters
     ----------
-    r: int
-        Maximum of lower and upper bandwidth.
-    lu_schur_v : tuple of jax.Array
+    p, q : int
+        Lower and upper bandwidth of A
+    lu : tuple of jax.Array
         Output from ``lu_factor_banded_periodic``
     b : jax.Array, shape(...,N)
         RHS vector.
@@ -594,34 +654,37 @@ def lu_solve_banded_periodic(r, lu_schur_v, b, *, unroll=True):
     x : jax.Array, shape(...,N)
         Solution to linear system.
     """
-    Blu, piv, BUschur, V = lu_schur_v
-    return _lu_solve_banded_periodic(r, Blu, piv, BUschur, V, b, unroll)
+    lu, piv, Z_U, Y = lu
+    return _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, b, unroll)
 
 
 @functools.partial(
-    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n)->(n)", excluded=(0, 6)
+    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n)->(n)", excluded=(0, 1, 7)
 )
-def _lu_solve_banded_periodic(r, lu, piv, BUschur, V, b, unroll):
+def _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, b, unroll):
     nn = b.shape[-1]
-    if (nn <= 2 * r) or (r == 0):
+    r = p + q
+    if r == 0:  # diagonal
+        return b / lu[0]
+    if nn <= r:  # use dense method
         return jax.scipy.linalg.lu_solve((lu, piv), b)
-    Binvb = lu_solve_banded(r, r, lu, b, unroll=unroll)
-    return Binvb - BUschur @ (V @ Binvb)
+    Binvb = lu_solve_banded(p, q, lu, b, unroll=unroll)
+    return Binvb - Z_U @ (Y @ Binvb)
 
 
-@functools.partial(jax.jit, static_argnames=("r", "unroll"))
-@functools.partial(jnp.vectorize, signature="(n,n),(n)->(n)", excluded=(0, 3))
-def solve_banded_periodic(r, A, b, *, unroll=True):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+@functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1, 4))
+def solve_banded_periodic(p, q, A, b, *, unroll=None):
     """Solve a periodic banded linear system.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
 
     Parameters
     ----------
-    r: int
-        Maximum of lower and upper bandwidth.
-    A : jax.Array, shape(...,N,N)
-        Matrix in dense format.
+    p, q : int
+        Lower and upper bandwidth of A
+    A : jax.Array, shape(...,p+q+1,N)
+        Matrix in banded format.
     b : jax.Array, shape(...,N)
         RHS vector.
 
@@ -631,5 +694,146 @@ def solve_banded_periodic(r, A, b, *, unroll=True):
     x : jax.Array, shape(...,N)
         Solution to linear system.
     """
-    lu_schur_v = lu_factor_banded_periodic(r, A, unroll=unroll)
-    return lu_solve_banded_periodic(r, lu_schur_v, b, unroll=unroll)
+    lu_schur_v = lu_factor_banded_periodic(p, q, A, unroll=unroll)
+    return lu_solve_banded_periodic(p, q, lu_schur_v, b, unroll=unroll)
+
+
+@functools.partial(jax.jit, static_argnames=("p", "q"))
+@functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1))
+def banded_mv(p, q, A, x):
+    """Matrix vector product w/ banded matrix.
+
+    Parameters
+    ----------
+    p, q : int
+        Lower and upper bandwidth of A
+    A : jax.Array, shape(..., p+q+1, n)
+        System matrix in banded storage format.
+    x : jax.Array, shape(..., n)
+        Vector to multiply
+
+    Returns
+    -------
+    b : jax.Array, shape(..., n)
+        b = A@x
+    """
+    if A.shape[-1] < (p + q + 1):
+        # below isn't correct, just use dense matvec
+        return banded_to_dense(p, q, A) @ x
+    # Offsets from top row to bottom row: [p, p-1, ..., 0, ..., -q]
+    # If p and q were swapped in your specific storage,
+    # ensuring p is 'upper' and q is 'lower' here:
+    offsets = jnp.arange(q, -p - 1, -1)
+
+    def multiply_row(row_data, offset):
+        # 1. Multiply the diagonal row by the vector element-wise
+        # 2. Roll the result to align it with the output vector 'b'
+        return jnp.roll(row_data * x, -offset)
+
+    # Vectorized across all diagonals
+    all_contributions = jax.vmap(multiply_row)(A, offsets)
+
+    return jnp.sum(all_contributions, axis=0)
+
+
+@functools.partial(jax.jit, static_argnames=["p1", "q1", "p2", "q2"])
+@functools.partial(
+    jnp.vectorize, signature="(k,n),(l,n)->(m,n),(),()", excluded=(0, 1, 2, 3)
+)
+def banded_mm(p1, q1, p2, q2, A, B):
+    """Matrix-matrix product w/ banded matrices.
+
+    Parameters
+    ----------
+    p1, q1 : int
+        Lower and upper bandwidth of A
+    p2, q2 : int
+        Lower and upper bandwidth of B
+    A : jax.Array, shape(..., p1+q1+1, n)
+        Matrix 1 in banded storage format.
+    B : jax.Array, shape(..., p2+q2+1, n)
+        Matrix 2 in banded storage format.
+
+    Returns
+    -------
+    C : jax.Array, shape(..., p1+p2+q1+q2+1, n)
+        C = A@B
+    p, q : int
+        Lower and upper bandwidth of C
+    """
+    H_A, n = A.shape
+    H_B, _ = B.shape
+    if n < p1 + q1 + p2 + q2 + 1:
+        # below is incorrect, just use dense matmul
+        A = banded_to_dense(p1, q1, A)
+        B = banded_to_dense(p2, q2, B)
+        pc = min(n, p1 + p2)
+        qc = min(n, q1 + q2)
+        return dense_to_banded(pc, qc, A @ B), pc, qc
+
+    # The output matrix inherently combines the total number of bands
+    H_C = H_A + H_B - 1
+
+    # Precompute column indices for the periodic wrap-around.
+    # r2_idx represents the row indices of B, j_idx represents the columns.
+    r2_idx = jnp.arange(H_B)[:, None]
+    j_idx = jnp.arange(n)[None, :]
+
+    # The shift applied to A's columns depends on B's upper bandwidth (q2)
+    # and the specific row of B being evaluated (r2).
+    col_idx = (j_idx - q2 + r2_idx) % n
+
+    def compute_row(r):
+        """Computes the r-th row (diagonal) of the output banded matrix."""
+        r2 = jnp.arange(H_B)
+        r1 = r - r2
+
+        # Mask out indices where r1 falls outside the valid rows of A
+        valid = (r1 >= 0) & (r1 < H_A)
+        r1_safe = _where(valid, r1, jnp.array(0))
+
+        # Gather elements from A. col_idx has shape (H_B, n)
+        A_vals = A[r1_safe[:, None], col_idx]
+
+        # Element-wise multiply by B and zero out invalid index contributions
+        product = _where(valid[:, None], A_vals * B, jnp.array(0.0))
+
+        # Summing over the intermediate dimension (r2) gives the dot product
+        return jnp.sum(product, axis=0)
+
+    # Vectorize the computation over every row of the output matrix C
+    return jax.vmap(compute_row)(jnp.arange(H_C)), (p1 + p2), (q1 + q2)
+
+
+@jax.jit
+def banded_transpose(p, q, A):
+    """Transposes a (periodic) banded matrix in compact format.
+
+    Parameters
+    ----------
+    p, q : int
+        Lower and upper bandwidth of A
+    A : jax.Array, shape(..., p+q+1, n)
+        Matrix in banded storage format.
+
+    Returns
+    -------
+    A_T: jax.Array, shape (p + q + 1, n)
+        Transpose of A
+    p, q : int
+        Lower and upper bandwidth of A_T
+    """
+    H, n = A.shape
+
+    # Set up the grid of output coordinates
+    r = jnp.arange(H)[:, None]
+    c = jnp.arange(n)[None, :]
+
+    # 1. Flip the rows vertically (H - 1 - r)
+    r_A = H - 1 - r
+
+    # 2. Shift the columns horizontally, wrapping around natively with % n
+    c_A = (c + r - p) % n
+
+    # Gather elements using advanced indexing
+    return A[r_A, c_A], q, p

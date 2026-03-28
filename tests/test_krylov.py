@@ -48,7 +48,9 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc)
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc
+    )
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -61,6 +63,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     lc = 3
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
@@ -70,7 +73,9 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc)
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc
+    )
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(B1, B2), rtol=1e-6)
@@ -83,6 +88,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     lc = 3
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
@@ -92,7 +98,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
 
@@ -107,6 +113,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     lc = 3
 
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
@@ -116,7 +123,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, lpsolve=M.mv
     )
 
@@ -131,6 +138,7 @@ def test_fgmres():
     m = 7
     k = 5
     C = rng.random((3, n))
+    C = np.linalg.qr(C.T)[0].T
     C[-1] = 0
     lc = 2
 
@@ -141,7 +149,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
 
@@ -165,7 +173,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
     )
 
@@ -198,7 +206,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
     )
 
@@ -231,7 +239,7 @@ def test_fgmres():
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
 
-    H2, B2, V2, Z2, y2, _, _, _ = _fgmres(
+    H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, outer_v=outer_v.T, outer_Av=outer_Av.T, lv=lv
     )
 
@@ -266,7 +274,9 @@ def test_gcrotmk():
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k)
+    x2, _, _, _, C2, U2 = gcrotmk(
+        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False
+    )
 
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
@@ -288,7 +298,7 @@ def test_gcrotmk():
     )
 
     x2, _, _, _, C2, U2 = gcrotmk(
-        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2[:, 0], U=U2[:, 0]
+        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2[:, 0], U=U2[:, 0], refine=False
     )
 
     CU[-1] = (A.mv(x1), CU[-1][1])
@@ -314,7 +324,9 @@ def test_gcrotmk():
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2, U=U2)
+    x2, _, _, _, C2, U2 = gcrotmk(
+        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2, U=U2, refine=False
+    )
 
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
@@ -336,7 +348,16 @@ def test_gcrotmk():
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
     x2, _, _, _, C2, U2 = gcrotmk(
-        A, b, x0=x2, rtol=tol, maxiter=maxiter, m=m, k=k, C=C2, U=U2
+        A,
+        b,
+        x0=x2,
+        rtol=tol,
+        maxiter=maxiter,
+        m=m,
+        k=k,
+        C=C2,
+        U=U2,
+        refine=False,
     )
 
     np.testing.assert_allclose(x1, x2)
@@ -374,6 +395,7 @@ def test_gcrotmk():
         maxiter=maxiter,
         m=m,
         k=k,
+        refine=False,
     )
 
     np.testing.assert_allclose(x1, x2)
@@ -411,7 +433,9 @@ def test_lgmres():
     V1 = np.array([v for (v, Av) in outer_v])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(A, b, rtol=tol, maxiter=maxiter, m=m, k=k)
+    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False
+    )
 
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(V1, V2)
@@ -436,7 +460,7 @@ def test_lgmres():
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
     x2, j_outer, nmv, beta, V2, A2 = lgmres(
-        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, outer_v=outer_v2.T
+        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, outer_v=outer_v2.T, refine=False
     )
 
     np.testing.assert_allclose(x1, x2)
@@ -465,14 +489,7 @@ def test_lgmres():
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
     x2, j_outer, nmv, beta, V2, A2 = lgmres(
-        A,
-        b,
-        rtol=tol,
-        ML=M,
-        maxiter=maxiter,
-        m=m,
-        k=k,
-        outer_v=None,
+        A, b, rtol=tol, ML=M, maxiter=maxiter, m=m, k=k, outer_v=None, refine=False
     )
 
     np.testing.assert_allclose(x1, x2)

@@ -16,6 +16,7 @@ from yancc.collisions import (
     MDKEPitchAngleScattering,
     PitchAngleScattering,
 )
+from yancc.linalg import banded_to_dense
 
 
 def extract_blocks(a, m):
@@ -58,12 +59,17 @@ def test_diagonals_dke_speed(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
 def test_diagonals_dke_theta(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
     sizes = {
         "s": len(species2),
@@ -74,27 +80,31 @@ def test_diagonals_dke_theta(
     }
     Erho = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.DKETheta(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = trajectories.DKETheta(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal("dense"), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
 def test_diagonals_dke_zeta(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
     sizes = {
         "s": len(species2),
@@ -105,27 +115,31 @@ def test_diagonals_dke_zeta(
     }
     Erho = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.DKEZeta(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = trajectories.DKEZeta(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
 def test_diagonals_dke_pitch(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
     sizes = {
         "s": len(species2),
@@ -136,27 +150,31 @@ def test_diagonals_dke_pitch(
     }
     Erho = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.DKEPitch(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = trajectories.DKEPitch(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p2", [2, 4])
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
 def test_diagonals_dke_pitch_angle_scattering(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p2
 ):
     sizes = {
         "s": len(species2),
@@ -166,14 +184,17 @@ def test_diagonals_dke_pitch_angle_scattering(
         "z": field.nzeta,
     }
 
-    for p2 in [2, 4]:
-        f = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species2, p2=p2, axorder=axorder, gauge=gauge
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = PitchAngleScattering(
+        field, pitchgrid, speedgrid, species2, p2=p2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -196,6 +217,10 @@ def test_diagonals_dke_energy_scattering(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -217,6 +242,10 @@ def test_diagonals_dke_CD(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -238,6 +267,10 @@ def test_diagonals_dke_CG(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -259,6 +292,10 @@ def test_diagonals_dke_CH(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -330,9 +367,61 @@ def test_diagonals_dke_full(
         speedgrid,
         species2,
         Erho,
-        potentials2,
-        "2d",
-        4,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    bw = sizes[axorder[-1]] // 2
+    D = f.block_diagonal("banded", bw)
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
+
+    # if we drop the field term it should have bandwidth 4 for our usual stencils
+    f = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
+        axorder=axorder,
+        gauge=gauge,
+        operator_weights=jnp.ones(8).at[-2:].set(0),
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    bw = min(4, sizes[axorder[-1]] // 2)
+    D = f.block_diagonal("banded", bw)
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
+@pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
+def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid, p1):
+    sizes = {
+        "a": pitchgrid.nxi,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+    erhohat = np.array(1e3)
+
+    f = trajectories.MDKETheta(
+        field,
+        pitchgrid,
+        erhohat,
+        p1=p1,
         axorder=axorder,
         gauge=gauge,
         operator_weights=jnp.linspace(1, 5, 8),
@@ -344,8 +433,9 @@ def test_diagonals_dke_full(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
-def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid):
+def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid, p1):
     sizes = {
         "a": pitchgrid.nxi,
         "t": field.ntheta,
@@ -353,24 +443,24 @@ def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid):
     }
     erhohat = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.MDKETheta(
-            field,
-            pitchgrid,
-            erhohat,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = trajectories.MDKEZeta(
+        field,
+        pitchgrid,
+        erhohat,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
-def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid):
+def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid, p1):
     sizes = {
         "a": pitchgrid.nxi,
         "t": field.ntheta,
@@ -378,49 +468,24 @@ def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid):
     }
     erhohat = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.MDKEZeta(
-            field,
-            pitchgrid,
-            erhohat,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = trajectories.MDKEPitch(
+        field,
+        pitchgrid,
+        erhohat,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p2", [2, 4])
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
-def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid):
-    sizes = {
-        "a": pitchgrid.nxi,
-        "t": field.ntheta,
-        "z": field.nzeta,
-    }
-    erhohat = np.array(1e3)
-
-    for p1 in ["2d", "4d"]:
-        f = trajectories.MDKEPitch(
-            field,
-            pitchgrid,
-            erhohat,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
-
-
-@pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
-def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid):
+def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid, p2):
     sizes = {
         "a": pitchgrid.nxi,
         "t": field.ntheta,
@@ -428,14 +493,13 @@ def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid)
     }
     nuhat = np.array(1e-3)
 
-    for p2 in [2, 4]:
-        f = MDKEPitchAngleScattering(
-            field, pitchgrid, nuhat, p2=p2, axorder=axorder, gauge=gauge
-        )
-        A = f.as_matrix()
-        np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
-        B = extract_blocks(A, sizes[axorder[-1]])
-        np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    f = MDKEPitchAngleScattering(
+        field, pitchgrid, nuhat, p2=p2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    B = extract_blocks(A, sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -488,9 +552,10 @@ def test_diagonals2_dke_speed(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
 def test_diagonals2_dke_theta(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
     sizes = {
         "s": len(species2),
@@ -501,28 +566,26 @@ def test_diagonals2_dke_theta(
     }
     Erho = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.DKETheta(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        B = extract_blocks(
-            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
-        )
-        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+    f = trajectories.DKETheta(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
 def test_diagonals2_dke_zeta(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
     sizes = {
         "s": len(species2),
@@ -533,28 +596,26 @@ def test_diagonals2_dke_zeta(
     }
     Erho = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.DKEZeta(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        B = extract_blocks(
-            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
-        )
-        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+    f = trajectories.DKEZeta(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
 def test_diagonals2_dke_pitch(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
     sizes = {
         "s": len(species2),
@@ -565,28 +626,26 @@ def test_diagonals2_dke_pitch(
     }
     Erho = np.array(1e3)
 
-    for p1 in ["2d", "4d"]:
-        f = trajectories.DKEPitch(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            p1=p1,
-            axorder=axorder,
-            gauge=gauge,
-        )
-        A = f.as_matrix()
-        B = extract_blocks(
-            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
-        )
-        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+    f = trajectories.DKEPitch(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        p1=p1,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("p2", [2, 4])
 @pytest.mark.parametrize("axorder", ["atzsx", "tzasx", "zatsx"])
 def test_diagonals2_dke_pitch_angle_scattering(
-    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
+    gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p2
 ):
     sizes = {
         "s": len(species2),
@@ -596,15 +655,12 @@ def test_diagonals2_dke_pitch_angle_scattering(
         "z": field.nzeta,
     }
 
-    for p2 in [2, 4]:
-        f = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species2, p2=p2, axorder=axorder, gauge=gauge
-        )
-        A = f.as_matrix()
-        B = extract_blocks(
-            A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]]
-        )
-        np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+    f = PitchAngleScattering(
+        field, pitchgrid, speedgrid, species2, p2=p2, axorder=axorder, gauge=gauge
+    )
+    A = f.as_matrix()
+    B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
+    np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -755,9 +811,9 @@ def test_diagonals2_dke_full(
         speedgrid,
         species2,
         Erho,
-        potentials2,
-        "2d",
-        4,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
         axorder=axorder,
         gauge=gauge,
         operator_weights=jnp.linspace(1, 5, 8),
@@ -765,3 +821,52 @@ def test_diagonals2_dke_full(
     A = f.as_matrix()
     B = extract_blocks(A, sizes[axorder[-3]] * sizes[axorder[-2]] * sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal2(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("weight", [0, 1])
+def test_background_species(field, pitchgrid, speedgrid, species2, gauge, weight):
+    """Test that background species are included correctly."""
+    # first we get the full 2 species DKE operator
+    operator_weights = jnp.ones(8).at[-1].set(0).at[-2].set(weight)
+    Erho = jnp.array(1e3)
+    Aboth = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        gauge=gauge,
+        operator_weights=operator_weights,
+    )
+    # then single species w/ other as background
+    Ai = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        [species2[0]],
+        Erho,
+        [species2[1]],
+        gauge=gauge,
+        operator_weights=operator_weights,
+    )
+    Ae = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        [species2[1]],
+        Erho,
+        [species2[0]],
+        gauge=gauge,
+        operator_weights=operator_weights,
+    )
+    Aboth = Aboth.as_matrix()
+    Ai = Ai.as_matrix()
+    Ae = Ae.as_matrix()
+    # the diagonal blocks of the full operator should be the same as the single species
+    # operators with the background included
+    n = Aboth.shape[0] // 2
+    Aboth_i = Aboth[:n, :n]
+    Aboth_e = Aboth[n:, n:]
+    np.testing.assert_allclose(Ai, Aboth_i)
+    np.testing.assert_allclose(Ae, Aboth_e)

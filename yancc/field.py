@@ -5,7 +5,6 @@ from typing import Optional
 
 import equinox as eqx
 import interpax
-import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Float, Int
@@ -339,7 +338,6 @@ class Field(eqx.Module):
 
         aspect = file.variables["aspect_b"][:].filled()
         b_mnc = file.variables["bmnc_b"][:].filled()
-        r_mnc = file.variables["rmnc_b"][:].filled()
         g_mnc = file.variables["gmn_b"][:].filled()
         nfp = int(file.variables["nfp_b"][:].filled())
         iota = file.variables["iota_b"][:].filled()
@@ -352,18 +350,9 @@ class Field(eqx.Module):
         xn = file.variables["ixn_b"][:].filled()
 
         # need to do volume integrals to get R0 to match desc/vmec
-        R = jax.vmap(lambda x: vmec_eval(theta[:, None], zeta[None, :], x, 0, xm, -xn))(
-            r_mnc
-        )
-        g = jax.vmap(lambda x: vmec_eval(theta[:, None], zeta[None, :], x, 0, xm, -xn))(
-            g_mnc
-        )
-        h = (2 * np.pi / ntheta) * (2 * np.pi / nzeta) * (Psi / 2 / np.pi * hs)
-        V = (g * h).sum()
-        h = (2 * np.pi / ntheta) * (Psi / 2 / np.pi * hs)
-        A = (g / R * h).sum((0, 1)).mean()
+        V = jnp.sum(g_mnc[:, 0] * (Psi / 2 / jnp.pi * hs)) * 4 * jnp.pi**2
 
-        R0 = V / (2 * np.pi * A)
+        R0 = ((V * aspect**2) / (2 * jnp.pi**2)) ** (1 / 3)
         a_minor = R0 / aspect
 
         # jlist = 2 + indices of half grid where boozer transform was computed

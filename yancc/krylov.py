@@ -10,9 +10,10 @@ import jax
 import jax.flatten_util
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 from jax import lax
 from jax import scipy as jsp
-from jax.tree_util import tree_leaves, tree_map, tree_reduce
+from jax.tree_util import tree_leaves, tree_map
 from jaxtyping import Array, ArrayLike, Float, Int, PyTree
 
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
@@ -73,82 +74,6 @@ def _safe_normalize(x, thresh=None):
     normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, 0.0), x)
     norm = jnp.where(use_norm, norm, 0.0)
     return normalized_x, norm
-
-
-def _project_on_columns(A, v):
-    """Returns A.T.conj() @ v."""
-    v_proj = tree_map(
-        lambda X, y: _einsum("...n,...->n", X.conj(), y),
-        A,
-        v,
-    )
-    return tree_reduce(operator.add, v_proj)
-
-
-def _iterative_classical_gram_schmidt(Q, x, xnorm, max_iterations=2):
-    """
-    Orthogonalize x against the columns of Q. The process is repeated
-    up to `max_iterations` times, or fewer if the condition
-    ||r|| < (1/sqrt(2)) ||x|| is met earlier (see below for the meaning
-    of r and x).
-
-    Parameters
-    ----------
-    Q : array or tree of arrays
-        A matrix of orthonormal columns.
-    x : array or tree of arrays
-        A vector. It will be replaced with a new vector q which is orthonormal
-        to the columns of Q, such that x in span(col(Q), q).
-    xnorm : float
-        Norm of x.
-
-    Returns
-    -------
-    q : array or tree of arrays
-        A unit vector, orthonormal to each column of Q, such that
-        x in span(col(Q), q).
-    r : array
-        Stores the overlaps of x with each vector in Q.
-    """
-    # "twice is enough"
-    # http://slepc.upv.es/documentation/reports/str1.pdf
-
-    # This assumes that Q's leaves all have the same dimension in the last
-    # axis.
-    Q0 = tree_leaves(Q)[0]
-    r = jnp.zeros(Q0.shape[-1], dtype=Q0.dtype)
-    q = x
-    xnorm_scaled = xnorm / jnp.sqrt(2.0)
-
-    def body_function(carry):
-        k, q, r, qnorm_scaled = carry
-        h = _project_on_columns(Q, q)
-        Qh = tree_map(lambda X: _dot(X, h), Q)
-        q = _sub(q, Qh)
-        r = _add(r, h)
-
-        def qnorm_cond(carry):
-            k, not_done, _, _ = carry
-            return jnp.logical_and(not_done, k < (max_iterations - 1))
-
-        def qnorm(carry):
-            k, _, q, qnorm_scaled = carry
-            _, qnorm = _safe_normalize(q)
-            qnorm_scaled = qnorm / jnp.sqrt(2.0)
-            return (k, False, q, qnorm_scaled)
-
-        init = (k, True, q, qnorm_scaled)
-        _, _, q, qnorm_scaled = lax.while_loop(qnorm_cond, qnorm, init)
-        return (k + 1, q, r, qnorm_scaled)
-
-    def cond_function(carry):
-        k, _, r, qnorm_scaled = carry
-        _, rnorm = _safe_normalize(r)
-        return jnp.logical_and(k < (max_iterations - 1), rnorm < qnorm_scaled)
-
-    k, q, r, qnorm_scaled = body_function((0, q, r, xnorm_scaled))
-    k, q, r, _ = lax.while_loop(cond_function, body_function, (k, q, r, qnorm_scaled))
-    return q, r
 
 
 def _rotate_vectors(H, i, cs, sn):
@@ -215,6 +140,95 @@ def _maybe_print(flag, j, res, pre=""):
     jax.lax.cond(flag, truefun, falsefun)
 
 
+def _gram_schmidt(Q, x, k, method="cgs2"):
+    """Orthogonalize x against the columns of Q.
+
+    Parameters
+    ----------
+    Q : array or tree of arrays
+        A matrix of orthonormal columns.
+    x : array or tree of arrays
+        A vector. It will be replaced with a new vector q which is orthonormal
+        to the columns of Q, such that x in span(col(Q), q).
+    k : int
+        Number of columns of Q to orthogonalize against.
+    method : {"cgs", "cgs2", "mgs"}
+        Classical gram schmidt, classical gram schmidt with re-orthogonalization, or
+        modified gram schmidt. Classical is the fastest but can be unstable,
+        classical with re-orthogonalization is usually the most accurate. The speed
+        improvement on CPU is marginal, and on GPU is basically nill.
+
+    Returns
+    -------
+    q : array or tree of arrays
+        A unit vector, orthonormal to the first k columns of Q, such that
+        x in span(col(Q), q).
+    r : array
+        Stores the overlaps of x with the fist k vectors in Q.
+    """
+    assert method in ["cgs", "cgs2", "mgs"]
+    # flatten trees into dense 1D/2D arrays
+    leaves_Q, treedef_Q = jax.tree_util.tree_flatten(Q)
+    leaves_x, treedef_x = jax.tree_util.tree_flatten(x)
+
+    def prepare_Q_leaf(leaf):
+        leaf_transposed = jnp.moveaxis(leaf, -1, 0)
+        return jnp.reshape(leaf_transposed, (leaf_transposed.shape[0], -1))
+
+    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=-1)
+    x_flat = jnp.concatenate([jnp.reshape(l, (-1,)) for l in leaves_x], axis=-1)
+
+    max_k = Q_mat.shape[0]
+    if method in ["cgs", "cgs2"]:
+
+        # dynamic mask to handle the dynamic k
+        mask = jnp.arange(max_k) < k
+
+        # --- PASS 1: Classical Gram-Schmidt ---
+        # .conj() ensures complex numbers are handled correctly
+        h1 = Q_mat.conj() @ x_flat
+        h1 = jnp.where(mask, h1, 0.0)  # Apply mask for dynamic k
+        x1 = x_flat - (h1 @ Q_mat)  # Vectorized subtraction
+
+        if method == "cgs":
+            h_final = h1
+            x_flat_final = x1
+        else:
+            # --- PASS 2: Re-orthogonalization ("Twice is Enough") ---
+            h2 = Q_mat.conj() @ x1
+            h2 = jnp.where(mask, h2, 0.0)  # Apply mask for dynamic k
+            x_flat_final = x1 - (h2 @ Q_mat)
+
+            h_final = h1 + h2
+
+    else:  # method == "mgs"
+        h = jnp.zeros(max_k, dtype=Q_mat.dtype)
+
+        def loop(i, carry):
+            h_carry, x_carry = carry
+            q_i = Q_mat[i]
+            alpha = jnp.vdot(q_i, x_carry)
+            h_carry = h_carry.at[i].set(alpha)
+            x_carry = x_carry - alpha * q_i
+
+            return h_carry, x_carry
+
+        h_final, x_flat_final = jax.lax.fori_loop(0, k, loop, (h, x_flat))
+
+    # 3. Unflatten using numpy for static indices
+    split_indices = np.cumsum([l.size for l in leaves_x])[:-1]
+    x_flat_split = jnp.split(x_flat_final, split_indices)
+
+    x_final_leaves = [
+        jnp.reshape(flat_leaf, orig_leaf.shape)
+        for flat_leaf, orig_leaf in zip(x_flat_split, leaves_x)
+    ]
+
+    x_final = jax.tree_util.tree_unflatten(treedef_x, x_final_leaves)
+
+    return x_final, h_final
+
+
 @eqx.filter_jit
 def _fgmres(
     matvec: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]],
@@ -229,8 +243,13 @@ def _fgmres(
     outer_v: Optional[PyTree[ArrayLike]] = None,
     outer_Av: Optional[PyTree[ArrayLike]] = None,
     lv: Optional[int] = None,
-    print_every: ArrayLike = jnp.inf,
-) -> tuple[Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array]:
+    verbose: bool = False,
+    *,
+    print_every: ArrayLike = jnp.array(1),
+    gs_method: str = "cgs2",
+) -> tuple[
+    Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
+]:
     """FGMRES Arnoldi process, with optional projection or augmentation
 
     Parameters
@@ -250,7 +269,8 @@ def _fgmres(
     rpsolve : callable
         Right preconditioner R
     C : pytree of jax.Array
-        Matrix C in GCROT(m,k) algorithm.
+        Matrix C in GCROT(m,k) algorithm. Assumes the first `lc` columns are
+        orthonormal, all others are zero.
     lc : int
         Number of nonzero columns of C. Default C.shape[1]
     outer_v : pytree of jax.Array
@@ -324,12 +344,13 @@ def _fgmres(
         lambda x: jnp.pad(x[..., None], ((0, 0),) * x.ndim + ((0, size),)),
         v0,
     )
-    # preconditioned krylov space [Mv0, M(AM)v0, M(AM)^2 v0, ...]
+    # preconditioned krylov space [Mv0, (MA)Mv0, (MA)^2Mv0, ...]
     Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
 
     dtype = jnp.result_type(*tree_leaves(v0))
     eps = jnp.finfo(dtype).eps
     res = jnp.array(_norm(v0))
+    res_arr = jnp.full(size, res)
 
     # Orthogonal projection coefficients
     B = jnp.zeros((tree_leaves(C)[0].shape[1], size), dtype=v0.dtype)
@@ -346,12 +367,12 @@ def _fgmres(
     # FGMRES Arnoldi process
 
     def arnoldi_cond(carry):
-        j, _, _, _, _, _, _, _, _, res, breakdown = carry
+        j, _, _, _, _, _, _, _, _, res, breakdown, _ = carry
         return jnp.logical_and(jnp.logical_and(j < maxiter, res > atol), ~breakdown)
 
     def arnoldi_loop(carry):
         # L A Z = C B + V H
-        j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown = carry
+        j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr = carry
 
         def outer_v_iteration(j, nmv, V):
             z = lax.cond(
@@ -379,17 +400,10 @@ def _fgmres(
 
         # GCROT projection: L A -> (1 - C C^H) L A
         # i.e. orthogonalize against C
-        def _C_loop(i, carry):
-            B, w = carry
-            c = tree_map(lambda x: jnp.asarray(x)[..., i], C)
-            alpha = _tree_vdot(c, w)
-            B = B.at[i, j].set(alpha)
-            w = _sub(w, _mul(alpha, c))
-            return B, w
+        w, Bj = _gram_schmidt(C, w, lc, gs_method)
+        B = B.at[:, j].set(Bj)
 
-        B, w = lax.fori_loop(0, lc, _C_loop, (B, w))
-
-        w, h = _iterative_classical_gram_schmidt(V, w, w_norm, max_iterations=2)
+        w, h = _gram_schmidt(V, w, j + 1, gs_method)
         unit_w, w_norm_1 = _safe_normalize(w, thresh=eps * w_norm)
         V = tree_map(lambda X, y: X.at[..., j + 1].set(y), V, unit_w)
         Z = tree_map(lambda X, y: X.at[..., j].set(y), Z, z)
@@ -401,23 +415,26 @@ def _fgmres(
         R = R.at[j, :].set(R_row)
         beta_vec = _rotate_vectors(beta_vec, j, *givens[j, :])
         res = abs(beta_vec[j + 1])
-        _maybe_print(
-            jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
-            j,
-            res,
-            pre="    FGMRES  ",
-        )
+        res_arr = res_arr.at[j + 1].set(res)
+
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
+                j,
+                res,
+                pre="    FGMRES  ",
+            )
         breakdown = H[j, j + 1] < eps * w_norm
 
-        return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown
+        return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr
 
-    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown)
-    j, nmv, V, Z, B, R, H, _, beta_vec, res, _ = lax.while_loop(
+    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr)
+    j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr = lax.while_loop(
         arnoldi_cond, arnoldi_loop, carry
     )
-    y = jsp.linalg.solve_triangular(R[:, :-1].T, beta_vec[:-1])
+    y = jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
 
-    return H, B, V, Z, y, j, nmv, res
+    return H, B, V, Z, y, j, nmv, res, breakdown, res_arr
 
 
 @eqx.filter_jit
@@ -435,7 +452,10 @@ def gcrotmk(
     k: Optional[int] = None,
     C: Optional[PyTree[ArrayLike]] = None,
     U: Optional[PyTree[ArrayLike]] = None,
-    print_every: ArrayLike = False,
+    verbose: bool = False,
+    print_every: ArrayLike = jnp.array(1),
+    print_every_inner: ArrayLike = jnp.array(1),
+    refine: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -518,7 +538,22 @@ def gcrotmk(
 
     def _solve(A, b):
         return _gcrotmk_solve(
-            A, b, x, ML.mv, MR.mv, rtol, atol, maxiter, m, k, C, U, print_every
+            A,
+            b,
+            x,
+            ML.mv,
+            MR.mv,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            C,
+            U,
+            verbose,
+            print_every,
+            print_every_inner,
+            refine,
         )
 
     def _transpose_solve(At, b):
@@ -535,7 +570,10 @@ def gcrotmk(
             k,
             C,
             U,
+            verbose,
             print_every,
+            print_every_inner,
+            refine,
         )
 
     x, (j_outer, nmv, res, C, U) = jax.lax.custom_linear_solve(
@@ -614,10 +652,15 @@ def _gcrotmk_solve(
     k,
     C,
     U,
+    verbose,
     print_every,
+    print_every_inner,
+    refine,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+    print_every_inner = jnp.asarray(print_every_inner)
+    print_every_inner = jnp.where(print_every_inner == 0, jnp.inf, print_every_inner)
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
@@ -633,8 +676,8 @@ def _gcrotmk_solve(
     x, r, beta = lax.cond(
         lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
     )
-
-    _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
+    if verbose:
+        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
 
     def gcrotmk_cond(carry):
         j_outer, _, _, _, beta, _, _, _, _ = carry
@@ -649,7 +692,7 @@ def _gcrotmk_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
+        H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -659,7 +702,8 @@ def _gcrotmk_solve(
             atol=ptol,
             C=C,
             lc=lc,
-            print_every=print_every,
+            verbose=verbose,
+            print_every=print_every_inner,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -681,10 +725,31 @@ def _gcrotmk_solve(
         Hy = H.T @ y
         c = tree_map(lambda x: _dot(x, Hy), V)
 
-        x = _add(x, u)
-        r = _sub(b, matvec(x))
+        x1 = _add(x, u)
+        r1 = _sub(b, matvec(x1))
         nmv += 1
-        beta = _norm(r)
+        beta1 = _norm(r1)
+
+        def _refine(u, c, x, r, x1, r1, nmv, beta):
+            # if the inner solve suffers from roundoff error, u may not actually
+            # decrease the residual. In that case we do a simple line search
+            # to damp the update and ensure the residual doesn't increase.
+            Au = matvec(u)
+            damp = jnp.linalg.lstsq(Au[:, None], r)[0][0]
+            u = damp * u
+            c = damp * c
+            x = _add(x, u)
+            r = _sub(b, matvec(x))
+            beta = _norm(r)
+            nmv += 1
+            return u, c, x, r, nmv, beta
+
+        def _norefine(u, c, x, r, x1, r1, nmv, beta):
+            return u, c, x1, r1, nmv, beta
+
+        u, c, x, r, nmv, beta = jax.lax.cond(
+            refine & (beta1 > beta), _refine, _norefine, u, c, x, r, x1, r1, nmv, beta1
+        )
 
         # Normalize cx, maintaining cx = A ux
         # This new cx is orthogonal to the previous C, by construction
@@ -693,8 +758,15 @@ def _gcrotmk_solve(
         C = tree_map(_roll_prepend, C, _mul(alpha, c))
         lc = jnp.minimum(lc + 1, k)
 
-        _maybe_print(print_every < jnp.inf, j_outer + 1, beta / b_norm, pre="GCROT  ")
-
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(
+                    print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
+                ),
+                j_outer + 1,
+                beta / b_norm,
+                pre="GCROT  ",
+            )
         return j_outer + 1, nmv, x, r, beta, C, U, lc, ptol_max_factor
 
     carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
@@ -722,7 +794,10 @@ def lgmres(
     k: int = 3,
     outer_v: Optional[PyTree[ArrayLike]] = None,
     outer_Av: Optional[PyTree[ArrayLike]] = None,
-    print_every: ArrayLike = False,
+    verbose: bool = False,
+    print_every: ArrayLike = jnp.array(1),
+    print_every_inner: ArrayLike = jnp.array(1),
+    refine: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -835,7 +910,10 @@ def lgmres(
             k,
             outer_v,
             outer_Av,
+            verbose,
             print_every,
+            print_every_inner,
+            refine,
         )
 
     def _transpose_solve(At, b):
@@ -852,7 +930,10 @@ def lgmres(
             k,
             outer_v,
             outer_Av,
+            verbose,
             print_every,
+            print_every_inner,
+            refine,
         )
 
     x, (j_outer, nmv, res, outer_v, outer_Av) = jax.lax.custom_linear_solve(
@@ -874,10 +955,15 @@ def _lgmres_solve(
     k,
     outer_v,
     outer_Av,
+    verbose,
     print_every,
+    print_every_inner,
+    refine,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+    print_every_inner = jnp.asarray(print_every_inner)
+    print_every_inner = jnp.where(print_every_inner == 0, jnp.inf, print_every_inner)
 
     b_norm = _norm(b)
     tol = jnp.maximum(atol, rtol * b_norm)
@@ -887,7 +973,8 @@ def _lgmres_solve(
     eps = jnp.finfo(dtype).eps
     nmv = 1
     beta = _norm(r)
-    _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
+    if verbose:
+        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
 
     if outer_v is None:
         assert outer_Av is None
@@ -918,7 +1005,7 @@ def _lgmres_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, _, nmv_inner, pres = _fgmres(
+        H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -929,7 +1016,8 @@ def _lgmres_solve(
             outer_v=outer_v,
             outer_Av=outer_Av,
             lv=lv,
-            print_every=print_every,
+            verbose=verbose,
+            print_every=print_every_inner,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -944,22 +1032,61 @@ def _lgmres_solve(
         # -- GMRES terminated: eval solution
         # dx = Z y
         dx = tree_map(lambda x: _dot(x, y), Z)
+        # ax = V H y
+        ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
+
+        # -- Apply step
+        x1 = _add(x, dx)
+        r1 = _sub(b, matvec(x1))
+        nmv += 1
+        beta1 = _norm(r1)
+
+        def _refine(dx, ax, x, r, x1, r1, nmv, beta):
+            # if the inner solve suffers from roundoff error, u may not actually
+            # decrease the residual. In that case we do a simple line search
+            # to damp the update and ensure the residual doesn't increase.
+            Adx = matvec(dx)
+            damp = jnp.linalg.lstsq(Adx[:, None], r)[0][0]
+            dx = damp * dx
+            ax = damp * ax
+            x = _add(x, dx)
+            r = _sub(b, matvec(x))
+            beta = _norm(r)
+            nmv += 1
+            return dx, ax, x, r, nmv, beta
+
+        def _norefine(dx, ax, x, r, x1, r1, nmv, beta):
+            return dx, ax, x1, r1, nmv, beta
+
+        dx, ax, x, r, nmv, beta = jax.lax.cond(
+            refine & (beta1 > beta),
+            _refine,
+            _norefine,
+            dx,
+            ax,
+            x,
+            r,
+            x1,
+            r1,
+            nmv,
+            beta1,
+        )
 
         # -- Store LGMRES augmentation vectors
         nx = _norm(dx)
-        # ax = V H y
-        ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
         outer_v = tree_map(_roll_prepend, outer_v, _mul(1 / nx, dx))
         outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
         lv = jnp.minimum(lv + 1, k)
 
-        # -- Apply step
-        x = _add(x, dx)
-        r = _sub(b, matvec(x))
-        nmv += 1
-        beta = _norm(r)
-
-        _maybe_print(print_every < jnp.inf, j_outer + 1, beta / b_norm, pre="LGMRES  ")
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(
+                    print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
+                ),
+                j_outer + 1,
+                beta / b_norm,
+                pre="LGMRES  ",
+            )
 
         return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor
 

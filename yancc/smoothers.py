@@ -17,6 +17,7 @@ from .field import Field
 from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
+    dense_to_banded,
     lu_factor_banded_periodic,
     lu_solve_banded_periodic,
 )
@@ -212,7 +213,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         p2: int = 2,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver: str = "banded",
+        smooth_solver: Optional[str] = None,
         weight: Optional[jax.Array] = None,
     ):
         self.field = field
@@ -220,11 +221,23 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
-        self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            sizes = {
+                "a": self.pitchgrid.nxi,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            # use banded solver if its more efficient. This size is a heuristic that
+            # could probably be improved
+            if sizes[self.axorder[-1]] > 50:
+                smooth_solver = "banded"
+            else:
+                smooth_solver = "dense"
+        self.smooth_solver = smooth_solver
         if weight is None:
             weight = optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder[-1])
         self.weight = jnp.atleast_1d(jnp.array(weight))
@@ -232,9 +245,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         mats = MDKE(
             field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge
         ).block_diagonal()
+        # TODO: implement banded block diagonal for MDKE
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, mats)
+            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -248,7 +263,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
             x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.mats, x)
+            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
         else:
             size, N, M = self.mats.shape
             x = x.reshape(size, M)
@@ -295,6 +310,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -318,6 +335,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -333,12 +351,13 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p1="2d",
         p2=2,
         axorder="sxatz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver="dense",
+        smooth_solver: Optional[str] = None,
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
     ):
@@ -347,28 +366,47 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
+        if self.axorder[-1] == "s":
+            self.bandwidth = len(self.species) // 2
+        elif self.axorder[-1] == "x":
+            self.bandwidth = self.speedgrid.nx // 2
+        else:
+            self.bandwidth = max(
+                fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+            )
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            sizes = {
+                "s": len(self.species),
+                "x": self.speedgrid.nx,
+                "a": self.pitchgrid.nxi,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            # use banded solver if its more efficient. This size is a heuristic that
+            # could probably be improved
+            if sizes[self.axorder[-1]] > 50:
+                smooth_solver = "banded"
+            else:
+                smooth_solver = "dense"
         if operator_weights is None:
             operator_weights = jnp.ones(8).at[-1].set(0)
-        operator_weights = eqx.error_if(
-            operator_weights,
-            (operator_weights[-2] != 0) & (smooth_solver == "banded"),
-            "banded solver requires dropping the field term, "
-            "set operator_weights[-2]=0",
-        )
+            if smooth_solver == "banded":
+                operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
-        self.bandwidth = max(
-            fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
-        )
+
         if weight is None:
             x = speedgrid.x
             nus = []
             for i, spa in enumerate(species):
-                others = species[:i] + species[i + 1 :]
+                others = species[:i] + species[i + 1 :] + background
                 nu = nustar(spa, field, x, *others)
                 nus.append(nu)
             nus = jnp.asarray(nus)
@@ -387,16 +425,17 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             speedgrid,
             species,
             Erho,
+            background=background,
             potentials=potentials,
             p1=p1,
             p2=p2,
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
-        ).block_diagonal()
+        ).block_diagonal(self.smooth_solver, self.bandwidth)
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -412,7 +451,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
             x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.mats, x)
+            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
         else:
             size, N, M = self.mats.shape
             x = x.reshape(size, M)
@@ -471,6 +510,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -494,6 +535,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     pitchgrid: UniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
+    background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -509,6 +551,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
+        background: Optional[list[LocalMaxwellian]] = None,
         potentials: Optional[RosenbluthPotentials] = None,
         p1="2d",
         p2=2,
@@ -524,6 +567,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
+        if background is None:
+            background = []
+        self.background = background
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
@@ -536,7 +582,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             x = speedgrid.x
             nus = []
             for i, spa in enumerate(species):
-                others = species[:i] + species[i + 1 :]
+                others = species[:i] + species[i + 1 :] + background
                 nu = nustar(spa, field, x, *others)
                 nus.append(nu)
             nus = jnp.asarray(nus)
@@ -551,6 +597,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             speedgrid,
             species,
             Erho,
+            background=background,
             potentials=potentials,
             p1=p1,
             p2=p2,
@@ -755,11 +802,11 @@ def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
     return jnp.clip(w, 0.1, 1.0)
 
 
-def optimal_smoothing_parameter_4d(p1, p2, nuhat, ax):
+def optimal_smoothing_parameter_4d(p1, p2, nustar, ax):
     """Approximate best relaxation parameter for block jacobi smoother for DKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
     nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
-    nu = jnp.log10(nuhat)
+    nu = jnp.log10(nustar)
     if method not in OPTIMAL_SMOOTHING_COEFFS_4D:
         warnings.warn(
             f"No optimal smoothing parameter for stencil={method}, using "

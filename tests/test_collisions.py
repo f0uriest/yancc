@@ -529,7 +529,7 @@ def test_verify_collision_null_single_species(dummy_field):
     ).localize(0.5)
 
     R = RosenbluthPotentials(speedgrid, [ions1], quad=False)
-    C = FokkerPlanckLandau(field, pitchgrid, speedgrid, [ions1], R)
+    C = FokkerPlanckLandau(field, pitchgrid, speedgrid, [ions1], potentials=R)
     shape = (1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
     x = speedgrid.x
     xi = pitchgrid.xi
