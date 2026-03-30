@@ -21,7 +21,7 @@ pre-commit <= 4.5
 pyright < 1.2
 
 # testing and benchmarking
-pytest >= 5.0.0, <= 9.0
+pytest >= 5.0.0, <= 9.0.2
 pytest-cov >= 2.6, <= 7.1.0
 pytest-split >= 0.8.2, <= 0.11
 
