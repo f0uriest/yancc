@@ -20,6 +20,14 @@ _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
 _vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)
 _einsum = partial(jnp.einsum, precision=lax.Precision.HIGHEST)
 
+
+def _norm(x, axis=None):
+    xs = tree_leaves(x)
+    return jnp.linalg.norm(
+        jnp.array(list(map(lambda y: jnp.linalg.norm(y, axis=axis), xs))), axis=axis
+    )
+
+
 ########
 # this stuff is from jax,
 # https://github.com/jax-ml/jax/blob/5aa339561871ccf037f1216237cf4e5db937376c/jax/_src/scipy/sparse/linalg.py#L594-L705
@@ -28,22 +36,6 @@ _einsum = partial(jnp.einsum, precision=lax.Precision.HIGHEST)
 # used under the apache license:
 #     https://www.apache.org/licenses/LICENSE-2.0
 ########
-
-
-def _vdot_real_part(x, y):
-    """Vector dot-product guaranteed to have a real valued result despite
-    possibly complex input. Thus neglects the real-imaginary cross-terms.
-    The result is a real float.
-    """
-    result = _vdot(x.real, y.real)
-    if jnp.iscomplexobj(x) or jnp.iscomplexobj(y):
-        result += _vdot(x.imag, y.imag)
-    return result
-
-
-def _norm(x):
-    xs = tree_leaves(x)
-    return jnp.sqrt(sum(map(_vdot_real_part, xs, xs)))
 
 
 def _tree_vdot(x, y):
@@ -779,6 +771,30 @@ def _gcrotmk_solve(
     return x, (j_outer, nmv, beta, C, U)
 
 
+def _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv):
+    if outer_v is None:
+        assert outer_Av is None
+        lv = 0
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+    else:  # outer_v provided
+        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
+        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
+        if outer_Av is None:
+            outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
+            nmv += lv
+        # pad to full size
+        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
+        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+    # sort to move nonzero elements to the front
+    mask = _norm(outer_v, axis=0) > 0
+    lv = jnp.sum(mask)
+    idx = jnp.argsort(mask, descending=True)
+    outer_v = tree_map(lambda x: x[:, idx], outer_v)
+    outer_Av = tree_map(lambda x: x[:, idx], outer_Av)
+    return outer_v, outer_Av, lv, nmv
+
+
 @eqx.filter_jit
 def lgmres(
     A: lx.AbstractLinearOperator,
@@ -976,20 +992,7 @@ def _lgmres_solve(
     if verbose:
         _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
 
-    if outer_v is None:
-        assert outer_Av is None
-        lv = 0
-        outer_v = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-    else:  # outer_v provided
-        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
-        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
-        if outer_Av is None:
-            outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
-            nmv += lv
-        # pad to full size
-        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
-        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+    outer_v, outer_Av, lv, nmv = _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv)
 
     def lgmres_cond(carry):
         j_outer, nmv, x, r, beta, _, _, _, _ = carry
