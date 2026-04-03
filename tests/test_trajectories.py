@@ -336,6 +336,7 @@ def test_diagonals_dke_FokkerPlanck(
         pitchgrid,
         speedgrid,
         species2,
+        [],
         potentials2,
         axorder=axorder,
         gauge=gauge,
@@ -424,7 +425,6 @@ def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid, p1):
         p1=p1,
         axorder=axorder,
         gauge=gauge,
-        operator_weights=jnp.linspace(1, 5, 8),
     )
     A = f.as_matrix()
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
@@ -781,6 +781,7 @@ def test_diagonals2_dke_FokkerPlanck(
         pitchgrid,
         speedgrid,
         species2,
+        [],
         potentials2,
         axorder=axorder,
         gauge=gauge,
