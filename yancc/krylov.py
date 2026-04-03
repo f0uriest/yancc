@@ -16,12 +16,14 @@ from jax import scipy as jsp
 from jax.tree_util import tree_leaves, tree_map
 from jaxtyping import Array, ArrayLike, Float, Int, PyTree
 
+from .utils import safediv
+
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
 _vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)
 _einsum = partial(jnp.einsum, precision=lax.Precision.HIGHEST)
 
 
-def _norm(x, axis=None):
+def _norm(x: PyTree[Array], axis=None) -> jax.Array:
     xs = tree_leaves(x)
     return jnp.linalg.norm(
         jnp.array(list(map(lambda y: jnp.linalg.norm(y, axis=axis), xs))), axis=axis
@@ -62,9 +64,9 @@ def _safe_normalize(x, thresh=None):
         thresh = jnp.finfo(norm.dtype).eps
     thresh = thresh.astype(dtype).real
 
-    use_norm = norm > thresh
-    normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, 0.0), x)
-    norm = jnp.where(use_norm, norm, 0.0)
+    use_norm = jnp.array(norm > thresh)
+    normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, jnp.array(0.0)), x)
+    norm = jnp.where(use_norm, norm, jnp.array(0.0))
     return normalized_x, norm
 
 
@@ -340,7 +342,7 @@ def _fgmres(
     Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
 
     dtype = jnp.result_type(*tree_leaves(v0))
-    eps = jnp.finfo(dtype).eps
+    eps = jnp.array(jnp.finfo(dtype).eps)
     res = jnp.array(_norm(v0))
     res_arr = jnp.full(size, res)
 
@@ -669,7 +671,7 @@ def _gcrotmk_solve(
         lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
     )
     if verbose:
-        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
+        _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="GCROT  ")
 
     def gcrotmk_cond(carry):
         j_outer, _, _, _, beta, _, _, _, _ = carry
@@ -681,8 +683,8 @@ def _gcrotmk_solve(
         v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
 
-        v0 = _mul(1.0 / inner_res_0, v0)
-        ptol = jnp.minimum(ptol_max_factor, tol / beta)
+        v0 = _mul(safediv(jnp.array(1.0), inner_res_0, fill=jnp.array(1.0)), v0)
+        ptol = jnp.minimum(ptol_max_factor, safediv(tol, beta, jnp.array(1.0)))
 
         H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
@@ -745,7 +747,7 @@ def _gcrotmk_solve(
 
         # Normalize cx, maintaining cx = A ux
         # This new cx is orthogonal to the previous C, by construction
-        alpha = 1 / _norm(c)
+        alpha = safediv(jnp.array(1.0), _norm(c))
         U = tree_map(_roll_prepend, U, _mul(alpha, u))
         C = tree_map(_roll_prepend, C, _mul(alpha, c))
         lc = jnp.minimum(lc + 1, k)
@@ -756,7 +758,7 @@ def _gcrotmk_solve(
                     print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
                 ),
                 j_outer + 1,
-                beta / b_norm,
+                safediv(beta, b_norm),
                 pre="GCROT  ",
             )
         return j_outer + 1, nmv, x, r, beta, C, U, lc, ptol_max_factor
@@ -990,7 +992,7 @@ def _lgmres_solve(
     nmv = 1
     beta = _norm(r)
     if verbose:
-        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
+        _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="LGMRES  ")
 
     outer_v, outer_Av, lv, nmv = _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv)
 
@@ -1005,8 +1007,8 @@ def _lgmres_solve(
         v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
 
-        v0 = _mul(1.0 / inner_res_0, v0)
-        ptol = jnp.minimum(ptol_max_factor, tol / beta)
+        v0 = _mul(safediv(jnp.array(1.0), inner_res_0, fill=jnp.array(1.0)), v0)
+        ptol = jnp.minimum(ptol_max_factor, safediv(tol, beta, fill=jnp.array(1.0)))
 
         H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
@@ -1077,8 +1079,9 @@ def _lgmres_solve(
 
         # -- Store LGMRES augmentation vectors
         nx = _norm(dx)
-        outer_v = tree_map(_roll_prepend, outer_v, _mul(1 / nx, dx))
-        outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
+        nxinv = safediv(jnp.array(1.0), nx)
+        outer_v = tree_map(_roll_prepend, outer_v, _mul(nxinv, dx))
+        outer_Av = tree_map(_roll_prepend, outer_Av, _mul(nxinv, ax))
         lv = jnp.minimum(lv + 1, k)
 
         if verbose:
@@ -1087,7 +1090,7 @@ def _lgmres_solve(
                     print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
                 ),
                 j_outer + 1,
-                beta / b_norm,
+                safediv(beta, b_norm),
                 pre="LGMRES  ",
             )
 
