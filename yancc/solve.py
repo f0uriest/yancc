@@ -15,6 +15,7 @@ from .linalg import BorderedOperator, InverseBorderedOperator
 from .misc import (
     DKEConstraint,
     DKESources,
+    _dke_thermodynamic_forces,
     compute_fluxes,
     compute_monoenergetic_coefficients,
     dke_rhs,
@@ -286,6 +287,7 @@ def solve_dke(  # noqa: C901
     if verbose and not skip_init_print:
         _print_species_summary(species, field, speedgrid, background)
         _print_er_summary(species, field, Erho, EparB)
+        _print_thermodynamic_forces(species, field, Erho, EparB)
 
     if potentials is None:
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
@@ -430,6 +432,16 @@ def _print_er_summary(species, field, Erho, EparB):
     erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
     s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *erstars, ordered=True)
+
+
+def _print_thermodynamic_forces(species, field, Erho, EparB):
+    forces = _dke_thermodynamic_forces(species, field, Erho, EparB)
+    s = "A₁: [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *forces[0], ordered=True)
+    s = "A₂: [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *forces[1], ordered=True)
+    s = "A₃: [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *forces[2], ordered=True)
 
 
 def _print_dke_resolutions(preconditioner):

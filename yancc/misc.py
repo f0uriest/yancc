@@ -228,18 +228,9 @@ def dke_rhs(
 
     rhs = _dke_rhs_3(field, pitchgrid, speedgrid, species)
     if single_rhs:
-        qs = jnp.array([sp.species.charge for sp in species]) / elementary_charge
-        ns = jnp.array([sp.density for sp in species])
-        dns = jnp.array([sp.dndrho for sp in species])
-        Ts = jnp.array([sp.temperature for sp in species])
-        dTs = jnp.array([sp.dTdrho for sp in species])
-
-        Ln = dns / ns
-        LT = dTs / Ts
-        A1 = Ln + qs * (-Erho) / Ts - 3 / 2 * LT
-        A2 = LT
-        A3 = qs / Ts * EparB / field.B2mag_fsa
-        forces = jnp.array([A1, A2, A3])[:, :, None, None, None, None, None]
+        forces = _dke_thermodynamic_forces(species, field, Erho, EparB)[
+            :, :, None, None, None, None, None
+        ]
         rhs = (forces * rhs).sum(axis=(0, 1)).reshape((1, -1))
     else:
         rhs = jnp.swapaxes(rhs, 0, 1)
@@ -248,6 +239,22 @@ def dke_rhs(
     if include_constraints:
         rhs = jnp.pad(rhs, [(0, 0), (0, 2 * len(species))])
     return rhs.squeeze()
+
+
+def _dke_thermodynamic_forces(species, field, Erho, EparB):
+    qs = jnp.array([sp.species.charge for sp in species]) / elementary_charge
+    ns = jnp.array([sp.density for sp in species])
+    dns = jnp.array([sp.dndrho for sp in species])
+    Ts = jnp.array([sp.temperature for sp in species])
+    dTs = jnp.array([sp.dTdrho for sp in species])
+
+    Ln = dns / ns
+    LT = dTs / Ts
+    A1 = Ln + qs * (-Erho) / Ts - 3 / 2 * LT
+    A2 = LT
+    A3 = qs / Ts * EparB / field.B2mag_fsa
+    forces = jnp.array([A1, A2, A3])
+    return forces
 
 
 def _dke_rhs_3(
