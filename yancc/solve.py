@@ -285,7 +285,7 @@ def solve_dke(  # noqa: C901
 
     if verbose and not skip_init_print:
         _print_species_summary(species, field, speedgrid, background)
-        _print_er_summary(species, field, Erho)
+        _print_er_summary(species, field, Erho, EparB)
 
     if potentials is None:
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
@@ -405,12 +405,16 @@ def _print_species_summary(species, field, speedgrid, background):
             "m={mass: .2e} (mₚ)  "
             "q={charge: .2e} (qₚ)  "
             "n={dens: .2e} (m⁻³)  "
-            "T={temp: .2e} (eV)  ",
+            "a/Lₙ={L_n: .2e}  "
+            "T={temp: .2e} (eV)  "
+            "a/Lᴛ={L_T: .2e}  ",
             si=si,
             mass=spec.species.mass / proton_mass,
             charge=spec.species.charge / elementary_charge,
             dens=spec.density,
             temp=spec.temperature,
+            L_n=spec.dndrho / spec.density,
+            L_T=spec.dTdrho / spec.temperature,
             ordered=True,
         )
         others = species[:si] + species[si + 1 :] + background
@@ -420,7 +424,9 @@ def _print_species_summary(species, field, speedgrid, background):
             jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
 
 
-def _print_er_summary(species, field, Erho):
+def _print_er_summary(species, field, Erho, EparB):
+    jax.debug.print("<E||B> : {EparB: .2e} (V*T)", EparB=EparB)
+    jax.debug.print("Eᵨ = -∂Φ /∂ρ: {Erho: .2e} (V)", Erho=Erho)
     erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
     s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *erstars, ordered=True)
