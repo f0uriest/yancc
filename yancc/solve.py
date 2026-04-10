@@ -92,6 +92,7 @@ def solve_mdke(
     assert len(options) == 0, "solve_mdke got unknown option " + str(options)
 
     if verbose:
+        _print_field_summary(field)
         jax.debug.print("ν` = {nuhat: .3e}", nuhat=nuhat)
         jax.debug.print("E` = {erhohat: .3e}", erhohat=erhohat)
 
@@ -285,6 +286,7 @@ def solve_dke(  # noqa: C901
         background = []
 
     if verbose and not skip_init_print:
+        _print_field_summary(field)
         _print_species_summary(species, field, speedgrid, background)
         _print_er_summary(species, field, Erho, EparB)
         _print_thermodynamic_forces(species, field, Erho, EparB)
@@ -460,5 +462,26 @@ def _print_dke_resolutions(preconditioner):
             f"na={na:4d}, "
             f"nt={nt:4d}, "
             f"nz={nz:4d}, "
-            f"N={ns*nx*na*nt*nz}"
+            f"N={ns*nx*na*nt*nz}",
+            ordered=True,
         )
+
+
+def _print_field_summary(field: Field) -> None:
+    jax.debug.print(
+        "Field info:  "
+        + "ρ={rho: .3e}     "
+        + "ι={iota: .3e}          "
+        + "V'(ρ)={Vr: .3e}\n"
+        + " " * 11
+        + "<B>={Bavg: .3e}  "
+        + "<|𝐛⋅∇B|>={bdotgradB: .3e}  "
+        + "<|𝐁×∇ρ⋅∇B|>={BxgradrhodotgradB: .3e}",
+        rho=field.rho,
+        iota=field.iota,
+        Bavg=field.Bmag_fsa,
+        Vr=field.sqrtg.mean(),
+        bdotgradB=field.flux_surface_average(jnp.abs(field.bdotgradB)),
+        BxgradrhodotgradB=field.flux_surface_average(jnp.abs(field.BxgradrhodotgradB)),
+        ordered=True,
+    )
