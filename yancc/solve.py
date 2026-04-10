@@ -15,6 +15,7 @@ from .linalg import BorderedOperator, InverseBorderedOperator
 from .misc import (
     DKEConstraint,
     DKESources,
+    _dke_thermodynamic_forces,
     compute_fluxes,
     compute_monoenergetic_coefficients,
     dke_rhs,
@@ -91,6 +92,7 @@ def solve_mdke(
     assert len(options) == 0, "solve_mdke got unknown option " + str(options)
 
     if verbose:
+        _print_field_summary(field)
         jax.debug.print("ν` = {nuhat: .3e}", nuhat=nuhat)
         jax.debug.print("E` = {erhohat: .3e}", erhohat=erhohat)
 
@@ -284,8 +286,10 @@ def solve_dke(  # noqa: C901
         background = []
 
     if verbose and not skip_init_print:
+        _print_field_summary(field)
         _print_species_summary(species, field, speedgrid, background)
-        _print_er_summary(species, field, Erho)
+        _print_er_summary(species, field, Erho, EparB)
+        _print_thermodynamic_forces(species, field, Erho, EparB)
 
     if potentials is None:
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
@@ -401,29 +405,49 @@ def solve_dke(  # noqa: C901
 def _print_species_summary(species, field, speedgrid, background):
     for si, spec in enumerate(species):
         jax.debug.print(
-            "Species {si}:  "
-            "m={mass: .2e} (mₚ)  "
-            "q={charge: .2e} (qₚ)  "
-            "n={dens: .2e} (m⁻³)  "
-            "T={temp: .2e} (eV)  ",
+            "Species {si:2d}:  "
+            + "m={mass: .2e} (mₚ)      "
+            + "q={charge: .2e} (qₚ)\n"
+            + " " * 13
+            + "n={dens: .2e} (m⁻³)  "
+            + "a/Lₙ={L_n: .2e}\n"
+            + " " * 13
+            + "T={temp: .2e} (eV)   "
+            + "a/Lᴛ={L_T: .2e}  ",
             si=si,
             mass=spec.species.mass / proton_mass,
             charge=spec.species.charge / elementary_charge,
             dens=spec.density,
             temp=spec.temperature,
+            L_n=spec.dndrho / spec.density,
+            L_T=spec.dTdrho / spec.temperature,
             ordered=True,
         )
         others = species[:si] + species[si + 1 :] + background
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
         nustars = nustar(spec, field, tempx, *others)
         for nu, x in zip(nustars, tempx):
-            jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
+            jax.debug.print(
+                " " * 13 + "ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True
+            )
 
 
-def _print_er_summary(species, field, Erho):
+def _print_er_summary(species, field, Erho, EparB):
+    jax.debug.print("<E||B> : {EparB: .2e} (V*T/m)", EparB=EparB)
+    jax.debug.print("Eᵨ = -∂Φ /∂ρ: {Erho: .2e} (V)", Erho=Erho)
     erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
     s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *erstars, ordered=True)
+
+
+def _print_thermodynamic_forces(species, field, Erho, EparB):
+    forces = _dke_thermodynamic_forces(species, field, Erho, EparB)
+    s = "A₁: [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *forces[0], ordered=True)
+    s = "A₂: [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *forces[1], ordered=True)
+    s = "A₃: [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *forces[2], ordered=True)
 
 
 def _print_dke_resolutions(preconditioner):
@@ -438,5 +462,26 @@ def _print_dke_resolutions(preconditioner):
             f"na={na:4d}, "
             f"nt={nt:4d}, "
             f"nz={nz:4d}, "
-            f"N={ns*nx*na*nt*nz}"
+            f"N={ns*nx*na*nt*nz}",
+            ordered=True,
         )
+
+
+def _print_field_summary(field: Field) -> None:
+    jax.debug.print(
+        "Field info:  "
+        + "ρ={rho: .3e}     "
+        + "ι={iota: .3e}          "
+        + "V'(ρ)={Vr: .3e}\n"
+        + " " * 11
+        + "<B>={Bavg: .3e}  "
+        + "<|𝐛⋅∇B|>={bdotgradB: .3e}  "
+        + "<|𝐁×∇ρ⋅∇B|>={BxgradrhodotgradB: .3e}",
+        rho=field.rho,
+        iota=field.iota,
+        Bavg=field.Bmag_fsa,
+        Vr=field.sqrtg.mean(),
+        bdotgradB=field.flux_surface_average(jnp.abs(field.bdotgradB)),
+        BxgradrhodotgradB=field.flux_surface_average(jnp.abs(field.BxgradrhodotgradB)),
+        ordered=True,
+    )
