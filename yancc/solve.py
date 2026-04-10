@@ -425,11 +425,13 @@ def _print_species_summary(species, field, speedgrid, background):
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
         nustars = nustar(spec, field, tempx, *others)
         for nu, x in zip(nustars, tempx):
-            jax.debug.print("ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True)
+            jax.debug.print(
+                " " * 13 + "ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True
+            )
 
 
 def _print_er_summary(species, field, Erho, EparB):
-    jax.debug.print("<E||B> : {EparB: .2e} (V*T)", EparB=EparB)
+    jax.debug.print("<E||B> : {EparB: .2e} (V*T/m)", EparB=EparB)
     jax.debug.print("Eᵨ = -∂Φ /∂ρ: {Erho: .2e} (V)", Erho=Erho)
     erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
     s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
