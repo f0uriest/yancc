@@ -403,13 +403,15 @@ def solve_dke(  # noqa: C901
 def _print_species_summary(species, field, speedgrid, background):
     for si, spec in enumerate(species):
         jax.debug.print(
-            "Species {si}:  "
-            "m={mass: .2e} (mₚ)  "
-            "q={charge: .2e} (qₚ)  "
-            "n={dens: .2e} (m⁻³)  "
-            "a/Lₙ={L_n: .2e}  "
-            "T={temp: .2e} (eV)  "
-            "a/Lᴛ={L_T: .2e}  ",
+            "Species {si:2d}:  "
+            + "m={mass: .2e} (mₚ)      "
+            + "q={charge: .2e} (qₚ)\n"
+            + " " * 13
+            + "n={dens: .2e} (m⁻³)  "
+            + "a/Lₙ={L_n: .2e}\n"
+            + " " * 13
+            + "T={temp: .2e} (eV)   "
+            + "a/Lᴛ={L_T: .2e}  ",
             si=si,
             mass=spec.species.mass / proton_mass,
             charge=spec.species.charge / elementary_charge,
