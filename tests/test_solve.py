@@ -10,7 +10,6 @@ import pytest
 
 import yancc
 from yancc.field import Field
-from yancc.misc import normalize_dkes, normalize_fluxes_sfincs
 from yancc.solve import solve_dke, solve_mdke
 from yancc.species import LocalMaxwellian
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -76,7 +75,7 @@ def test_solve_mdke_w7x_eim(idx):
     nuhat = data_fortran["nuhat"][idx]
     print(f"Running i={idx}, nuhat={nuhat:.3e}, erhat={erhat:.3e}")
     t1 = time.perf_counter()
-    x, rhs, Dij, info = jax.block_until_ready(
+    sol, info = jax.block_until_ready(
         solve_mdke(
             field,
             pitchgrid,
@@ -88,7 +87,7 @@ def test_solve_mdke_w7x_eim(idx):
     )
     t2 = time.perf_counter()
     print(f"Took {t2-t1:.3e} s")
-    Dij = normalize_dkes(Dij, field)
+    Dij = sol.get("Dij_DKES")
 
     D11_yancc = Dij[0, 0]
     D31_yancc = Dij[2, 0]
@@ -152,10 +151,15 @@ def test_solve_field_types(nuhat, erhohat):
     field4 = Field.from_ipp_bc("tests/data/NCSX.bc", s, nt, nz)
     pitchgrid = UniformPitchAngleGrid(73)
 
-    f1, rhs1, D1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat, verbose=True)
-    f2, rhs2, D2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat, verbose=True)
-    f3, rhs3, D3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat, verbose=True)
-    f4, rhs4, D4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat, verbose=True)
+    sol1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat, verbose=True)
+    sol2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat, verbose=True)
+    sol3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat, verbose=True)
+    sol4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat, verbose=True)
+
+    D1 = sol1.get("Dij")
+    D2 = sol2.get("Dij")
+    D3 = sol3.get("Dij")
+    D4 = sol4.get("Dij")
 
     np.testing.assert_allclose(D1[0, 0], D2[0, 0], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[0, 0], D3[0, 0], rtol=2e-2, atol=0)
@@ -223,7 +227,7 @@ def test_solve_dke_ncsx(idx):
     print("Er:", Er)
 
     t0 = time.perf_counter()
-    f, r, flux, info = solve_dke(
+    sol, info = solve_dke(
         field,
         pitchgrid,
         speedgrid,
@@ -236,25 +240,22 @@ def test_solve_dke_ncsx(idx):
     )
     t1 = time.perf_counter()
     print("TIME:", t1 - t0)
-    normalized_fluxes = normalize_fluxes_sfincs(
-        flux, field, pitchgrid, speedgrid, species
-    )
 
     # tolerances could be tighter with higher resolution, but this isn't meant to be
     # a real benchmark, just a quick check for dumb mistakes. These qtys pass though
     # zero so we use an atol set to the average magnitude, so roughly rtol=5%
     np.testing.assert_allclose(
-        normalized_fluxes["FSABFlow"],
+        sol.get("FSABFlow_sfincs"),
         sfincs_data["FSABFlow"][idx],
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["FSABFlow"]))),
     )
     np.testing.assert_allclose(
-        normalized_fluxes["particleFlux_vm_rN"],
+        sol.get("particleFlux_vm_rN_sfincs"),
         sfincs_data["particleFlux_vm_rN"][idx],
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_vm_rN"]))),
     )
     np.testing.assert_allclose(
-        normalized_fluxes["heatFlux_vm_rN"],
+        sol.get("heatFlux_vm_rN_sfincs"),
         sfincs_data["heatFlux_vm_rN"][idx],
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rN"]))),
     )
@@ -277,11 +278,11 @@ def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     def foo(inputs):
         n, T, dn, dT, Er = inputs
         species = [yancc.species.LocalMaxwellian(yancc.species.Hydrogen, T, n, dT, dn)]
-        f, r, fluxes, info = solve_dke(
+        sol, info = solve_dke(
             field, pitchgrid, speedgrid, species, Er, verbose=2, rtol=1e-12
         )
         return jnp.array(
-            [fluxes["<particle_flux>"], fluxes["<heat_flux>"], fluxes["<V||B>"]]
+            [sol.get("<particle_flux>"), sol.get("<heat_flux>"), sol.get("<V||B>")]
         ).squeeze()
 
     n = 1e19

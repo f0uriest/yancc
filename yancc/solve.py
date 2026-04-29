@@ -16,12 +16,11 @@ from .misc import (
     DKEConstraint,
     DKESources,
     _dke_thermodynamic_forces,
-    compute_fluxes,
-    compute_monoenergetic_coefficients,
     dke_rhs,
     mdke_rhs,
 )
 from .preconditioner import DKEPreconditioner, MDKEPreconditioner
+from .solution import DKESolution, MDKESolution
 from .species import Estar, LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -35,7 +34,7 @@ def solve_mdke(
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
     **options,
-):
+) -> tuple[MDKESolution, dict[str, jax.Array]]:
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
 
     Parameters
@@ -63,12 +62,9 @@ def solve_mdke(
 
     Returns
     -------
-    f : jax.Array, shape(N,3)
-        Solution of DKE for each right hand side.
-    rhs : jax.Array, shape(N,3)
-        Source terms for DKE.
-    Dij : jax.Array, shape(3,3)
-        Monoenergetic transport coefficients
+    sol : MDKESolution
+        Solution object containing distribution function and drive terms and methods
+        for computing moments.
     info : dict
         Info about the solve, such as number of iterations, number of matrix-vector
         products, final residual etc.
@@ -90,6 +86,9 @@ def solve_mdke(
     f2 = options.pop("f2", None)
 
     assert len(options) == 0, "solve_mdke got unknown option " + str(options)
+
+    nuhat = jnp.asarray(nuhat)
+    erhohat = jnp.asarray(erhohat)
 
     if verbose:
         _print_field_summary(field)
@@ -177,11 +176,9 @@ def solve_mdke(
             ordered=True,
         )
     f = jnp.array([f1, f1, f2]).T
-    Dij = compute_monoenergetic_coefficients(f, field, pitchgrid)
+    sol = MDKESolution(f, rhs, field, pitchgrid, nuhat, erhohat)
     return (
-        f,
-        rhs,
-        Dij,
+        sol,
         info,
     )
 
@@ -197,7 +194,7 @@ def solve_dke(  # noqa: C901
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
     **options,
-) -> tuple[jax.Array, jax.Array, dict[str, jax.Array], dict[str, jax.Array]]:
+) -> tuple[DKESolution, dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
 
     Parameters
@@ -284,6 +281,9 @@ def solve_dke(  # noqa: C901
 
     if background is None:
         background = []
+
+    Erho = jnp.asarray(Erho)
+    EparB = jnp.asarray(EparB)
 
     if verbose and not skip_init_print:
         _print_field_summary(field)
@@ -386,18 +386,20 @@ def solve_dke(  # noqa: C901
 
     f = F0 + f1
 
-    fluxes = compute_fluxes(
-        f,
-        field,
-        pitchgrid,
-        speedgrid,
-        species,
+    sol = DKESolution(
+        f=f,
+        rhs=rhs,
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species,
+        Erho=Erho,
+        EparB=EparB,
+        background=background,
     )
 
     return (
-        f[: np.prod(shape)].reshape(shape),
-        rhs[: np.prod(shape)].reshape(shape),
-        fluxes,
+        sol,
         info,
     )
 
