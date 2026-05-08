@@ -1,11 +1,15 @@
 .. include:: ../README.rst
 
 
-API Documentation
-=================
+.. toctree::
+   :maxdepth: 1
+   :caption: Getting Started
+
+   quickstart
 
 .. toctree::
    :maxdepth: 1
+   :caption: API Documentation
 
    api
    variables
