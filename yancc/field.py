@@ -208,21 +208,22 @@ class Field(eqx.Module):
         )
 
     @classmethod
-    def from_vmec(cls, wout, s: float, ntheta: int, nzeta: int):
+    def from_vmec(cls, wout, rho: float, ntheta: int, nzeta: int):
         """Construct Field from VMEC equilibrium.
 
         Parameters
         ----------
         wout : path-like
             Path to vmec wout file.
-        s : float
-            Normalized surface label.
+        rho : float
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         """
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
+        s = rho**2
         file = Dataset(wout, mode="r")
 
         ns = file.variables["ns"][:].filled()
@@ -280,7 +281,7 @@ class Field(eqx.Module):
         iota *= sign
 
         data = {}
-        data["sqrtg"] = sqrtg * 2 * jnp.sqrt(s)
+        data["sqrtg"] = sqrtg * 2 * rho
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -294,13 +295,13 @@ class Field(eqx.Module):
         data["R_major"] = R_major
         data["a_minor"] = a_minor
 
-        return cls(rho=jnp.sqrt(s), **data, NFP=nfp)
+        return cls(rho=rho, **data, NFP=nfp)
 
     @classmethod
     def from_booz_xform(
         cls,
         booz: str,
-        s: Float[ArrayLike, ""],
+        rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
         cutoff: Float[ArrayLike, ""] = 0.0,
@@ -311,8 +312,8 @@ class Field(eqx.Module):
         ----------
         booz : path-like
             Path to booz_xform wout file.
-        s : float
-            Normalized surface label.
+        rho : float
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         cutoff : float
@@ -321,6 +322,7 @@ class Field(eqx.Module):
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
+        s = rho**2
         file = Dataset(booz, mode="r")
         assert not bool(
             file.variables["lasym__logical__"][:].filled()
@@ -377,7 +379,7 @@ class Field(eqx.Module):
         bvco *= sign
 
         return cls.from_boozer(
-            rho=jnp.sqrt(s),
+            rho=rho,
             Bmag=Bmag,
             I=buco,
             G=bvco,
@@ -395,7 +397,7 @@ class Field(eqx.Module):
     def from_ipp_bc(
         cls,
         path: str,
-        s: Float[ArrayLike, ""],
+        rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
         cutoff: Float[ArrayLike, ""] = 0.0,
@@ -406,8 +408,8 @@ class Field(eqx.Module):
         ----------
         path : path-like
             Path to input bc file.
-        s : float
-            Normalized surface label.
+        rho : float
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         cutoff : float
@@ -415,6 +417,7 @@ class Field(eqx.Module):
         """
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
 
+        s = rho**2
         data = read_bc(path)
         nfp = data["nfp"]
         theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
@@ -449,7 +452,7 @@ class Field(eqx.Module):
         G *= sign
 
         return cls.from_boozer(
-            rho=jnp.sqrt(s),
+            rho=rho,
             Bmag=Bmag,
             I=I,
             G=G,

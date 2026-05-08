@@ -68,7 +68,9 @@ def test_solve_mdke_w7x_eim(idx):
     nt = 17
     nz = 33
     nl = 65
-    field = Field.from_booz_xform(config["booz_path"], config["s"], nt, nz, cutoff=1e-5)
+    field = Field.from_booz_xform(
+        config["booz_path"], np.sqrt(config["s"]), nt, nz, cutoff=1e-5
+    )
     pitchgrid = UniformPitchAngleGrid(nl)
 
     erhat = data_fortran["erhat"][idx]
@@ -143,12 +145,11 @@ def test_solve_field_types(nuhat, erhohat):
     nt = 17
     nz = 37
     rho = 0.5
-    s = rho**2
 
     field1 = Field.from_desc(eq, rho, nt, nz)
-    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", s, nt, nz)
-    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", s, nt, nz)
-    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", s, nt, nz)
+    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
+    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", rho, nt, nz)
+    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", rho, nt, nz)
     pitchgrid = UniformPitchAngleGrid(73)
 
     sol1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat, verbose=True)
@@ -197,7 +198,7 @@ def test_solve_dke_ncsx(idx):
     nz = 31
     na = 61
     nx = 6
-    field = Field.from_vmec("tests/data/wout_NCSX.nc", rho**2, nt, nz)
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
     pitchgrid = UniformPitchAngleGrid(na)
     speedgrid = MaxwellSpeedGrid(nx)
     species = [
