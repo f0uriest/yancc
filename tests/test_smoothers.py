@@ -99,13 +99,13 @@ def test_dke_banded_vs_dense_smoother(
 
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_mdke_banded_vs_dense_smoother(pitchgrid, field, axorder):
-    Er = 1e-3
-    nu = 1e-3
+    erhohat = 1e-3
+    nuhat = 1e-3
     s1 = MDKEJacobiSmoother(
-        field, pitchgrid, Er, nu, axorder=axorder, smooth_solver="dense"
+        field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="dense"
     ).as_matrix()
     s2 = MDKEJacobiSmoother(
-        field, pitchgrid, Er, nu, axorder=axorder, smooth_solver="banded"
+        field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="banded"
     ).as_matrix()
     np.testing.assert_allclose(s1, s2)
 

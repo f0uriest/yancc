@@ -165,7 +165,23 @@ def _(operator):
 
 
 class DKEPreconditioner(MultigridOperator):
-    """Preconditioner for the DKE."""
+    """Preconditioner for the DKE.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : AbstractSpeedGrid
+        Speed grid data.
+    species : list of LocalMaxwellian
+        Plasma species.
+    Erho : float
+        Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
+    background : list of LocalMaxwellian, optional
+        Background species for inter-species collisions.
+    """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -311,7 +327,23 @@ def _(operator):
 
 
 class DKEMPreconditioner(lx.AbstractLinearOperator):
-    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+    """Preconditioner for the DKE using block diagonal MDKE preconditioners.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : AbstractSpeedGrid
+        Speed grid data.
+    species : list of LocalMaxwellian
+        Plasma species.
+    Erho : float
+        Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
+    background : list of LocalMaxwellian, optional
+        Background species for inter-species collisions.
+    """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -342,37 +374,41 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         background = background
         self.Erho = jnp.asarray(Erho)
 
-        Ers = []
-        nus = []
+        erhohats = []
+        nuhats = []
         vs = []
         for i, spec in enumerate(species):
-            temp_nu = []
-            temp_Er = []
+            temp_nuhat = []
+            temp_erhohat = []
             temp_vs = []
             others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
                 nu = collisionality(spec, v, *others)
-                Erhat = Erho / v
+                erhohat = Erho / v
                 nuhat = nu / v
-                temp_Er.append(Erhat)
-                temp_nu.append(nuhat)
+                temp_erhohat.append(erhohat)
+                temp_nuhat.append(nuhat)
                 temp_vs.append(v)
 
-            Ers.append(temp_Er)
-            nus.append(temp_nu)
+            erhohats.append(temp_erhohat)
+            nuhats.append(temp_nuhat)
             vs.append(temp_vs)
 
-        Ers = jnp.array(Ers)
-        nus = jnp.array(nus)
+        erhohats = jnp.array(erhohats)
+        nuhats = jnp.array(nuhats)
         self.vs = jnp.array(vs)
 
-        def get_mdke_precond(nu, Er):
+        def get_mdke_precond(nuhat, erhohat):
             return MDKEPreconditioner(
-                field=field, pitchgrid=pitchgrid, erhohat=Er, nuhat=nu, **options
+                field=field,
+                pitchgrid=pitchgrid,
+                erhohat=erhohat,
+                nuhat=nuhat,
+                **options,
             )
 
-        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nus, Ers)
+        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nuhats, erhohats)
 
     @eqx.filter_jit
     def mv(self, vector):
