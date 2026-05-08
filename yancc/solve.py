@@ -49,12 +49,14 @@ def solve_mdke(
         Monoenergetic collisionality, ν/v in units of 1/m.
     verbose: bool, int
         Level of verbosity:
-          - 0: no into printed.
+
+          - 0: no info printed.
           - 1: print initialization info.
           - 2: print info from krylov solver at each iteration. Frequency can be
-          controlled by also passing `print_every=<int>`
+            controlled by also passing `print_every=<int>`
           - 3: also print residuals at each multigrid level before and after smoothing.
           - 4: also print residuals within smoothing iterations.
+
         Note that verbose > 2 may slow things down as additional diagnostic info is
         calculated at each step.
     multigrid_options : dict, optional
@@ -216,12 +218,14 @@ def solve_dke(  # noqa: C901
         solving for df.
     verbose: bool, int
         Level of verbosity:
-          - 0: no into printed.
+
+          - 0: no info printed.
           - 1: print initialization info.
           - 2: print info from krylov solver at each iteration. Frequency can be
-          controlled by also passing `print_every=<int>`
+            controlled by also passing `print_every=<int>`
           - 3: also print residuals at each multigrid level before and after smoothing.
           - 4: also print residuals within smoothing iterations.
+
         Note that verbose > 2 may slow things down as additional diagnostic info is
         calculated at each step.
     multigrid_options : dict, optional
@@ -229,29 +233,10 @@ def solve_dke(  # noqa: C901
 
     Returns
     -------
-    f : jax.Array, shape(ns,nx,na,nt,nz)
-        Distribution function f = F0 + f1 where F0 is the leading order Maxwellian and
-        f1 is the perturbation.
-    rhs : jax.Array, shape(ns,nx,na,nt,nz)
-        Drive term from leading order Maxwellian. Right hand side of DKE.
-    fluxes: dict of jax.Array
-        Contains:
-        <particle_flux> : jax.Array, shape(ns)
-            Γₐ = FSA particle flux for each species, in particles/(meter² second).
-        <heat_flux> : jax.Array, shape(ns)
-            Qₐ = FSA heat flux for each species, in Joules/(meter² second)
-        V|| : jax.Array, shape(ns, nt, nz)
-            V|| = Parallel velocity for each species, in meters/second
-        <V||B>: jax.Array, shape(ns)
-            <V||B> = Flux surface average field*parallel velocity for each species,
-            in Tesla*meter/second
-        <J||B>: float
-            <J||B> = Bootstrap current, in Tesla*Amps/meter².
-        J_rho : float
-            J_rho = Radial current, in Amps/meter².
-        J|| : jax.Array, shape(nt, nz)
-            J|| = Parallel current density in Amps/meter².
-    stats : dict
+    sol : DKESolution
+        Solution object containing distribution function and drive terms and methods
+        for computing fluxes and other moments.
+    info : dict
         Info about the solve, such as number of iterations, number of matrix-vector
         products, final residual etc.
 
