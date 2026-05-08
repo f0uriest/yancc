@@ -15,8 +15,8 @@ def test_interpolate(field, nx):
     field2 = field.resample(15, 17)
     pitchgrid1 = UniformPitchAngleGrid(11)
     pitchgrid2 = UniformPitchAngleGrid(15)
-    N1 = nx * pitchgrid1.nxi * field1.ntheta * field1.nzeta
-    N2 = nx * pitchgrid2.nxi * field2.ntheta * field2.nzeta
+    N1 = nx * pitchgrid1.na * field1.ntheta * field1.nzeta
+    N2 = nx * pitchgrid2.na * field2.ntheta * field2.nzeta
 
     t1, t2 = field1.theta, field2.theta
     z1, z2 = field1.zeta, field2.zeta

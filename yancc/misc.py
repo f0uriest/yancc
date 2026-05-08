@@ -69,12 +69,12 @@ class DKESources(lx.MatrixLinearOperator):
         s1 = (x**2 - 5 / 2) * F
         s2 = (-2 / 3 * x**2 + 1) * F
         # now need to make them broadcast against full distribution function
-        # these have shape (ns, nx, nxi, nt, nz)
+        # these have shape (ns, nx, na, nt, nz)
         s1 = s1[:, :, None, None, None] * jnp.ones(
-            (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+            (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
         )
         s2 = s2[:, :, None, None, None] * jnp.ones(
-            (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+            (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
         )
         # flatten by species
         s1 = s1.reshape((len(species), -1))
@@ -127,9 +127,9 @@ class DKEConstraint(lx.MatrixLinearOperator):
 
         vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
 
-        # int f d3v, for particle conservation, shape(ns, nx, nxi)
+        # int f d3v, for particle conservation, shape(ns, nx, na)
         d3v = _d3v(speedgrid, pitchgrid, species)
-        # int v^2 f d3v, for energy conservation, shape(ns, nx, nxi)
+        # int v^2 f d3v, for energy conservation, shape(ns, nx, na)
         v2d3v = speedgrid.x[None, :, None] ** 2 * vth**2 * d3v
 
         if normalize:
@@ -168,7 +168,7 @@ def radial_magnetic_drift(
 
     Returns
     -------
-    f : jax.Array, shape(ns, nx, nxi, nt, nz)
+    f : jax.Array, shape(ns, nx, na, nt, nz)
         Radial magnetic drift.
     """
     if not isinstance(species, (list, tuple)):

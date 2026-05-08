@@ -94,7 +94,7 @@ class MDKEPreconditioner(MultigridOperator):
             ress = get_grid_resolutions(
                 ns=1,
                 nx=1,
-                na=pitchgrid.nxi,
+                na=pitchgrid.na,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -226,7 +226,7 @@ class DKEPreconditioner(MultigridOperator):
             ress = get_grid_resolutions(
                 ns=len(species),
                 nx=speedgrid.nx,
-                na=pitchgrid.nxi,
+                na=pitchgrid.na,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -397,7 +397,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -410,7 +410,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),

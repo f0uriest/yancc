@@ -129,7 +129,7 @@ class DKESolution(eqx.Module):
         EparB: jax.Array,
         background: list[LocalMaxwellian],
     ):
-        shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
+        shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
         f = f.flatten()
         N = np.prod(shape)
         if f.size == N:
@@ -213,8 +213,8 @@ class MDKESolution(eqx.Module):
         nuhat: jax.Array,
         erhohat: jax.Array,
     ):
-        self.f = f.reshape(3, pitchgrid.nxi, field.ntheta, field.nzeta)
-        self.rhs = rhs.reshape(3, pitchgrid.nxi, field.ntheta, field.nzeta)
+        self.f = f.reshape(3, pitchgrid.na, field.ntheta, field.nzeta)
+        self.rhs = rhs.reshape(3, pitchgrid.na, field.ntheta, field.nzeta)
         self.field = field
         self.pitchgrid = pitchgrid
         self.nuhat = nuhat
@@ -257,14 +257,14 @@ def _mdke_Dij(sol, normalization=None, **kwargs):
     """Monoenergetic transport coefficients."""
     f = sol.f.reshape((-1, 3))
     s = sol.rhs.reshape((-1, 3))
-    nxi, nt, nz = (
-        sol.pitchgrid.nxi,
+    na, nt, nz = (
+        sol.pitchgrid.na,
         sol.field.ntheta,
         sol.field.nzeta,
     )
     sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
-    Dij_itz = sf.reshape((3, 3, nxi, nt, nz))
-    Dij_i = sol.field.flux_surface_average(Dij_itz)  # shape (3,3,nxi)
+    Dij_itz = sf.reshape((3, 3, na, nt, nz))
+    Dij_i = sol.field.flux_surface_average(Dij_itz)  # shape (3,3,na)
     Dij = jnp.sum(Dij_i * sol.pitchgrid.wxi, axis=-1)  # shape (3,3)
     return Dij
 

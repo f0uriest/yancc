@@ -28,6 +28,10 @@ from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAng
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
 
+# axorder string convention: s=species, x=speed, a=pitch, t=theta, z=zeta
+# Shape annotations like (ns, nx, na, nt, nz) follow the same axis-letter mapping;
+# field.ntheta / field.nzeta are the underlying attribute names for nt / nz.
+
 
 OPTIMAL_SMOOTHING_COEFFS_3D = {
     "1a": {
@@ -139,7 +143,7 @@ def permute_f_3d(
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_3d(
-        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
+        field.ntheta, field.nzeta, pitchgrid.na, axorder
     )
     f = f.reshape(shape)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
@@ -156,7 +160,7 @@ def permute_f_4d(
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_4d(
-        field.ntheta, field.nzeta, pitchgrid.nxi, speedgrid.nx, len(species), axorder
+        field.ntheta, field.nzeta, pitchgrid.na, speedgrid.nx, len(species), axorder
     )
     f = f.reshape(shape)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
@@ -227,7 +231,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         assert smooth_solver in {None, "banded", "dense"}
         if smooth_solver is None:
             sizes = {
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -279,14 +283,14 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -385,7 +389,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -413,7 +417,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
             _weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             _weight = _weight * jnp.ones(
-                (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+                (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
             )
         else:
             _weight = weight
@@ -470,7 +474,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -483,7 +487,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -588,7 +592,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
             wght = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
-            weight = wght * jnp.ones((1, 1, pitchgrid.nxi, field.ntheta, field.nzeta))
+            weight = wght * jnp.ones((1, 1, pitchgrid.na, field.ntheta, field.nzeta))
         self.weight = jnp.asarray(weight).flatten()
 
         mats = DKE(
@@ -640,7 +644,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -653,7 +657,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -680,7 +684,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.species = species
         if normalize:
-            na = self.pitchgrid.nxi
+            na = self.pitchgrid.na
             nt = self.field.ntheta
             nz = self.field.nzeta
             ha = jnp.pi / na
@@ -706,12 +710,12 @@ class DKELaplacian(lx.AbstractLinearOperator):
         shape = (
             len(self.species),
             self.speedgrid.nx,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.field.ntheta,
             self.field.nzeta,
         )
 
-        na = self.pitchgrid.nxi
+        na = self.pitchgrid.na
         nt = self.field.ntheta
         nz = self.field.nzeta
         ha = jnp.pi / na
@@ -739,7 +743,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -752,7 +756,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),

@@ -337,7 +337,7 @@ def solve_dke(  # noqa: C901
     preconditioner = InverseBorderedOperator(M, B, C)
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
-    shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
+    shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
     size = np.prod(shape)
     if U is not None:
         assert U.shape[0] == size
@@ -380,7 +380,7 @@ def solve_dke(  # noqa: C901
 
     F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
     F0 = jnp.tile(
-        F0[:, :, None, None, None], (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+        F0[:, :, None, None, None], (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
     )
     F0 = jnp.concatenate([F0.flatten(), jnp.zeros(2 * len(species))])
 
@@ -456,7 +456,7 @@ def _print_dke_resolutions(preconditioner):
     for i, op in enumerate(preconditioner.operators):
         ns = len(op.species)
         nx = op.speedgrid.nx
-        na = op.pitchgrid.nxi
+        na = op.pitchgrid.na
         nt = op.field.ntheta
         nz = op.field.nzeta
         jax.debug.print(

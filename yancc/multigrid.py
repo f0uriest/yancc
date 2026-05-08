@@ -659,8 +659,8 @@ def _restrict_z(f, z1, z2, NFP=1, method="linear"):
 @eqx.filter_jit
 def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
     """Prolongation/restriction between grids via (transposed) interpolation."""
-    nt1, nz1, na1 = field1.ntheta, field1.nzeta, pitchgrid1.nxi
-    nt2, nz2, na2 = field2.ntheta, field2.nzeta, pitchgrid2.nxi
+    nt1, nz1, na1 = field1.ntheta, field1.nzeta, pitchgrid1.na
+    nt2, nz2, na2 = field2.ntheta, field2.nzeta, pitchgrid2.na
     t1, t2 = field1.theta, field2.theta
     z1, z2 = field1.zeta, field2.zeta
     a1, a2 = pitchgrid1.xi, pitchgrid2.xi
