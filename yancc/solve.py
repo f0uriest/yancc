@@ -39,7 +39,7 @@ def solve_mdke(
 
     Parameters
     ----------
-    field : yancc.Field
+    field : Field
         Magnetic field information.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
@@ -78,9 +78,9 @@ def solve_mdke(
     p2 = options.pop("p2", 4)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
-    m = options.pop("m", 300)
-    k = options.pop("k", 5)
-    maxiter = options.pop("maxiter", 5)
+    m = options.pop("m", 150)
+    k = options.pop("k", 10)
+    maxiter = options.pop("maxiter", 10)
     print_every = options.pop("print_every", 10)
     U1 = options.pop("U1", None)
     U2 = options.pop("U2", None)
@@ -201,7 +201,7 @@ def solve_dke(  # noqa: C901
 
     Parameters
     ----------
-    field : yancc.Field
+    field : Field
         Magnetic field information.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.

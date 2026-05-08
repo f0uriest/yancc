@@ -326,7 +326,7 @@ class LegendrePitchAngleGrid(eqx.Module):
 
 
 class UniformPitchAngleGrid(eqx.Module):
-    """Grid for pitch angle variable gamma= arccos(v||/v).
+    """Grid for pitch angle variable a = -arccos(v||/v).
 
     Uniform grid not including endpoints.
 
@@ -338,17 +338,17 @@ class UniformPitchAngleGrid(eqx.Module):
     """
 
     na: int = eqx.field(static=True)
-    gamma: jax.Array
+    a: jax.Array
     xi: jax.Array
     wxi: jax.Array
 
     def __init__(self, na):
         na = eqx.error_if(na, na % 2 == 0, "na must be odd")
         self.na = na
-        gamma = jnp.linspace(0, jnp.pi, na, endpoint=False)
-        gamma += jnp.pi / (2 * na)
-        self.gamma = gamma
-        self.xi = -jnp.cos(gamma)
+        a = jnp.linspace(0, jnp.pi, na, endpoint=False)
+        a += jnp.pi / (2 * na)
+        self.a = a
+        self.xi = -jnp.cos(a)
 
         # fejer type 1 quadrature
         length = na // 2

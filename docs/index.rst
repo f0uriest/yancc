@@ -6,6 +6,10 @@
    :caption: Getting Started
 
    quickstart
+   loading_fields
+   theory
+   performance
+   tuning
 
 .. toctree::
    :maxdepth: 1

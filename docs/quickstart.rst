@@ -169,6 +169,9 @@ formats. The same physical surface can be obtained from any of them:
     field_booz = Field.from_booz_xform("boozmn_wout_NCSX.nc", rho, nt, nz)
     field_bc   = Field.from_ipp_bc("NCSX.bc", rho, nt, nz)
 
+
+See :doc:`loading_fields` or :class:`yancc.field.Field` for more information.
+
 JAX transformations
 ~~~~~~~~~~~~~~~~~~~
 

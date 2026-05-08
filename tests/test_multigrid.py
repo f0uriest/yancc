@@ -20,7 +20,7 @@ def test_interpolate(field, nx):
 
     t1, t2 = field1.theta, field2.theta
     z1, z2 = field1.zeta, field2.zeta
-    a1, a2 = pitchgrid1.gamma, pitchgrid2.gamma
+    a1, a2 = pitchgrid1.a, pitchgrid2.a
     x = (1 + np.arange(nx)) ** 2
 
     def foo(x, a, t, z):

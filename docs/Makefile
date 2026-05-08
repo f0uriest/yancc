@@ -34,3 +34,4 @@ clean:
 	rm -f DKE.csv
 	rm -f MDKE.csv
 	rm -f variables.rst
+	rm -rf _api/
