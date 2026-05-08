@@ -273,10 +273,10 @@ def _dke_rhs_3(
     vpar = pitchgrid.xi[None, None, None, :, None, None] * vth * x
     Bvpar = field.Bmag[None, None, None, None, :, :] * vpar
 
-    v1 = -vmadotgradrho * Fs
-    v2 = -(x**2) * vmadotgradrho * Fs
-    v3 = Bvpar * Fs
-    rhs = jnp.array([v1, v2, v3])
+    r1 = -vmadotgradrho * Fs
+    r2 = -(x**2) * vmadotgradrho * Fs
+    r3 = Bvpar * Fs
+    rhs = jnp.array([r1, r2, r3])
     return rhs
 
 

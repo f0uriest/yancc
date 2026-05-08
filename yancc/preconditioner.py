@@ -70,7 +70,7 @@ class MDKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
         gauge = options.pop("gauge", True)
-        ress = options.pop("ress", None)
+        resolutions = options.pop("resolutions", None)
         max_grids = options.pop("max_grids", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         coarse_N = options.pop("coarse_N", 8000)
@@ -90,8 +90,8 @@ class MDKEPreconditioner(MultigridOperator):
             options
         )
 
-        if ress is None:
-            ress = get_grid_resolutions(
+        if resolutions is None:
+            resolutions = get_grid_resolutions(
                 ns=1,
                 nx=1,
                 na=pitchgrid.na,
@@ -106,7 +106,7 @@ class MDKEPreconditioner(MultigridOperator):
             )
 
         if verbose:
-            for i, res in enumerate(ress):
+            for i, res in enumerate(resolutions):
                 ns, nx, na, nt, nz = res
                 jax.debug.print(
                     f"Grid {i}: na={na:4d}, "
@@ -118,7 +118,7 @@ class MDKEPreconditioner(MultigridOperator):
         fields, grids = get_fields_grids(
             field=field,
             pitchgrid=pitchgrid,
-            ress=ress,
+            resolutions=resolutions,
         )
 
         operators = get_mdke_operators(
@@ -217,7 +217,7 @@ class DKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
         gauge = options.pop("gauge", True)
-        ress = options.pop("ress", None)
+        resolutions = options.pop("resolutions", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         max_grids = options.pop("max_grids", None)
         coarse_N = options.pop("coarse_N", 8000)
@@ -238,8 +238,8 @@ class DKEPreconditioner(MultigridOperator):
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
 
-        if ress is None:
-            ress = get_grid_resolutions(
+        if resolutions is None:
+            resolutions = get_grid_resolutions(
                 ns=len(species),
                 nx=speedgrid.nx,
                 na=pitchgrid.na,
@@ -253,7 +253,9 @@ class DKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
 
-        fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
+        fields, grids = get_fields_grids(
+            field=field, pitchgrid=pitchgrid, resolutions=resolutions
+        )
         operators = get_dke_operators(
             fields=fields,
             pitchgrids=grids,

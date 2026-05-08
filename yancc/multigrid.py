@@ -235,7 +235,7 @@ def get_grid_resolutions(
 
     Returns
     -------
-    ress : list of tuple of int
+    resolutions : list of tuple of int
         Each list element is a tuple of resolutions at a given grid level, each
         tuple is the resolution (ns, nx, na, nt, nz)
     """
@@ -258,26 +258,26 @@ def get_grid_resolutions(
             np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
         )
 
-    ress = [(ns, nx, na, nt, nz)]
+    resolutions = [(ns, nx, na, nt, nz)]
     na = max(_half_next_odd(na, coarsening_factor), min_na)
     nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
     nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
     N = ns * nx * na * nt * nz
-    while N > coarse_N and len(ress) < max_grids - 1:
-        ress.append((ns, nx, na, nt, nz))
+    while N > coarse_N and len(resolutions) < max_grids - 1:
+        resolutions.append((ns, nx, na, nt, nz))
         na = max(_half_next_odd(na, coarsening_factor), min_na)
         nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
         nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
         N = ns * nx * na * nt * nz
-    ress.append((ns, nx, na, nt, nz))
-    return ress[::-1]
+    resolutions.append((ns, nx, na, nt, nz))
+    return resolutions[::-1]
 
 
 @eqx.filter_jit
 def get_fields_grids(
     field,
     pitchgrid,
-    ress,
+    resolutions,
 ):
     """Get fields and grids for multigrid problem.
 
@@ -287,7 +287,7 @@ def get_fields_grids(
         Field at sufficient resolution to represent B.
     pitchgrid : PitchAngleGrid
         Pitch angle grid data.
-    ress : array-like, shape(num_grid, 5)
+    resolutions : array-like, shape(num_grid, 5)
         Resolutions at each grid level in (ns, nx, na, nt, nz)
 
     Returns
@@ -300,7 +300,7 @@ def get_fields_grids(
     """
     fields = []
     grids = []
-    for res in ress:
+    for res in resolutions:
         _, _, na, nt, nz = res
         fields.append(field.resample(nt, nz))
         grids.append(pitchgrid.resample(na))
