@@ -11,7 +11,8 @@ import lineax as lx
 import numpy as np
 from jaxtyping import Array, Int
 
-from .linalg import InverseLinearOperator
+from .field import Field
+from .linalg import InverseLinearOperator, TransposedLinearOperator
 from .smoothers import (
     DKEJacobi2Smoother,
     DKEJacobiSmoother,
@@ -19,6 +20,7 @@ from .smoothers import (
     MDKEJacobiSmoother,
 )
 from .trajectories import DKE, MDKE
+from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
@@ -307,6 +309,76 @@ def get_fields_grids(
     return fields, grids
 
 
+@functools.partial(jax.jit, static_argnames=["prefix_size", "method"])
+def get_prolongations(fields, pitchgrids, prefix_size=1, method="linear"):
+    """Build coarse->fine prolongation operators between adjacent grid levels.
+
+    Parameters
+    ----------
+    fields : list[Field]
+        Fields at each level, ordered coarse to fine.
+    pitchgrids : list[UniformPitchAngleGrid]
+        Pitch angle grids at each level, ordered coarse to fine.
+    prefix_size : int
+        Product of leading axes that don't change between levels (e.g.
+        ``len(species) * speedgrid.nx``).
+    method : str
+        Interpolation method.
+
+    Returns
+    -------
+    prolongations : list[Prolongation]
+        ``prolongations[k]`` maps level ``k`` (coarse) to level ``k+1`` (fine),
+        for ``k`` in ``0 .. len(fields) - 2``.
+    """
+    return [
+        Prolongation(
+            field_coarse=fields[k],
+            field_fine=fields[k + 1],
+            pitchgrid_coarse=pitchgrids[k],
+            pitchgrid_fine=pitchgrids[k + 1],
+            prefix_size=prefix_size,
+            method=method,
+        )
+        for k in range(len(fields) - 1)
+    ]
+
+
+@functools.partial(jax.jit, static_argnames=["prefix_size", "method"])
+def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
+    """Build fine->coarse restriction operators between adjacent grid levels.
+
+    Parameters
+    ----------
+    fields : list[Field]
+        Fields at each level, ordered coarse to fine.
+    pitchgrids : list[UniformPitchAngleGrid]
+        Pitch angle grids at each level, ordered coarse to fine.
+    prefix_size : int
+        Product of leading axes that don't change between levels (e.g.
+        ``len(species) * speedgrid.nx``).
+    method : str
+        Interpolation method that defines the underlying prolongation.
+
+    Returns
+    -------
+    restrictions : list[Restriction]
+        ``restrictions[k]`` maps level ``k+1`` (fine) to level ``k`` (coarse),
+        for ``k`` in ``0 .. len(fields) - 2``.
+    """
+    return [
+        Restriction(
+            field_coarse=fields[k],
+            field_fine=fields[k + 1],
+            pitchgrid_coarse=pitchgrids[k],
+            pitchgrid_fine=pitchgrids[k + 1],
+            prefix_size=prefix_size,
+            method=method,
+        )
+        for k in range(len(fields) - 1)
+    ]
+
+
 @functools.partial(jax.jit, static_argnames=["verbose"])
 def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     """Apply smoothing operators to operator @ x = rhs"""
@@ -555,136 +627,255 @@ def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
     return x
 
 
-def _prolongate_a(f, a1, a2, method="linear"):
-    assert len(a2) >= len(a1)
-    f2 = jnp.moveaxis(
-        interpax.interp1d(
-            a2, a1, jnp.moveaxis(f, -3, 0), method=method, period=None, extrap=True
-        ),
-        0,
-        -3,
-    )
-    return f2
+def _build_interp_matrix(x_src, x_query, method, period):
+    """Dense 1-D interpolation matrix.
+
+    Returns ``P`` of shape ``(len(x_query), len(x_src))`` such that
+    ``P @ f`` is the interpolant of ``f`` (defined on ``x_src``) evaluated at
+    ``x_query``. Built by applying ``interpax.interp1d`` to each column of the
+    identity matrix; valid for any linear interpolation method since
+    ``interp1d`` is linear in its data argument.
+    """
+    eye = jnp.eye(len(x_src))
+    P_T = jax.vmap(
+        lambda col: interpax.interp1d(
+            x_query, x_src, col, method=method, period=period, extrap=True
+        )
+    )(eye)
+    return P_T.T
 
 
-def _prolongate_t(f, t1, t2, method="linear"):
-    assert len(t2) >= len(t1)
-    f2 = jnp.moveaxis(
-        interpax.interp1d(
-            t2,
-            t1,
-            jnp.moveaxis(f, -2, 0),
+class Prolongation(lx.AbstractLinearOperator):
+    """Coarse-to-fine grid prolongation as a linear operator.
+
+    Interpolates a flattened ``(prefix_size, na, ntheta, nzeta)`` array from a
+    coarse ``(field, pitchgrid)`` up to a fine one via 1-D interpolation along
+    each coordinate axis. ``prefix_size`` absorbs any leading dimensions that
+    don't change between levels (e.g. species, speed).
+
+    Parameters
+    ----------
+    field_coarse, field_fine : Field
+        Magnetic field data at the coarse and fine theta/zeta resolutions.
+    pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
+        Pitch angle grids at the coarse and fine na resolutions.
+    prefix_size : int
+        Product of leading axes that don't change between levels (e.g.
+        ``len(species) * speedgrid.nx``). Defaults to 1.
+    method : str
+        Interpolation method. ``"linear"`` is implemented as a dense matrix;
+        anything else is passed to ``interpax.interp1d``.
+    """
+
+    field_coarse: Field
+    field_fine: Field
+    pitchgrid_coarse: UniformPitchAngleGrid
+    pitchgrid_fine: UniformPitchAngleGrid
+    prefix_size: int = eqx.field(static=True)
+    method: str = eqx.field(static=True)
+    P_xi: jax.Array
+    P_theta: jax.Array
+    P_zeta: jax.Array
+
+    def __init__(
+        self,
+        field_coarse: Field,
+        field_fine: Field,
+        pitchgrid_coarse: UniformPitchAngleGrid,
+        pitchgrid_fine: UniformPitchAngleGrid,
+        prefix_size: int = 1,
+        method: str = "linear",
+    ):
+        self.field_coarse = field_coarse
+        self.field_fine = field_fine
+        self.pitchgrid_coarse = pitchgrid_coarse
+        self.pitchgrid_fine = pitchgrid_fine
+        self.prefix_size = prefix_size
+        self.method = method
+        self.P_xi = _build_interp_matrix(
+            pitchgrid_coarse.xi, pitchgrid_fine.xi, method=method, period=None
+        )
+        self.P_theta = _build_interp_matrix(
+            field_coarse.theta, field_fine.theta, method=method, period=2 * jnp.pi
+        )
+        self.P_zeta = _build_interp_matrix(
+            field_coarse.zeta,
+            field_fine.zeta,
             method=method,
-            period=2 * jnp.pi,
-            extrap=True,
-        ),
-        0,
-        -2,
-    )
-    return f2
+            period=2 * jnp.pi / field_coarse.NFP,
+        )
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix-vector product (coarse -> fine)."""
+        nt_c = self.field_coarse.ntheta
+        nz_c = self.field_coarse.nzeta
+        na_c = self.pitchgrid_coarse.na
+        f = vector.reshape((self.prefix_size, na_c, nt_c, nz_c))
+        # axes after reshape: (0:prefix, 1:na, 2:nt, 3:nz)
+        # Each tensordot brings its axis to 0 and leaves it there; we restore
+        # the original axis order at the end.
+        f = jnp.moveaxis(f, 1, 0)
+        f = jnp.tensordot(self.P_xi, f, axes=1)
+        f = jnp.moveaxis(f, 2, 0)
+        f = jnp.tensordot(self.P_theta, f, axes=1)
+        f = jnp.moveaxis(f, 3, 0)
+        f = jnp.tensordot(self.P_zeta, f, axes=1)
+        f = jnp.transpose(f, (3, 2, 1, 0))
+        return f.flatten()
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        n = (
+            self.prefix_size
+            * self.pitchgrid_coarse.na
+            * self.field_coarse.ntheta
+            * self.field_coarse.nzeta
+        )
+        return jax.ShapeDtypeStruct((n,), dtype=self.field_coarse.Bmag.dtype)
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        n = (
+            self.prefix_size
+            * self.pitchgrid_fine.na
+            * self.field_fine.ntheta
+            * self.field_fine.nzeta
+        )
+        return jax.ShapeDtypeStruct((n,), dtype=self.field_fine.Bmag.dtype)
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
 
 
-def _prolongate_z(f, z1, z2, NFP=1, method="linear"):
-    assert len(z2) >= len(z1)
-    f2 = jnp.moveaxis(
-        interpax.interp1d(
-            z2,
-            z1,
-            jnp.moveaxis(f, -1, 0),
+class Restriction(lx.AbstractLinearOperator):
+    """Fine-to-coarse grid restriction as a linear operator.
+
+    Applies the volume-weighted transpose of piecewise-linear (or other)
+    interpolation, i.e. ``R = (N_coarse / N_fine) P^T`` per axis, where ``P``
+    is the prolongation matrix between adjacent grids.
+
+    Parameters
+    ----------
+    field_coarse, field_fine : Field
+        Magnetic field data at the coarse and fine theta/zeta resolutions.
+    pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
+        Pitch angle grids at the coarse and fine na resolutions.
+    prefix_size : int
+        Product of leading axes that don't change between levels (e.g.
+        ``len(species) * speedgrid.nx``). Defaults to 1.
+    method : str
+        Interpolation method that defines the underlying prolongation.
+    """
+
+    field_coarse: Field
+    field_fine: Field
+    pitchgrid_coarse: UniformPitchAngleGrid
+    pitchgrid_fine: UniformPitchAngleGrid
+    prefix_size: int = eqx.field(static=True)
+    method: str = eqx.field(static=True)
+    P_xi: jax.Array
+    P_theta: jax.Array
+    P_zeta: jax.Array
+    volume_scale: jax.Array
+
+    def __init__(
+        self,
+        field_coarse: Field,
+        field_fine: Field,
+        pitchgrid_coarse: UniformPitchAngleGrid,
+        pitchgrid_fine: UniformPitchAngleGrid,
+        prefix_size: int = 1,
+        method: str = "linear",
+    ):
+        self.field_coarse = field_coarse
+        self.field_fine = field_fine
+        self.pitchgrid_coarse = pitchgrid_coarse
+        self.pitchgrid_fine = pitchgrid_fine
+        self.prefix_size = prefix_size
+        self.method = method
+        # Store the coarse->fine prolongation matrix; restriction applies its
+        # volume-weighted transpose.
+        self.P_xi = _build_interp_matrix(
+            pitchgrid_coarse.xi, pitchgrid_fine.xi, method=method, period=None
+        )
+        self.P_theta = _build_interp_matrix(
+            field_coarse.theta, field_fine.theta, method=method, period=2 * jnp.pi
+        )
+        self.P_zeta = _build_interp_matrix(
+            field_coarse.zeta,
+            field_fine.zeta,
             method=method,
-            period=2 * jnp.pi / NFP,
-            extrap=True,
-        ),
-        0,
-        -1,
-    )
-    return f2
+            period=2 * jnp.pi / field_coarse.NFP,
+        )
+        self.volume_scale = jnp.asarray(
+            (pitchgrid_coarse.na / pitchgrid_fine.na)
+            * (field_coarse.ntheta / field_fine.ntheta)
+            * (field_coarse.nzeta / field_fine.nzeta)
+        )
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix-vector product (fine -> coarse)."""
+        nt_f = self.field_fine.ntheta
+        nz_f = self.field_fine.nzeta
+        na_f = self.pitchgrid_fine.na
+        f = vector.reshape((self.prefix_size, na_f, nt_f, nz_f))
+        # Apply the volume-weighted transpose of each per-axis prolongation.
+        f = jnp.moveaxis(f, 1, 0)
+        f = jnp.tensordot(self.P_xi, f, axes=([0], [0]))
+        f = jnp.moveaxis(f, 2, 0)
+        f = jnp.tensordot(self.P_theta, f, axes=([0], [0]))
+        f = jnp.moveaxis(f, 3, 0)
+        f = jnp.tensordot(self.P_zeta, f, axes=([0], [0]))
+        f = f * self.volume_scale
+        f = jnp.transpose(f, (3, 2, 1, 0))
+        return f.flatten()
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        n = (
+            self.prefix_size
+            * self.pitchgrid_fine.na
+            * self.field_fine.ntheta
+            * self.field_fine.nzeta
+        )
+        return jax.ShapeDtypeStruct((n,), dtype=self.field_fine.Bmag.dtype)
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        n = (
+            self.prefix_size
+            * self.pitchgrid_coarse.na
+            * self.field_coarse.ntheta
+            * self.field_coarse.nzeta
+        )
+        return jax.ShapeDtypeStruct((n,), dtype=self.field_coarse.Bmag.dtype)
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
 
 
-def _restrict_a(f, a1, a2, method="linear"):
-    interp = lambda f: jnp.moveaxis(
-        interpax.interp1d(
-            a1, a2, jnp.moveaxis(f, -3, 0), method=method, period=None, extrap=True
-        ),
-        0,
-        -3,
-    )
-    shp = list(f.shape)
-    shp[-3] = len(a2)
-    g = jnp.zeros(shp)
-    f2 = jax.linear_transpose(interp, g)(f)[0]
-    return f2 * len(a2) / len(a1)
-
-
-def _restrict_t(f, t1, t2, method="linear"):
-    interp = lambda f: jnp.moveaxis(
-        interpax.interp1d(
-            t1,
-            t2,
-            jnp.moveaxis(f, -2, 0),
-            method=method,
-            period=2 * jnp.pi,
-            extrap=True,
-        ),
-        0,
-        -2,
-    )
-    shp = list(f.shape)
-    shp[-2] = len(t2)
-    g = jnp.zeros(shp)
-    f2 = jax.linear_transpose(interp, g)(f)[0]
-    return f2 * len(t2) / len(t1)
-
-
-def _restrict_z(f, z1, z2, NFP=1, method="linear"):
-    interp = lambda f: jnp.moveaxis(
-        interpax.interp1d(
-            z1,
-            z2,
-            jnp.moveaxis(f, -1, 0),
-            method=method,
-            period=2 * jnp.pi / NFP,
-            extrap=True,
-        ),
-        0,
-        -1,
-    )
-    shp = list(f.shape)
-    shp[-1] = len(z2)
-    g = jnp.zeros(shp)
-    f2 = jax.linear_transpose(interp, g)(f)[0]
-    return f2 * len(z2) / len(z1)
-
-
-@eqx.filter_jit
-def interpolate(f, field1, field2, pitchgrid1, pitchgrid2, method="linear"):
-    """Prolongation/restriction between grids via (transposed) interpolation."""
-    nt1, nz1, na1 = field1.ntheta, field1.nzeta, pitchgrid1.na
-    nt2, nz2, na2 = field2.ntheta, field2.nzeta, pitchgrid2.na
-    t1, t2 = field1.theta, field2.theta
-    z1, z2 = field1.zeta, field2.zeta
-    a1, a2 = pitchgrid1.xi, pitchgrid2.xi
-
-    N1 = nt1 * nz1 * na1
-    nx = f.size // N1
-    f = f.reshape((nx, na1, nt1, nz1))
-
-    if na2 >= na1:
-        f = _prolongate_a(f, a1, a2, method)
-    else:
-        f = _restrict_a(f, a1, a2, method)
-
-    if nt2 >= nt1:
-        f = _prolongate_t(f, t1, t2, method)
-    else:
-        f = _restrict_t(f, t1, t2, method)
-
-    if nz2 >= nz1:
-        f = _prolongate_z(f, z1, z2, field1.NFP, method)
-    else:
-        f = _restrict_z(f, z1, z2, field1.NFP, method)
-
-    return f.flatten()
+@lx.is_symmetric.register(Prolongation)
+@lx.is_diagonal.register(Prolongation)
+@lx.is_tridiagonal.register(Prolongation)
+@lx.is_symmetric.register(Restriction)
+@lx.is_diagonal.register(Restriction)
+@lx.is_tridiagonal.register(Restriction)
+def _(operator):
+    return False
 
 
 def _multigrid_cycle_recursive(
@@ -694,9 +885,10 @@ def _multigrid_cycle_recursive(
     operators,
     rhs,
     smoothers,
+    prolongations,
+    restrictions,
     v1,
     v2,
-    interp_method,
     smooth_method,
     coarse_opinv,
     coarse_method,
@@ -720,12 +912,16 @@ def _multigrid_cycle_recursive(
     smoothers: list[list[lx.AbstractLinearOperator]]
         Smoothers to apply at each level. Note the smoothing operation is
         smoother @ x, not inv(smoother) @ x.
+    prolongations : list[lx.AbstractLinearOperator]
+        Coarse->fine prolongation operators between adjacent levels.
+        ``prolongations[k]`` maps level ``k`` to level ``k+1``.
+    restrictions : list[lx.AbstractLinearOperator]
+        Fine->coarse restriction operators between adjacent levels.
+        ``restrictions[k]`` maps level ``k+1`` to level ``k``.
     n : int
         Number of cycles to perform.
     v1, v2 : int
         Number of pre- and post- smoothing iterations.
-    interp_method : str
-        Method of interpolation, passed to interpax.interp3d
     smooth_method : {"standard", "krylov1", "krylov2", "krylov1s", "krylov2s"}
         Method to use for smoothing.
     coarse_opinv: lx.AbstractLinearOperator
@@ -782,14 +978,7 @@ def _multigrid_cycle_recursive(
     def body(i, state):
         rk, x = state
 
-        rkm1 = interpolate(
-            rk,
-            operators[k].field,
-            operators[k - 1].field,
-            operators[k].pitchgrid,
-            operators[k - 1].pitchgrid,
-            interp_method,
-        )
+        rkm1 = restrictions[k - 1].mv(rk)
         if k == 1:
             ykm1 = coarse_opinv.mv(rkm1)
         else:
@@ -800,22 +989,16 @@ def _multigrid_cycle_recursive(
                 operators=operators,
                 rhs=rkm1,
                 smoothers=smoothers,
+                prolongations=prolongations,
+                restrictions=restrictions,
                 v1=v1,
                 v2=v2,
-                interp_method=interp_method,
                 smooth_method=smooth_method,
                 coarse_opinv=coarse_opinv,
                 coarse_method=coarse_method,
                 verbose=verbose,
             )
-        yk = interpolate(
-            ykm1,
-            operators[k - 1].field,
-            operators[k].field,
-            operators[k - 1].pitchgrid,
-            operators[k].pitchgrid,
-            interp_method,
-        )
+        yk = prolongations[k - 1].mv(ykm1)
         x = coarse_correction(x, k, i, Ak, yk, rk, verbose=max(verbose - 1, 0))
 
         if verbose:
@@ -977,22 +1160,24 @@ class MultigridOperator(lx.AbstractLinearOperator):
     ----------
     operators : list[lx.AbstractLinearOperator]
         Operators for each level of discretization, from coarse to fine.
-    rhs : jax.Array
-        Right hand side vector on finest grid.
     smoothers: list[list[lx.AbstractLinearOperator]]
         Smoothers to apply at each level. Note the smoothing operation is
         smoother @ x, not inv(smoother) @ x.
+    prolongations : list[lx.AbstractLinearOperator]
+        Coarse->fine prolongation operators between adjacent levels, length
+        ``len(operators) - 1``. ``prolongations[k]`` maps level ``k`` to
+        level ``k+1``.
+    restrictions : list[lx.AbstractLinearOperator]
+        Fine->coarse restriction operators between adjacent levels, length
+        ``len(operators) - 1``. ``restrictions[k]`` maps level ``k+1`` to
+        level ``k``.
     x0 : jax.Array, optional
         Starting guess for solution. Default is all zero.
-    n : int
-        Number of cycles to perform.
     cycle_index : int
         Type of cycle / number of sub-cycles. cycle_index=1 corresponds to a "V" cycle,
         cycle_index=2 is a "W" cycle etc.
     v1, v2 : int
         Number of pre- and post- smoothing iterations.
-    interp_method : str
-        Method of interpolation, passed to interpax.interp3d
     smooth_method : {"standard", "krylov1", "krylov2", "krylov1s", "krylov2s"}
         Method to use for smoothing.
     coarse_opinv: lx.AbstractLinearOperator
@@ -1009,11 +1194,12 @@ class MultigridOperator(lx.AbstractLinearOperator):
 
     operators: list[lx.AbstractLinearOperator]
     smoothers: list[list[lx.AbstractLinearOperator]]
+    prolongations: list[lx.AbstractLinearOperator]
+    restrictions: list[lx.AbstractLinearOperator]
     x0: Union[None, jax.Array]
     cycle_index: jax.Array
     v1: jax.Array
     v2: jax.Array
-    interp_method: str = eqx.field(static=True)
     smooth_method: str = eqx.field(static=True)
     coarse_opinv: lx.AbstractLinearOperator
     coarse_method: str = eqx.field(static=True)
@@ -1023,24 +1209,28 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self,
         operators: list[lx.AbstractLinearOperator],
         smoothers: list[list[lx.AbstractLinearOperator]],
+        prolongations: list[lx.AbstractLinearOperator],
+        restrictions: list[lx.AbstractLinearOperator],
         x0: Optional[jax.Array] = None,
         cycle_index: Union[int, Int[Array, ""]] = 1,
         v1: Union[int, Int[Array, ""]] = 1,
         v2: Union[int, Int[Array, ""]] = 1,
-        interp_method: str = "linear",
         smooth_method: str = "standard",
         coarse_opinv: Optional[lx.AbstractLinearOperator] = None,
         coarse_method: str = "standard",
         verbose: Union[bool, int] = False,
     ):
+        assert len(prolongations) == len(operators) - 1
+        assert len(restrictions) == len(operators) - 1
 
         self.operators = operators
         self.smoothers = smoothers
+        self.prolongations = prolongations
+        self.restrictions = restrictions
         self.x0 = x0
         self.cycle_index = jnp.asarray(cycle_index)
         self.v1 = jnp.asarray(v1)
         self.v2 = jnp.asarray(v2)
-        self.interp_method = interp_method
         self.smooth_method = smooth_method
         if coarse_opinv is None:
             coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
@@ -1059,9 +1249,10 @@ class MultigridOperator(lx.AbstractLinearOperator):
             operators=self.operators,
             rhs=vector,
             smoothers=self.smoothers,
+            prolongations=self.prolongations,
+            restrictions=self.restrictions,
             v1=self.v1,
             v2=self.v2,
-            interp_method=self.interp_method,
             smooth_method=self.smooth_method,
             coarse_opinv=self.coarse_opinv,
             coarse_method=self.coarse_method,
@@ -1086,15 +1277,20 @@ class MultigridOperator(lx.AbstractLinearOperator):
         """Transpose of the operator."""
         opt = [op.transpose() for op in self.operators]
         smt = [[sm.transpose() for sm in smo] for smo in self.smoothers]
+        # In the transposed cycle, the coarse->fine direction is the transpose
+        # of the original fine->coarse direction, and vice versa.
+        prot = [r.transpose() for r in self.restrictions]
+        rest = [p.transpose() for p in self.prolongations]
         opit = self.coarse_opinv.transpose()
         return MultigridOperator(
             opt,
             smt,
+            prot,
+            rest,
             self.x0,
             self.cycle_index,
             self.v1,
             self.v2,
-            self.interp_method,
             self.smooth_method,
             opit,
             self.coarse_method,

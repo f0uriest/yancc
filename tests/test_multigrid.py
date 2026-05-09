@@ -1,62 +1,60 @@
 """Tests for multigrid parts."""
 
-import jax
 import numpy as np
 import pytest
 
-from yancc.multigrid import interpolate
+from yancc.multigrid import Prolongation, Restriction
 from yancc.velocity_grids import UniformPitchAngleGrid
 
 
 @pytest.mark.parametrize("nx", [1, 3])
-def test_interpolate(field, nx):
-    """Test that interpolation is transposed correctly."""
-    field1 = field.resample(11, 13)
-    field2 = field.resample(15, 17)
-    pitchgrid1 = UniformPitchAngleGrid(11)
-    pitchgrid2 = UniformPitchAngleGrid(15)
-    N1 = nx * pitchgrid1.na * field1.ntheta * field1.nzeta
-    N2 = nx * pitchgrid2.na * field2.ntheta * field2.nzeta
+def test_prolongation_restriction(field, nx):
+    """Test that prolongation and restriction are transposes (volume weighted)."""
+    field_c = field.resample(11, 13)
+    field_f = field.resample(15, 17)
+    pitchgrid_c = UniformPitchAngleGrid(11)
+    pitchgrid_f = UniformPitchAngleGrid(15)
+    N_c = nx * pitchgrid_c.na * field_c.ntheta * field_c.nzeta
+    N_f = nx * pitchgrid_f.na * field_f.ntheta * field_f.nzeta
 
-    t1, t2 = field1.theta, field2.theta
-    z1, z2 = field1.zeta, field2.zeta
-    a1, a2 = pitchgrid1.a, pitchgrid2.a
+    t_c, t_f = field_c.theta, field_f.theta
+    z_c, z_f = field_c.zeta, field_f.zeta
+    a_c, a_f = pitchgrid_c.a, pitchgrid_f.a
     x = (1 + np.arange(nx)) ** 2
 
     def foo(x, a, t, z):
         return (
             x
             * np.sin(t)
-            * np.cos(z * field1.NFP)
+            * np.cos(z * field_c.NFP)
             * (np.exp(-(a**2)) + 2 * np.exp(-((a - np.pi) ** 2)))
         )
 
-    f1 = foo(
+    f_c = foo(
         x[:, None, None, None],
-        a1[None, :, None, None],
-        t1[None, None, :, None],
-        z1[None, None, None, :],
+        a_c[None, :, None, None],
+        t_c[None, None, :, None],
+        z_c[None, None, None, :],
     ).flatten()
-    f2 = foo(
+    f_f = foo(
         x[:, None, None, None],
-        a2[None, :, None, None],
-        t2[None, None, :, None],
-        z2[None, None, None, :],
+        a_f[None, :, None, None],
+        t_f[None, None, :, None],
+        z_f[None, None, None, :],
     ).flatten()
-    J1 = jax.jacfwd(interpolate)(f1, field1, field2, pitchgrid1, pitchgrid2)
-    J2 = jax.jacfwd(interpolate)(f2, field2, field1, pitchgrid2, pitchgrid1)
 
-    np.testing.assert_allclose(
-        J1 @ f1, interpolate(f1, field1, field2, pitchgrid1, pitchgrid2), atol=1e-12
-    )
-    np.testing.assert_allclose(
-        J2 @ f2, interpolate(f2, field2, field1, pitchgrid2, pitchgrid1), atol=1e-12
-    )
-    np.testing.assert_allclose(J1.T, J2 * N2 / N1, atol=1e-12)
+    P = Prolongation(field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx)
+    R = Restriction(field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx)
 
-    np.testing.assert_allclose(
-        f2,
-        interpolate(f1, field1, field2, pitchgrid1, pitchgrid2, method="cubic"),
-        atol=1e-2,
-        rtol=1e-2,
+    Pmat = P.as_matrix()
+    Rmat = R.as_matrix()
+
+    np.testing.assert_allclose(Pmat @ f_c, P.mv(f_c), atol=1e-12)
+    np.testing.assert_allclose(Rmat @ f_f, R.mv(f_f), atol=1e-12)
+    # Restriction is the volume-weighted transpose of prolongation.
+    np.testing.assert_allclose(Pmat.T, Rmat * N_f / N_c, atol=1e-12)
+
+    P_cubic = Prolongation(
+        field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx, method="cubic"
     )
+    np.testing.assert_allclose(f_f, P_cubic.mv(f_c), atol=1e-2, rtol=1e-2)

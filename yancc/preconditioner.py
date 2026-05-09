@@ -20,6 +20,8 @@ from .multigrid import (
     get_grid_resolutions,
     get_mdke_jacobi_smoothers,
     get_mdke_operators,
+    get_prolongations,
+    get_restrictions,
 )
 from .species import LocalMaxwellian, collisionality
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
@@ -141,15 +143,22 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_solver=smooth_solver,
             weight=smooth_weights,
         )
+        prolongations = get_prolongations(
+            fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
+        )
+        restrictions = get_restrictions(
+            fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
+        )
 
         super().__init__(
             operators=operators,
             smoothers=smoothers,
+            prolongations=prolongations,
+            restrictions=restrictions,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
             v2=v2,
-            interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_method=coarse_method,
@@ -305,15 +314,29 @@ class DKEPreconditioner(MultigridOperator):
                 **options,
             )
         coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        prefix_size = len(species) * speedgrid.nx
+        prolongations = get_prolongations(
+            fields=fields,
+            pitchgrids=grids,
+            prefix_size=prefix_size,
+            method=interp_method,
+        )
+        restrictions = get_restrictions(
+            fields=fields,
+            pitchgrids=grids,
+            prefix_size=prefix_size,
+            method=interp_method,
+        )
 
         super().__init__(
             operators=operators,
             smoothers=smoothers,
+            prolongations=prolongations,
+            restrictions=restrictions,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
             v2=v2,
-            interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
