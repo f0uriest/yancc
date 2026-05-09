@@ -167,6 +167,34 @@ def permute_f_4d(
     return f.flatten()
 
 
+def inverse_permute_f_3d(
+    f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
+) -> jax.Array:
+    """Inverse of permute_f_3d: canonical (a,t,z) layout back to axorder layout."""
+    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
+    _, caxorder = _parse_axorder_shape_3d(nt, nz, na, axorder)
+    f = f.reshape((na, nt, nz))
+    f = jnp.moveaxis(f, (0, 1, 2), caxorder)
+    return f.flatten()
+
+
+def inverse_permute_f_4d(
+    f: jax.Array,
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    species: list[LocalMaxwellian],
+    axorder: str,
+) -> jax.Array:
+    """Inverse of permute_f_4d: canonical (s,x,a,t,z) layout back to axorder layout."""
+    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
+    nx, ns = speedgrid.nx, len(species)
+    _, caxorder = _parse_axorder_shape_4d(nt, nz, na, nx, ns, axorder)
+    f = f.reshape((ns, nx, na, nt, nz))
+    f = jnp.moveaxis(f, (0, 1, 2, 3, 4), caxorder)
+    return f.flatten()
+
+
 class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     """Block diagonal smoother for MDKE.
 
@@ -260,9 +288,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = vector
-        permute = lambda f: permute_f_3d(f, self.field, self.pitchgrid, self.axorder)
-        x = jax.linear_transpose(permute, x)(x)[0]
+        x = inverse_permute_f_3d(vector, self.field, self.pitchgrid, self.axorder)
 
         if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
@@ -273,7 +299,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             x = x.reshape(size, M)
             b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        return self.weight * permute(b.flatten())
+        b = permute_f_3d(b.flatten(), self.field, self.pitchgrid, self.axorder)
+        return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -446,11 +473,14 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = vector
-        permute = lambda f: permute_f_4d(
-            f, self.field, self.pitchgrid, self.speedgrid, self.species, self.axorder
+        x = inverse_permute_f_4d(
+            vector,
+            self.field,
+            self.pitchgrid,
+            self.speedgrid,
+            self.species,
+            self.axorder,
         )
-        x = jax.linear_transpose(permute, x)(x)[0]
 
         if self.smooth_solver == "banded":
             size, N, M = self.mats[0].shape
@@ -461,7 +491,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             x = x.reshape(size, M)
             b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        return self.weight * permute(b.flatten())
+        b = permute_f_4d(
+            b.flatten(),
+            self.field,
+            self.pitchgrid,
+            self.speedgrid,
+            self.species,
+            self.axorder,
+        )
+        return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -618,11 +656,14 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = vector
-        permute = lambda f: permute_f_4d(
-            f, self.field, self.pitchgrid, self.speedgrid, self.species, self.axorder
+        x = inverse_permute_f_4d(
+            vector,
+            self.field,
+            self.pitchgrid,
+            self.speedgrid,
+            self.species,
+            self.axorder,
         )
-        x = jax.linear_transpose(permute, x)(x)[0]
 
         if self.smooth_solver == "banded":
             raise NotImplementedError()
