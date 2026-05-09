@@ -364,8 +364,9 @@ def solve_dke(  # noqa: C901
         )
 
     F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
-    F0 = jnp.tile(
-        F0[:, :, None, None, None], (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
+    F0 = jnp.broadcast_to(
+        F0[:, :, None, None, None],
+        F0.shape + (pitchgrid.na, field.ntheta, field.nzeta),
     )
     F0 = jnp.concatenate([F0.flatten(), jnp.zeros(2 * len(species))])
 

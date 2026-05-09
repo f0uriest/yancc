@@ -139,7 +139,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         )[:, None, None]
         f2 *= -self.nuhat / 2
         df = f1 + f2
-        df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta))
+        df = jnp.broadcast_to(df, df.shape[:1] + (self.field.ntheta, self.field.nzeta))
 
         idx = self.pitchgrid.na // 2
         scale = self.nuhat / h**2
@@ -177,7 +177,9 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         ]
         f2 *= -self.nuhat / 2
         df = f1 + f2
-        df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta, 1))
+        df = jnp.broadcast_to(
+            df, df.shape[:1] + (self.field.ntheta, self.field.nzeta) + df.shape[3:]
+        )
 
         idx = self.pitchgrid.na // 2
         scale = self.nuhat / h**2
@@ -683,7 +685,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             None, None, :, None, None
         ]
         df = f1 + f2
-        df = jnp.tile(df, (1, 1, 1, self.field.ntheta, self.field.nzeta))
+        df = jnp.broadcast_to(df, df.shape[:3] + (self.field.ntheta, self.field.nzeta))
 
         df *= -self.nus[:, :, None, None, None] / 2
 
@@ -743,7 +745,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = f1 + f2
         df = dense_to_banded(bw, bw, df)[None, None, :, None, None, :]
         df *= -self.nus[:, :, None, None, None, None] / 2
-        df = jnp.tile(df, (1, 1, 1, self.field.ntheta, self.field.nzeta, 1))
+        df = jnp.broadcast_to(
+            df, df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[5:]
+        )
 
         idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
         idxx = self.speedgrid.gauge_idx
@@ -1001,8 +1005,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + self.coeff1[:, :, None, None, None] * df
             + self.coeff0[:, :, None, None, None] * f
         )
-        out = jnp.tile(
-            out, (1, 1, self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+        out = jnp.broadcast_to(
+            out,
+            out.shape[:2] + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
         )
         idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
@@ -1065,8 +1070,11 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + self.coeff1[:, :, None, None, None, None] * df
             + self.coeff0[:, :, None, None, None, None] * f
         )
-        out = jnp.tile(
-            out, (1, 1, self.pitchgrid.na, self.field.ntheta, self.field.nzeta, 1)
+        out = jnp.broadcast_to(
+            out,
+            out.shape[:2]
+            + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+            + out.shape[5:],
         )
         idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
@@ -1261,9 +1269,9 @@ class FieldPartCD(lx.AbstractLinearOperator):
             self.axorder,
         )
         diag = jnp.einsum("iijj->ij", self.C)
-        df = jnp.tile(
+        df = jnp.broadcast_to(
             diag[:, :, None, None, None],
-            (1, 1, self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
+            diag.shape + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
         )
         idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
@@ -1323,9 +1331,11 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 self.axorder,
             )
             diag = jnp.einsum("ikjj->ijk", self.C)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 diag[:, :, None, None, None, :],
-                (1, 1, self.pitchgrid.na, self.field.ntheta, self.field.nzeta, 1),
+                diag.shape[:2]
+                + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+                + diag.shape[2:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1360,9 +1370,11 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 self.axorder,
             )
             diag = jnp.einsum("iijk->ijk", self.C)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 diag[:, :, None, None, None, :],
-                (1, 1, self.pitchgrid.na, self.field.ntheta, self.field.nzeta, 1),
+                diag.shape[:2]
+                + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+                + diag.shape[2:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1614,8 +1626,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
         )
         Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
         G = jnp.einsum("aaxix->axi", Gabxiy)
-        df = jnp.tile(
-            G[:, :, :, None, None], (1, 1, 1, self.field.ntheta, self.field.nzeta)
+        df = jnp.broadcast_to(
+            G[:, :, :, None, None],
+            G.shape + (self.field.ntheta, self.field.nzeta),
         )
 
         idxa = self.pitchgrid.na // 2
@@ -1683,9 +1696,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
             G = jnp.einsum("abxix->axib", Gabxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 G[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                G.shape[:3] + (self.field.ntheta, self.field.nzeta) + G.shape[3:],
             )
             idxs_mesh = idxs[:, None]
             idxx_mesh = idxx[None, :]
@@ -1719,9 +1732,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
             G = jnp.einsum("aaxiy->axiy", Gabxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 G[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                G.shape[:3] + (self.field.ntheta, self.field.nzeta) + G.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1750,9 +1763,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 bandwidth = 2 * bw + 1
                 # 1. Band indices cover the entire bandwidth
@@ -1778,9 +1791,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 return -df
             else:
                 idxa = idxa[0]
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 df = jnp.where(
                     self.gauge,
@@ -1824,9 +1837,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
             Gabxylj = jax.vmap(jax.vmap(jax.vmap(jax.vmap(jnp.diag))))(Gabxyl)
             Gabxiy = jnp.einsum("il,abxylj->abxyij", self.Txi, Gabxylj)
             Gaxihby = jnp.einsum("jh,abxyij->axihby", self.Txi_inv, Gabxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Gaxihby[:, :, :, None, None, :, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1, 1),
+                Gaxihby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Gaxihby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1848,9 +1863,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
             Gaxiby = jnp.moveaxis(Gabxiy, (0, 2, 3, 1, 4), (0, 1, 2, 3, 4))
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Gaxiby[:, :, :, None, None, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1),
+                Gaxiby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Gaxiby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -2054,8 +2071,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
         )
         Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
         H = jnp.einsum("aaxix->axi", Habxiy)
-        df = jnp.tile(
-            H[:, :, :, None, None], (1, 1, 1, self.field.ntheta, self.field.nzeta)
+        df = jnp.broadcast_to(
+            H[:, :, :, None, None],
+            H.shape + (self.field.ntheta, self.field.nzeta),
         )
         idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
@@ -2122,9 +2140,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
             H = jnp.einsum("abxix->axib", Habxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 H[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                H.shape[:3] + (self.field.ntheta, self.field.nzeta) + H.shape[3:],
             )
             idxs_mesh = idxs[:, None]
             idxx_mesh = idxx[None, :]
@@ -2158,9 +2176,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
             H = jnp.einsum("aaxiy->axiy", Habxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 H[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                H.shape[:3] + (self.field.ntheta, self.field.nzeta) + H.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -2188,9 +2206,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.einsum("ja,sxij->sxia", self.Txi_inv, Hsxij)
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 bandwidth = 2 * bw + 1
                 # 1. Band indices cover the entire bandwidth
@@ -2215,9 +2233,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
                 return -df
             else:
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 df = jnp.where(
                     self.gauge,
@@ -2261,9 +2279,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
             Habxylj = jax.vmap(jax.vmap(jax.vmap(jax.vmap(jnp.diag))))(Habxyl)
             Habxiy = jnp.einsum("il,abxylj->abxyij", self.Txi, Habxylj)
             Haxihby = jnp.einsum("jh,abxyij->axihby", self.Txi_inv, Habxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Haxihby[:, :, :, None, None, :, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1, 1),
+                Haxihby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Haxihby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -2285,9 +2305,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
             Haxiby = jnp.moveaxis(Habxiy, (0, 2, 3, 1, 4), (0, 1, 2, 3, 4))
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Haxiby[:, :, :, None, None, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1),
+                Haxiby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Haxiby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
