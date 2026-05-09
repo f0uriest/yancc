@@ -277,8 +277,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -465,8 +465,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -631,12 +631,20 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             x = x.reshape(size, M)
             b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        return self.weight * permute(b.flatten())
+        b = permute_f_4d(
+            b.flatten(),
+            self.field,
+            self.pitchgrid,
+            self.speedgrid,
+            self.species,
+            self.axorder,
+        )
+        return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -734,8 +742,8 @@ class DKELaplacian(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""

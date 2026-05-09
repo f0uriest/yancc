@@ -1458,8 +1458,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -1890,8 +1890,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -2332,8 +2332,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -2478,8 +2478,8 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -2641,8 +2641,8 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
