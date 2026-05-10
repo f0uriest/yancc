@@ -75,6 +75,8 @@ class Field(eqx.Module):
     a_minor: Float[Array, ""]
     iota: Float[Array, ""]
     B0: Float[Array, ""]
+    I: Float[Array, ""]
+    G: Float[Array, ""]
     ntheta: int = eqx.field(static=True)
     nzeta: int = eqx.field(static=True)
     NFP: Int[Array, ""]
@@ -128,6 +130,8 @@ class Field(eqx.Module):
         ) / self.sqrtg
         self.Bmag_fsa = self.flux_surface_average(self.Bmag)
         self.B2mag_fsa = self.flux_surface_average(self.Bmag**2)
+        self.I = self.flux_surface_average(self.B_sub_t)
+        self.G = self.flux_surface_average(self.B_sub_z)
         self.Psi = jnp.asarray(Psi)
         self.iota = jnp.asarray(iota)
         self.R_major = jnp.asarray(R_major)

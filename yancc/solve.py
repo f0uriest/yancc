@@ -476,17 +476,21 @@ def _print_dke_resolutions(preconditioner):
 def _print_field_summary(field: Field) -> None:
     jax.debug.print(
         "Field info:  "
-        + "ρ={rho: .3e}     "
-        + "ι={iota: .3e}          "
-        + "V'(ρ)={Vr: .3e}\n"
-        + " " * 11
-        + "<B>={Bavg: .3e}  "
-        + "<|𝐛⋅∇B|>={bdotgradB: .3e}  "
-        + "<|𝐁×∇ρ⋅∇B|>={BxgradrhodotgradB: .3e}",
+        + "ρ={rho: .2e}  "
+        + "<B>={Bavg: .2e} (T)  "
+        + "<|𝐛⋅∇B|>={bdotgradB: .2e} (T/m)  "
+        + "<|𝐁×∇ρ⋅∇B|>={BxgradrhodotgradB: .2e} (T²/m²)\n"
+        + " " * 13
+        + "ι={iota: .2e}  "
+        + "V'(ρ)={Vr: .2e} (m³)  "
+        + "I={I: .2e}  (T*m)  "
+        + "G={G: .2e}  (T*m)",
         rho=field.rho,
         iota=field.iota,
         Bavg=field.Bmag_fsa,
         Vr=field.sqrtg.mean(),
+        I=field.I,
+        G=field.G,
         bdotgradB=field.flux_surface_average(jnp.abs(field.bdotgradB)),
         BxgradrhodotgradB=field.flux_surface_average(jnp.abs(field.BxgradrhodotgradB)),
         ordered=True,
