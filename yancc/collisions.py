@@ -62,6 +62,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
+    _D: Float[Array, "na na"]
+    _scale: Float[Array, ""]
 
     def __init__(
         self,
@@ -82,33 +84,37 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
+        h = jnp.pi / pitchgrid.na
+        f1 = jnp.ones(pitchgrid.na)
+        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
+        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
+        sina = jnp.sqrt(1 - pitchgrid.xi**2)
+        cosa = -pitchgrid.xi
+        w1 = -(self.nuhat / 2 * cosa / sina)
+        w2 = -self.nuhat / 2
+        # w1, w2 only depend on pitch (na), not state size, so fold into a
+        # single (na, na) operator.
+        self._D = w1[:, None] * D1 + w2 * D2
+        self._scale = self.nuhat / h**2
 
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        h = jnp.pi / self.pitchgrid.na
-
-        f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None]
-        f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=0)
-        f2 *= -self.nuhat / 2
-        df = f1 + f2
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
+        f1 = jnp.moveaxis(f, 0, -1)  # (nt, nz, na) - convolved axis last
+        df = jnp.moveaxis(f1 @ self._D.T, -1, 0)
 
         idx = self.pitchgrid.na // 2
-        scale = self.nuhat / h**2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
-                scale * f[idx, 0, 0],
+                self._scale * f[idx, 0, 0],
                 unique_indices=True,
             ),
             df,
@@ -119,33 +125,16 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape_3d(
+        _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
         )
-        f = jnp.ones((self.pitchgrid.na, self.field.ntheta, self.field.nzeta))
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-
-        h = jnp.pi / self.pitchgrid.na
-
-        f1 = jnp.diag(
-            jax.jacfwd(fdfwd)(
-                f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
-            )
-        )[:, None, None]
-        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None]
-        f2 = jnp.diag(
-            jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)
-        )[:, None, None]
-        f2 *= -self.nuhat / 2
-        df = f1 + f2
+        df = jnp.diag(self._D)[:, None, None]
         df = jnp.broadcast_to(df, df.shape[:1] + (self.field.ntheta, self.field.nzeta))
 
         idx = self.pitchgrid.na // 2
-        scale = self.nuhat / h**2
         df = jnp.where(
             self.gauge,
-            df.at[idx, 0, 0].set(scale, unique_indices=True),
+            df.at[idx, 0, 0].set(self._scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
@@ -159,36 +148,21 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         if self.axorder[-1] == "t":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
-        shape, caxorder = _parse_axorder_shape_3d(
+        _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
         )
-        f = jnp.ones((self.pitchgrid.na, self.field.ntheta, self.field.nzeta))
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-
-        h = jnp.pi / self.pitchgrid.na
-
-        f1 = jax.jacfwd(fdfwd)(
-            f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
-        )[:, None, None, :]
-        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None, None]
-        f2 = jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)[
-            :, None, None, :
-        ]
-        f2 *= -self.nuhat / 2
-        df = f1 + f2
+        df = self._D[:, None, None, :]
         df = jnp.broadcast_to(
             df, df.shape[:1] + (self.field.ntheta, self.field.nzeta) + df.shape[3:]
         )
 
         idx = self.pitchgrid.na // 2
-        scale = self.nuhat / h**2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
             .set(0, unique_indices=True)
             .at[idx, 0, 0, idx]
-            .set(scale, unique_indices=True),
+            .set(self._scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
@@ -590,6 +564,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     nus: jax.Array
+    _D: Float[Array, "na na"]
+    _scale: Float[Array, "ns nidx"]
 
     def __init__(
         self,
@@ -621,6 +597,17 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
                 nu += nuD_ab(spa, spb, x * spa.v_thermal)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
+        h = jnp.pi / pitchgrid.na
+        f1 = jnp.ones(pitchgrid.na)
+        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
+        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
+        sina = jnp.sqrt(1 - pitchgrid.xi**2)
+        cosa = -pitchgrid.xi
+        # cos/sin only depends on pitchgrid; fold into a single (na, na) op.
+        # The species/x-dependent prefactor (-nus/2) is applied in mv.
+        self._D = (cosa / sina)[:, None] * D1 + D2
+        idxx = self.speedgrid.gauge_idx
+        self._scale = self.nus[:, idxx] / h**2
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -636,24 +623,17 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             self.axorder,
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
-
-        h = jnp.pi / self.pitchgrid.na
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-
-        f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=2)
-        f1 *= (cosa / sina)[:, None, None]
-        f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=2)
-        df = f1 + f2
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
+        f1 = jnp.moveaxis(f, 2, -1)  # (ns, nx, nt, nz, na) - convolved axis last
+        df = jnp.moveaxis(f1 @ self._D.T, -1, 2)
         df *= -self.nus[:, :, None, None, None] / 2
+
         idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
-        scale = self.nus[:, idxx] / h**2
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
-                scale * f[:, idxx, idxa, 0, 0],
+                self._scale * f[:, idxx, idxa, 0, 0],
                 unique_indices=True,
             ),
             df,
@@ -664,7 +644,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape_4d(
+        _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
             self.pitchgrid.na,
@@ -673,28 +653,15 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             self.axorder,
         )
 
-        h = jnp.pi / self.pitchgrid.na
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-        f = jnp.ones(self.pitchgrid.na)
-        f1 = jnp.diag(
-            jax.jacfwd(fdfwd)(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        )[None, None, :, None, None]
-        f1 *= (cosa / sina)[None, None, :, None, None]
-        f2 = jnp.diag(jax.jacfwd(fd2)(f, self.p2, h=h, bc="symmetric", axis=0))[
-            None, None, :, None, None
-        ]
-        df = f1 + f2
+        df = jnp.diag(self._D)[None, None, :, None, None]
         df = jnp.broadcast_to(df, df.shape[:3] + (self.field.ntheta, self.field.nzeta))
-
-        df *= -self.nus[:, :, None, None, None] / 2
+        df = -self.nus[:, :, None, None, None] / 2 * df
 
         idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
-        scale = self.nus[:, idxx] / h**2
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
+            df.at[:, idxx, idxa, 0, 0].set(self._scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -735,23 +702,15 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             self.axorder,
         )
 
-        f = jnp.ones(self.pitchgrid.na)
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-        h = jnp.pi / self.pitchgrid.na
-        f1 = jax.jacfwd(fdfwd)(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= (cosa / sina)[:, None]
-        f2 = jax.jacfwd(fd2)(f, self.p2, h=h, bc="symmetric", axis=0)
-        df = f1 + f2
-        df = dense_to_banded(bw, bw, df)[None, None, :, None, None, :]
-        df *= -self.nus[:, :, None, None, None, None] / 2
+        df = dense_to_banded(bw, bw, self._D)[None, None, :, None, None, :]
+        df = -self.nus[:, :, None, None, None, None] / 2 * df
         df = jnp.broadcast_to(
             df, df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[5:]
         )
 
         idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = self.nus[:, idxx] / h**2
+        scale = self._scale
 
         bandwidth = 2 * bw + 1
         # 1. Band indices cover the entire bandwidth
@@ -795,16 +754,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             self.axorder,
         )
 
-        h = jnp.pi / self.pitchgrid.na
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-        f = jnp.ones(self.pitchgrid.na)
-        f1 = jax.jacfwd(fdfwd)(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= (cosa / sina)[:, None]
-        f2 = jax.jacfwd(fd2)(f, self.p2, h=h, bc="symmetric", axis=0)
-        df = f1 + f2
         nus = -jnp.diag(self.nus.flatten()) / 2
-        df = jnp.kron(df, nus)
+        df = jnp.kron(self._D, nus)
         df = jnp.repeat(df[None], self.field.ntheta * self.field.nzeta, axis=0)
 
         df = df.reshape(*shape, self.pitchgrid.na, len(self.species), self.speedgrid.nx)
@@ -815,6 +766,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
         idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
 
+        h = jnp.pi / self.pitchgrid.na
         scale = self.nus[idxs, idxx] / h**2
         df = jnp.where(
             self.gauge,
