@@ -26,6 +26,19 @@ from .trajectories import DKE, MDKE
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
+def _preconditioner_is_linear(M) -> bool:
+    """True if a multigrid preconditioner is a linear operator.
+
+    Standard pre/post-smoothing and standard coarse-grid correction are linear.
+    Krylov-projected smoothers (krylov*/krylov*s) and the residual-driven
+    adaptive smoother are not. Returns False if we can't tell, in which case
+    the caller should assume nonlinearity (i.e. use flexible GMRES).
+    """
+    smooth = getattr(M, "smooth_method", None)
+    coarse = getattr(M, "coarse_method", None)
+    return smooth == "standard" and coarse == "standard"
+
+
 def solve_mdke(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
@@ -105,6 +118,7 @@ def solve_mdke(
         verbose=verbose,
         **multigrid_options,
     )
+    flexible = not _preconditioner_is_linear(M)
     A = MDKE(
         field,
         pitchgrid,
@@ -131,6 +145,7 @@ def solve_mdke(
         verbose=verbose > 1,
         print_every_inner=jnp.asarray(print_every),
         U=U1,
+        flexible=flexible,
     )
     if f2 is None:
         f2 = jnp.zeros_like(rhs[:, 0])
@@ -147,6 +162,7 @@ def solve_mdke(
         verbose=verbose > 1,
         print_every_inner=jnp.asarray(print_every),
         U=U2,
+        flexible=flexible,
     )
     info = {
         "j1": j1,
@@ -320,6 +336,7 @@ def solve_dke(  # noqa: C901
 
     operator = BorderedOperator(A, B, C)
     preconditioner = InverseBorderedOperator(M, B, C)
+    flexible = not _preconditioner_is_linear(M)
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
@@ -346,6 +363,7 @@ def solve_dke(  # noqa: C901
         verbose=verbose > 1,
         print_every_inner=jnp.asarray(print_every),
         U=U,
+        flexible=flexible,
     )
     info = {
         "niter": j1,

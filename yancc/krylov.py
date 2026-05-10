@@ -247,6 +247,7 @@ def _fgmres(
     *,
     print_every: ArrayLike = jnp.array(1),
     gs_method: str = "cgs2",
+    flexible: bool = True,
 ) -> tuple[
     Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
 ]:
@@ -279,6 +280,14 @@ def _fgmres(
         Augmentation vectors in LGMRES.
     lv : int
         Number of nonzero columns of outer_v. Default outer_v.shape[1]
+    flexible : bool
+        If True (default), use FGMRES, which allows the right preconditioner
+        ``rpsolve`` to vary between iterations. The preconditioned Krylov basis
+        ``Z`` is stored explicitly. If False, assume both preconditioners are
+        linear and don't store ``Z``; the returned ``Z`` is a scalar placeholder
+        and the caller is responsible for reconstructing the update via
+        ``rpsolve(V @ y)`` (plus any augmentation contributions). Saves
+        ``O(N * (m+k))`` memory.
 
     Returns
     -------
@@ -289,7 +298,7 @@ def _fgmres(
     V : pytree of jax.Array
         Columns of matrix V
     Z : pytree of jax.Array
-        Columns of matrix Z
+        Columns of matrix Z. A scalar placeholder if ``flexible=False``.
     y : ndarray
         Solution to ||H y - e_1||_2 = min!
     j : int
@@ -344,10 +353,15 @@ def _fgmres(
         lambda x: jnp.pad(x[..., None], ((0, 0),) * x.ndim + ((0, size),)),
         v0,
     )
-    # preconditioned krylov space [Mv0, (MA)Mv0, (MA)^2Mv0, ...]
-    Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
-
     dtype = jnp.result_type(*tree_leaves(v0))
+    # preconditioned krylov space [Mv0, (MA)Mv0, (MA)^2Mv0, ...]
+    if flexible:
+        Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
+    else:
+        # Placeholder; never indexed. Kept in the carry so the loop's tree
+        # structure is invariant of `flexible`. Caller reconstructs Z @ y from V
+        # using the (assumed-linear) right preconditioner.
+        Z = jnp.zeros((), dtype=dtype)
     eps = jnp.finfo(dtype).eps
     res = jnp.array(_norm(v0))
     res_arr = jnp.full(size, res)
@@ -406,7 +420,8 @@ def _fgmres(
         w, h = _gram_schmidt(V, w, j + 1, gs_method)
         unit_w, w_norm_1 = _safe_normalize(w, thresh=eps * w_norm)
         V = tree_map(lambda X, y: X.at[..., j + 1].set(y), V, unit_w)
-        Z = tree_map(lambda X, y: X.at[..., j].set(y), Z, z)
+        if flexible:
+            Z = tree_map(lambda X, y: X.at[..., j].set(y), Z, z)
         h = h.at[j + 1].set(w_norm_1.astype(dtype))
         R = R.at[j, :].set(h)
         H = H.at[j, :].set(h)
@@ -456,6 +471,7 @@ def gcrotmk(
     print_every: ArrayLike = jnp.array(1),
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
+    flexible: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -497,6 +513,11 @@ def gcrotmk(
         orthogonalized as described in [3]_. ``U`` should have the same tree structure
         as ``x`` but with a trailing dimension, and ``C`` should have the same
         structure as ``b`` but with a trailing dimension.
+    flexible : bool, optional
+        If True (default), use flexible GMRES inside, which permits ``MR`` to be
+        nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
+        ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
+        cutting inner-iteration storage roughly in half.
 
     Returns
     -------
@@ -554,6 +575,7 @@ def gcrotmk(
             print_every,
             print_every_inner,
             refine,
+            flexible,
         )
 
     def _transpose_solve(At, b):
@@ -574,6 +596,7 @@ def gcrotmk(
             print_every,
             print_every_inner,
             refine,
+            flexible,
         )
 
     x, (j_outer, nmv, res, C, U) = jax.lax.custom_linear_solve(
@@ -656,6 +679,7 @@ def _gcrotmk_solve(
     print_every,
     print_every_inner,
     refine,
+    flexible,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -692,7 +716,7 @@ def _gcrotmk_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
+        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -704,6 +728,7 @@ def _gcrotmk_solve(
             lc=lc,
             verbose=verbose,
             print_every=print_every_inner,
+            flexible=flexible,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -716,7 +741,17 @@ def _gcrotmk_solve(
         )
 
         # u := (Z - U B) y
-        Zy = tree_map(lambda x: _dot(x, y), Z)
+        if flexible:
+            Zy = tree_map(lambda x: _dot(x, y), Z)
+        else:
+            # gcrotmk passes no outer_v, so lv=0 inside _fgmres and
+            # Z[:, j] = M_R(V[:, j]) for every iteration that ran. V has
+            # j_inner+1 filled columns but only j_inner of them correspond to
+            # nonzero Z columns, so zero out y[j_inner:] before combining.
+            size = y.shape[0]
+            y_masked = jnp.where(jnp.arange(size) < j_inner, y, jnp.zeros_like(y))
+            Vy = tree_map(lambda x: _dot(x[..., :-1], y_masked), V)
+            Zy = rpsolve(Vy)
         By = B @ y
         UBy = tree_map(lambda x: _dot(x, By), U)
         u = _sub(Zy, UBy)
@@ -798,6 +833,7 @@ def lgmres(
     print_every: ArrayLike = jnp.array(1),
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
+    flexible: bool = True,
 ) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -846,6 +882,11 @@ def lgmres(
          ``outer_v`` should have the same tree structure as ``x`` but with a trailing
         dimension, and ``outer_Av`` should have the same structure as ``b`` but with
         a trailing dimension.
+    flexible : bool, optional
+        If True (default), use flexible GMRES inside, which permits ``MR`` to be
+        nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
+        ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
+        cutting inner-iteration storage roughly in half.
 
     Returns
     -------
@@ -914,6 +955,7 @@ def lgmres(
             print_every,
             print_every_inner,
             refine,
+            flexible,
         )
 
     def _transpose_solve(At, b):
@@ -934,6 +976,7 @@ def lgmres(
             print_every,
             print_every_inner,
             refine,
+            flexible,
         )
 
     x, (j_outer, nmv, res, outer_v, outer_Av) = jax.lax.custom_linear_solve(
@@ -959,6 +1002,7 @@ def _lgmres_solve(
     print_every,
     print_every_inner,
     refine,
+    flexible,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -1005,7 +1049,7 @@ def _lgmres_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, _, nmv_inner, pres, breakdown, res_arr = _fgmres(
+        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -1018,6 +1062,7 @@ def _lgmres_solve(
             lv=lv,
             verbose=verbose,
             print_every=print_every_inner,
+            flexible=flexible,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -1031,7 +1076,33 @@ def _lgmres_solve(
 
         # -- GMRES terminated: eval solution
         # dx = Z y
-        dx = tree_map(lambda x: _dot(x, y), Z)
+        if flexible:
+            dx = tree_map(lambda x: _dot(x, y), Z)
+        else:
+            # Reconstruct dx = Z y without storing Z. Z columns at indices [0, lv)
+            # come from outer_v directly; column lv corresponds to M_R(V[:, 0])
+            # (the special v0 step in the Arnoldi loop); columns (lv, j_inner)
+            # come from M_R(V[:, j]); columns past j_inner are zero. By linearity
+            # of M_R the inner part folds into a single rpsolve call.
+            size = y.shape[0]
+            js = jnp.arange(size)
+            filled = js < j_inner
+            v_basis_idx = jnp.where(js == lv, 0, js)
+            V_basis = tree_map(lambda x: x[..., v_basis_idx], V)
+            y_inner = jnp.where(filled & (js >= lv), y, jnp.zeros_like(y))
+            inner_combo = tree_map(lambda x: _dot(x, y_inner), V_basis)
+            inner_part = rpsolve(inner_combo)
+
+            lv_pad = tree_leaves(outer_v)[0].shape[-1]
+            js_pad = jnp.arange(lv_pad)
+            y_outer = jnp.where(
+                (js_pad < lv) & (js_pad < j_inner),
+                y[:lv_pad],
+                jnp.zeros_like(y[:lv_pad]),
+            )
+            outer_part = tree_map(lambda x: _dot(x, y_outer), outer_v)
+
+            dx = _add(outer_part, inner_part)
         # ax = V H y
         ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
 
