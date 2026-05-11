@@ -288,19 +288,22 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = inverse_permute_f_3d(vector, self.field, self.pitchgrid, self.axorder)
+        with jax.named_scope(f"MDKEJacobiSmoother.mv, axorder={self.axorder}"):
+            x = inverse_permute_f_3d(vector, self.field, self.pitchgrid, self.axorder)
 
-        if self.smooth_solver == "banded":
-            size, N, M = self.mats[0].shape
-            x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
-        else:
-            size, N, M = self.mats.shape
-            x = x.reshape(size, M)
-            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+            if self.smooth_solver == "banded":
+                size, N, M = self.mats[0].shape
+                x = x.reshape(size, M)
+                b = lu_solve_banded_periodic(
+                    self.bandwidth, self.bandwidth, self.mats, x
+                )
+            else:
+                size, N, M = self.mats.shape
+                x = x.reshape(size, M)
+                b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        b = permute_f_3d(b.flatten(), self.field, self.pitchgrid, self.axorder)
-        return self.weight * b
+            b = permute_f_3d(b.flatten(), self.field, self.pitchgrid, self.axorder)
+            return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -473,33 +476,36 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = inverse_permute_f_4d(
-            vector,
-            self.field,
-            self.pitchgrid,
-            self.speedgrid,
-            self.species,
-            self.axorder,
-        )
+        with jax.named_scope(f"DKEJacobiSmoother.mv, axorder={self.axorder}"):
+            x = inverse_permute_f_4d(
+                vector,
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
 
-        if self.smooth_solver == "banded":
-            size, N, M = self.mats[0].shape
-            x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
-        else:
-            size, N, M = self.mats.shape
-            x = x.reshape(size, M)
-            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+            if self.smooth_solver == "banded":
+                size, N, M = self.mats[0].shape
+                x = x.reshape(size, M)
+                b = lu_solve_banded_periodic(
+                    self.bandwidth, self.bandwidth, self.mats, x
+                )
+            else:
+                size, N, M = self.mats.shape
+                x = x.reshape(size, M)
+                b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        b = permute_f_4d(
-            b.flatten(),
-            self.field,
-            self.pitchgrid,
-            self.speedgrid,
-            self.species,
-            self.axorder,
-        )
-        return self.weight * b
+            b = permute_f_4d(
+                b.flatten(),
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
+            return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -656,31 +662,32 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = inverse_permute_f_4d(
-            vector,
-            self.field,
-            self.pitchgrid,
-            self.speedgrid,
-            self.species,
-            self.axorder,
-        )
+        with jax.named_scope(f"DKEJacobi2Smoother.mv, axorder={self.axorder}"):
+            x = inverse_permute_f_4d(
+                vector,
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
 
-        if self.smooth_solver == "banded":
-            raise NotImplementedError()
-        else:
-            size, N, M = self.mats.shape
-            x = x.reshape(size, M)
-            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+            if self.smooth_solver == "banded":
+                raise NotImplementedError()
+            else:
+                size, N, M = self.mats.shape
+                x = x.reshape(size, M)
+                b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        b = permute_f_4d(
-            b.flatten(),
-            self.field,
-            self.pitchgrid,
-            self.speedgrid,
-            self.species,
-            self.axorder,
-        )
-        return self.weight * b
+            b = permute_f_4d(
+                b.flatten(),
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
+            return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

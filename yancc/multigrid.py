@@ -24,6 +24,7 @@ from .velocity_grids import UniformPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
+@jax.named_call
 def get_mdke_operators(fields, pitchgrids, erhohat, nuhat, p1, p2, gauge, **options):
     """Get multigrid operators for each field, pitchgrid."""
     operators = []
@@ -36,6 +37,7 @@ def get_mdke_operators(fields, pitchgrids, erhohat, nuhat, p1, p2, gauge, **opti
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
+@jax.named_call
 def get_dke_operators(
     fields,
     pitchgrids,
@@ -70,6 +72,7 @@ def get_dke_operators(
 
 
 @eqx.filter_jit
+@jax.named_call
 def get_mdke_jacobi_smoothers(
     fields,
     pitchgrids,
@@ -106,6 +109,7 @@ def get_mdke_jacobi_smoothers(
 
 
 @eqx.filter_jit
+@jax.named_call
 def get_dke_jacobi_smoothers(
     fields,
     pitchgrids,
@@ -148,6 +152,7 @@ def get_dke_jacobi_smoothers(
 
 
 @eqx.filter_jit
+@jax.named_call
 def get_dke_jacobi2_smoothers(
     fields,
     pitchgrids,
@@ -276,6 +281,7 @@ def get_grid_resolutions(
 
 
 @eqx.filter_jit
+@jax.named_call
 def get_fields_grids(
     field,
     pitchgrid,
@@ -310,6 +316,7 @@ def get_fields_grids(
 
 
 @functools.partial(jax.jit, static_argnames=["prefix_size", "method"])
+@jax.named_call
 def get_prolongations(fields, pitchgrids, prefix_size=1, method="linear"):
     """Build coarse->fine prolongation operators between adjacent grid levels.
 
@@ -345,6 +352,7 @@ def get_prolongations(fields, pitchgrids, prefix_size=1, method="linear"):
 
 
 @functools.partial(jax.jit, static_argnames=["prefix_size", "method"])
+@jax.named_call
 def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
     """Build fine->coarse restriction operators between adjacent grid levels.
 
@@ -380,6 +388,7 @@ def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
     """Apply smoothing operators to operator @ x = rhs.
 
@@ -416,6 +425,7 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
     """Apply smoothing operators to operator @ x = rhs.
 
@@ -461,6 +471,7 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
     """Apply smoothing operators to operator @ x = rhs.
 
@@ -513,6 +524,7 @@ def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
     """Apply smoothing operators to operator @ x = rhs.
 
@@ -569,6 +581,7 @@ def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
     """Apply smoothing operators to operator @ x = rhs.
 
@@ -614,6 +627,7 @@ def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
     """Apply smoothing operators to operator @ x = rhs.
 
@@ -742,6 +756,7 @@ class Prolongation(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("Prolongation.mv")
     def mv(self, vector):
         """Matrix-vector product (coarse -> fine)."""
         nt_c = self.field_coarse.ntheta
@@ -857,6 +872,7 @@ class Restriction(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("Restriction.mv")
     def mv(self, vector):
         """Matrix-vector product (fine -> coarse)."""
         nt_f = self.field_fine.ntheta
@@ -1005,7 +1021,8 @@ def _multigrid_cycle_recursive(
     # recursive calls pass x=jnp.zeros_like(rkm1)), so r0 = rhs - A.mv(0) = rhs.
     # The smoother returns the up-to-date residual, eliminating a separate mv.
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0), r0=rhs)
+    with jax.named_scope(f"pre-smooth, level={k}"):
+        x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0), r0=rhs)
 
     if verbose:
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
@@ -1016,9 +1033,11 @@ def _multigrid_cycle_recursive(
     def body(i, state):
         rk, x = state
 
-        rkm1 = restrictions[k - 1].mv(rk)
+        with jax.named_scope(f"restriction level={k}"):
+            rkm1 = restrictions[k - 1].mv(rk)
         if k == 1:
-            ykm1 = coarse_opinv.mv(rkm1)
+            with jax.named_scope("coarse grid solve, level=0"):
+                ykm1 = coarse_opinv.mv(rkm1)
         else:
             ykm1 = _multigrid_cycle_recursive(
                 cycle_index=cycle_index,
@@ -1036,8 +1055,10 @@ def _multigrid_cycle_recursive(
                 coarse_method=coarse_method,
                 verbose=verbose,
             )
-        yk = prolongations[k - 1].mv(ykm1)
-        x = coarse_correction(x, k, i, Ak, yk, rk, verbose=max(verbose - 1, 0))
+        with jax.named_scope(f"prolongation level={k}"):
+            yk = prolongations[k - 1].mv(ykm1)
+        with jax.named_scope(f"coarse_correction level={k}"):
+            x = coarse_correction(x, k, i, Ak, yk, rk, verbose=max(verbose - 1, 0))
 
         if verbose:
             rk = rhs - Ak.mv(x)
@@ -1054,7 +1075,8 @@ def _multigrid_cycle_recursive(
         # let the smoother compute its initial residual internally (r0=None).
         # The returned rk is up-to-date, so we don't need a separate mv after.
         vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
+        with jax.named_scope(f"post-smooth, level={k}"):
+            x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
         if verbose:
             err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
             jax.debug.print(
@@ -1071,6 +1093,8 @@ def _multigrid_cycle_recursive(
     return x
 
 
+@functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def standard_coarse_correction(x, k, i, operator, yk, rk, verbose):
     """Apply coarse grid correction with standard weighting."""
     alpha = 1.0
@@ -1091,6 +1115,8 @@ def standard_coarse_correction(x, k, i, operator, yk, rk, verbose):
     return x
 
 
+@functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov1_coarse_correction(x, k, i, operator, yk, rk, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized over yk."""
     Ayk = operator.mv(yk)
@@ -1112,6 +1138,8 @@ def krylov1_coarse_correction(x, k, i, operator, yk, rk, verbose):
     return x
 
 
+@functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov1s_coarse_correction(x, k, i, operator, yk, rk, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized
     over yk, Lyk.
@@ -1140,6 +1168,8 @@ def krylov1s_coarse_correction(x, k, i, operator, yk, rk, verbose):
     return x
 
 
+@functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov2_coarse_correction(x, k, i, operator, yk, rk, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized
     over yk, rk.
@@ -1164,6 +1194,8 @@ def krylov2_coarse_correction(x, k, i, operator, yk, rk, verbose):
     return x
 
 
+@functools.partial(jax.jit, static_argnames=["verbose"])
+@jax.named_call
 def krylov2s_coarse_correction(x, k, i, operator, yk, rk, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized
     over yk, rk, Lyk, Lrk.
@@ -1279,6 +1311,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.verbose = verbose
 
     @eqx.filter_jit
+    @jax.named_scope("MultigridOperator.mv")
     def mv(self, vector):
         """Matrix vector product."""
         x0 = jnp.zeros_like(vector)

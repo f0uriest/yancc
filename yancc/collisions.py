@@ -98,6 +98,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self._scale = self.nuhat / h**2
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -123,6 +124,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
@@ -141,6 +143,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "z":
@@ -610,6 +613,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         self._scale = self.nus[:, idxx] / h**2
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -642,6 +646,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
@@ -668,6 +673,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -737,6 +743,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         return df
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -895,6 +902,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self.coeff2 = jnp.asarray(coeff2)
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -938,6 +946,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         return -out.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
@@ -977,6 +986,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         return -out.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1050,6 +1060,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         return -out
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1179,6 +1190,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         self.C = jnp.asarray(C)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -1210,6 +1222,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         return -df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
@@ -1238,6 +1251,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         return -df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1353,6 +1367,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             raise NotImplementedError()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1515,6 +1530,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f0 = vector
@@ -1559,6 +1575,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         return -df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
@@ -1597,6 +1614,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         return -df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1761,6 +1779,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         raise NotImplementedError()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1957,6 +1976,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f0 = vector
@@ -2004,6 +2024,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         return -df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
@@ -2041,6 +2062,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         return -df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -2203,6 +2225,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         raise NotImplementedError()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -2397,6 +2420,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         out1 = self.CD.mv(vector)
@@ -2405,6 +2429,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         return out1 + out2 + out3
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         d1 = self.CD.diagonal()
@@ -2413,6 +2438,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         return d1 + d2 + d3
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d1 = self.CD.block_diagonal(fmt, bw)
@@ -2421,6 +2447,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         return d1 + d2 + d3
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d1 = self.CD.block_diagonal2()
@@ -2544,6 +2571,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.mv")
     def mv(self, vector):
         """Matrix vector product."""
         out1 = self.CL.mv(vector)
@@ -2556,6 +2584,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         d1 = self.CL.diagonal()
@@ -2568,6 +2597,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d1 = self.CL.block_diagonal(fmt, bw)
@@ -2580,6 +2610,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d1 = self.CL.block_diagonal2()

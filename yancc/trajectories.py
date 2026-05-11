@@ -133,6 +133,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
     @eqx.filter_jit
+    @jax.named_scope("MDKETheta.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -161,6 +162,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("MDKETheta.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
@@ -182,6 +184,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKETheta.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "a":
@@ -296,6 +299,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEZeta.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -324,6 +328,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEZeta.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
@@ -345,6 +350,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEZeta.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "a":
@@ -459,6 +465,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitch.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -487,6 +494,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitch.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
@@ -508,6 +516,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitch.blcok_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "z":
@@ -626,6 +635,7 @@ class MDKE(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("MDKE.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f0 = self._opa.mv(vector)
@@ -635,6 +645,7 @@ class MDKE(lx.AbstractLinearOperator):
         return f0 + f1 + f2 + f3
 
     @eqx.filter_jit
+    @jax.named_scope("MDKE.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         d0 = self._opa.diagonal()
@@ -644,6 +655,7 @@ class MDKE(lx.AbstractLinearOperator):
         return d0 + d1 + d2 + d3
 
     @eqx.filter_jit
+    @jax.named_scope("MDKE.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d0 = self._opa.block_diagonal()
@@ -839,6 +851,7 @@ class DKETheta(lx.AbstractLinearOperator):
         self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
     @eqx.filter_jit
+    @jax.named_scope("DKETheta.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -873,6 +886,7 @@ class DKETheta(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("DKETheta.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
@@ -900,6 +914,7 @@ class DKETheta(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKETheta.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -970,6 +985,7 @@ class DKETheta(lx.AbstractLinearOperator):
         return df
 
     @eqx.filter_jit
+    @jax.named_scope("DKETheta.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1132,6 +1148,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
     @eqx.filter_jit
+    @jax.named_scope("DKEZeta.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -1166,6 +1183,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("DKEZeta.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
@@ -1193,6 +1211,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKEZeta.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1261,6 +1280,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         return df
 
     @eqx.filter_jit
+    @jax.named_scope("DKEZeta.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1423,6 +1443,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
     @eqx.filter_jit
+    @jax.named_scope("DKEPitch.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -1457,6 +1478,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("DKEPitch.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
@@ -1484,6 +1506,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKEPitch.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1550,6 +1573,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         return df
 
     @eqx.filter_jit
+    @jax.named_scope("DKEPitch.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1681,6 +1705,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         self.gauge = jnp.array(gauge)
 
     @eqx.filter_jit
+    @jax.named_scope("DKESpeed.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -1721,6 +1746,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("DKESpeed.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
@@ -1755,6 +1781,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKESpeed.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1820,6 +1847,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         return df
 
     @eqx.filter_jit
+    @jax.named_scope("DKESpeed.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1976,6 +2004,7 @@ class DKE(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("DKE.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f0 = self._opx.mv(vector)
@@ -1993,6 +2022,7 @@ class DKE(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("DKE.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         d0 = self._opx.diagonal()
@@ -2010,6 +2040,7 @@ class DKE(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("DKE.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d0 = self._opx.block_diagonal(fmt, bw)
@@ -2031,6 +2062,7 @@ class DKE(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("DKE.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         d0 = self._opx.block_diagonal2()

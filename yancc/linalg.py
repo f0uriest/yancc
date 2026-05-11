@@ -550,6 +550,7 @@ def solve_banded(p, q, A, b, *, unroll=True):
 @functools.partial(
     jnp.vectorize, signature="(k,n)->(l,n),(n),(n,m),(m,n)", excluded=(0, 1, 3)
 )
+@jax.named_call
 def lu_factor_banded_periodic(p, q, A, *, unroll=None):
     """LU factorization of periodic banded matrix in dense storage format.
 
@@ -634,6 +635,7 @@ def lu_factor_banded_periodic(p, q, A, *, unroll=None):
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+@jax.named_call
 def lu_solve_banded_periodic(p, q, lu, b, *, unroll=None):
     """Solve a periodic banded linear system with matrix pre-factored.
 
