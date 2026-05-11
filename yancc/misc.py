@@ -242,13 +242,10 @@ def dke_rhs(
 
 def _dke_thermodynamic_forces(species, field, Erho, EparB):
     qs = jnp.array([sp.species.charge for sp in species]) / elementary_charge
-    ns = jnp.array([sp.density for sp in species])
-    dns = jnp.array([sp.dndrho for sp in species])
     Ts = jnp.array([sp.temperature for sp in species])
-    dTs = jnp.array([sp.dTdrho for sp in species])
 
-    Ln = dns / ns
-    LT = dTs / Ts
+    Ln = jnp.array([-spec.aLn for spec in species])
+    LT = jnp.array([-spec.aLT for spec in species])
     A1 = Ln + qs * (-Erho) / Ts - 3 / 2 * LT
     A2 = LT
     A3 = qs / Ts * EparB / field.B2mag_fsa

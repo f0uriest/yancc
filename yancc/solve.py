@@ -425,8 +425,8 @@ def _print_species_summary(species, field, speedgrid, background):
             charge=spec.species.charge / elementary_charge,
             dens=spec.density,
             temp=spec.temperature,
-            L_n=spec.dndrho / spec.density,
-            L_T=spec.dTdrho / spec.temperature,
+            L_n=spec.aLn,
+            L_T=spec.aLT,
             ordered=True,
         )
         others = species[:si] + species[si + 1 :] + background

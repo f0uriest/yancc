@@ -84,6 +84,8 @@ class LocalMaxwellian(eqx.Module):
     v_thermal: jax.Array  # in units of m/s
     dndrho: jax.Array
     dTdrho: jax.Array
+    aLT: jax.Array  # normalized gradient scale length a/LT
+    aLn: jax.Array  # normalized gradient scale length a/Ln
 
     def __init__(
         self,
@@ -101,6 +103,50 @@ class LocalMaxwellian(eqx.Module):
         )
         self.dndrho = jnp.asarray(dndrho)
         self.dTdrho = jnp.asarray(dTdrho)
+        self.aLT = -self.dTdrho / self.temperature
+        self.aLn = -self.dndrho / self.density
+
+    @classmethod
+    def from_scale_lengths(
+        cls,
+        species: Species,
+        temperature: ArrayLike,
+        density: ArrayLike,
+        aLT: ArrayLike,
+        aLn: ArrayLike,
+    ) -> "LocalMaxwellian":
+        """Construct from profile values and inverse gradient scale lengths.
+
+        Parameters
+        ----------
+        species : Species
+            Atomic species of the distribution function.
+        temperature : float
+            Temperature of the species, in units of eV.
+        density : float
+            Density of the species, in units of particles/m^3.
+        aLT : float
+            Normalized inverse temperature gradient scale length,
+            ``a/LT = -(a/T) dT/dr``, where ``a`` is the minor radius and
+            ``r`` is the minor radius coordinate.
+        aLn : float
+            Normalized inverse density gradient scale length,
+            ``a/Ln = -(a/n) dn/dr``.
+
+        Returns
+        -------
+        LocalMaxwellian
+
+        Notes
+        -----
+        Assumes ``rho = r/a``, so ``dT/drho = -T * (a/LT)`` and
+        ``dn/drho = -n * (a/Ln)``.
+        """
+        temperature = jnp.asarray(temperature)
+        density = jnp.asarray(density)
+        dTdrho = -temperature * jnp.asarray(aLT)
+        dndrho = -density * jnp.asarray(aLn)
+        return cls(species, temperature, density, dTdrho, dndrho)
 
     def __call__(self, v: ArrayLike) -> jax.Array:
         """Evaluate f at a given velocity."""
