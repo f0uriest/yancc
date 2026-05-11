@@ -380,19 +380,27 @@ def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
-    """Apply smoothing operators to operator @ x = rhs"""
+def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
+    """Apply smoothing operators to operator @ x = rhs.
+
+    Returns (x, r) with r = rhs - operator.mv(x). The residual is maintained as
+    part of the loop carry so callers can avoid a separate `rhs - operator.mv(x)`
+    mv after smoothing. Pass r0 if the initial residual is known cheaply (e.g.,
+    r0=rhs when x is zero) to skip the initial residual mv.
+    """
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
-    def body(k, x):
+    if r0 is None:
+        r0 = rhs - operator.mv(x)
+
+    def body(k, state):
+        x, r = state
         for i, Mi in enumerate(smoothers):
-            Ax = operator.mv(x)
-            r = rhs - Ax
             dx = Mi.mv(r)
-            x += dx
+            x = x + dx
+            r = rhs - operator.mv(x)
             if verbose:
-                r = rhs - operator.mv(x)
                 err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
                 jax.debug.print(
                     "v={k} after {a} err: {err:.3e}",
@@ -401,22 +409,28 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                     a=Mi.axorder,
                     ordered=True,
                 )
-        return x
+        return x, r
 
-    x = jax.lax.fori_loop(0, nsteps, body, x)
-    return x
+    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    return x, r
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
-    """Apply smoothing operators to operator @ x = rhs"""
+def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
+    """Apply smoothing operators to operator @ x = rhs.
+
+    Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
+    residual mv (e.g., r0=rhs when x is zero).
+    """
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
-    res0 = res1 = jnp.linalg.norm(rhs - operator.mv(x))
+    if r0 is None:
+        r0 = rhs - operator.mv(x)
+    res0 = res1 = jnp.linalg.norm(r0)
 
     def cond(state):
-        k, x, res0, res1 = state
+        k, x, r, res0, res1 = state
         # do at least 1 step but may stop early if residuals are increasing
         # note that this is just a heuristic. Residuals may increase even though error
         # decreases, but increasing residual can cause problems when used as a
@@ -424,15 +438,12 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
         return (k < jnp.abs(nsteps)) & (res1 <= res0)
 
     def body(state):
-        k, x, res0, res1 = state
-        r = jnp.zeros_like(x)
+        k, x, r, res0, res1 = state
         for i, Mi in enumerate(smoothers):
-            Ax = operator.mv(x)
-            r = rhs - Ax
             dx = Mi.mv(r)
-            x += dx
+            x = x + dx
+            r = rhs - operator.mv(x)
             if verbose:
-                r = rhs - operator.mv(x)
                 err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
                 jax.debug.print(
                     "v={k} after {a} err: {err:.3e}",
@@ -443,33 +454,38 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                 )
         res0 = res1
         res1 = jnp.linalg.norm(r)
-        return k + 1, x, res0, res1
+        return k + 1, x, r, res0, res1
 
-    _, x, _, _ = jax.lax.while_loop(cond, body, (0, x, res0, res1))
-    return x
+    _, x, r, _, _ = jax.lax.while_loop(cond, body, (0, x, r0, res0, res1))
+    return x, r
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
-    """Apply smoothing operators to operator @ x = rhs"""
+def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
+    """Apply smoothing operators to operator @ x = rhs.
+
+    Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
+    residual mv (e.g., r0=rhs when x is zero).
+    """
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
-    def body(k, x0):
+    if r0 is None:
+        r0 = rhs - operator.mv(x)
+
+    def body(k, state):
+        x0, r = state
         rs = jnp.empty((len(smoothers) + 1, rhs.size))
         dxs = jnp.empty((len(smoothers), rhs.size))
         x = x0
 
         for i, Mi in enumerate(smoothers):
-            Ax = operator.mv(x)
-            r = rhs - Ax
             rs = rs.at[i].set(r)
             dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
-            x += dx
+            x = x + dx
+            r = rhs - operator.mv(x)
 
-        Ax = operator.mv(x)
-        r = rhs - Ax
         rs = rs.at[-1].set(r)
 
         rb = rs[0]
@@ -477,10 +493,10 @@ def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 
         alpha = jnp.linalg.lstsq(dr.T, rb)[0]
         x = x0 + dxs.T @ alpha
+        # r_new = rhs - A x = rs[0] - dr.T @ alpha (free, since dr[i] = A dx_i)
+        r = rb - dr.T @ alpha
 
         if verbose:
-            Ax = operator.mv(x)
-            r = rhs - Ax
             err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
             jax.debug.print(
                 "v={k} err: {err:.3e} alpha: {alpha}",
@@ -490,15 +506,19 @@ def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                 ordered=True,
             )
 
-        return x
+        return x, r
 
-    x = jax.lax.fori_loop(0, nsteps, body, x)
-    return x
+    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    return x, r
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
-    """Apply smoothing operators to operator @ x = rhs"""
+def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
+    """Apply smoothing operators to operator @ x = rhs.
+
+    Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
+    residual mv (e.g., r0=rhs when x is zero).
+    """
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
@@ -506,28 +526,33 @@ def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
         operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
     )
 
-    def body(k, x0):
+    if r0 is None:
+        r0 = rhs - operator.mv(x)
+
+    def body(k, state):
+        x0, r = state
         rs = jnp.empty((len(smoothers), rhs.size))
         dxs = jnp.empty((len(smoothers), rhs.size))
         x = x0
+        rs = rs.at[0].set(r)
 
         for i, Mi in enumerate(smoothers):
-            Ax = operator.mv(x)
-            r = rhs - Ax
-            rs = rs.at[i].set(r)
             dx = Mi.mv(r)
             dxs = dxs.at[i].set(dx)
-            x += dx
+            x = x + dx
+            if i + 1 < len(smoothers):
+                r = rhs - operator.mv(x)
+                rs = rs.at[i + 1].set(r)
 
         Ldxs = jax.vmap(L.mv)(dxs)
         dxs = jnp.concatenate([dxs, Ldxs])
         Adxs = jax.vmap(operator.mv)(dxs)
         alpha = jnp.linalg.lstsq(Adxs.T, rs[0])[0]
         x = x0 + dxs.T @ alpha
+        # r_new = rhs - A x = rs[0] - Adxs.T @ alpha (free)
+        r = rs[0] - Adxs.T @ alpha
 
         if verbose:
-            Ax = operator.mv(x)
-            r = rhs - Ax
             err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
             jax.debug.print(
                 "v={k} err: {err:.3e} alpha: {alpha}",
@@ -537,24 +562,30 @@ def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                 ordered=True,
             )
 
-        return x
+        return x, r
 
-    x = jax.lax.fori_loop(0, nsteps, body, x)
-    return x
+    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    return x, r
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
-    """Apply smoothing operators to operator @ x = rhs"""
+def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
+    """Apply smoothing operators to operator @ x = rhs.
+
+    Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
+    residual mv (e.g., r0=rhs when x is zero).
+    """
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
-    def body(k, x0):
+    if r0 is None:
+        r0 = rhs - operator.mv(x)
+
+    def body(k, state):
+        x0, r = state
         dxs = jnp.empty((len(smoothers), rhs.size))
         Adxs = jnp.empty((len(smoothers), rhs.size))
         x = x0
-        Ax = operator.mv(x)
-        r = rhs - Ax
 
         for i, Mi in enumerate(smoothers):
             dx = Mi.mv(r)
@@ -563,10 +594,10 @@ def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
 
         alpha = jnp.linalg.lstsq(Adxs.T, r)[0]
         x = x0 + dxs.T @ alpha
+        # r_new = rhs - A x = r - Adxs.T @ alpha (free, since Adxs[i] = A dx_i)
+        r = r - Adxs.T @ alpha
 
         if verbose:
-            Ax = operator.mv(x)
-            r = rhs - Ax
             err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
             jax.debug.print(
                 "v={k} err: {err:.3e} alpha: {alpha}",
@@ -576,15 +607,19 @@ def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                 ordered=True,
             )
 
-        return x
+        return x, r
 
-    x = jax.lax.fori_loop(0, nsteps, body, x)
-    return x
+    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    return x, r
 
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
-def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
-    """Apply smoothing operators to operator @ x = rhs"""
+def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
+    """Apply smoothing operators to operator @ x = rhs.
+
+    Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
+    residual mv (e.g., r0=rhs when x is zero).
+    """
     if not isinstance(smoothers, (tuple, list)):
         smoothers = [smoothers]
 
@@ -592,12 +627,13 @@ def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
         operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
     )
 
-    def body(k, x0):
+    if r0 is None:
+        r0 = rhs - operator.mv(x)
+
+    def body(k, state):
+        x0, r = state
         dxs = jnp.empty((len(smoothers), rhs.size))
-        Adxs = jnp.empty((len(smoothers), rhs.size))
         x = x0
-        Ax = operator.mv(x)
-        r = rhs - Ax
 
         for i, Mi in enumerate(smoothers):
             dx = Mi.mv(r)
@@ -608,10 +644,10 @@ def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
         Adxs = jax.vmap(operator.mv)(dxs)
         alpha = jnp.linalg.lstsq(Adxs.T, r)[0]
         x = x0 + dxs.T @ alpha
+        # r_new = rhs - A x = r - Adxs.T @ alpha (free, since Adxs[i] = A dxs[i])
+        r = r - Adxs.T @ alpha
 
         if verbose:
-            Ax = operator.mv(x)
-            r = rhs - Ax
             err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
             jax.debug.print(
                 "v={k} err: {err:.3e} alpha: {alpha}",
@@ -621,10 +657,10 @@ def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False):
                 ordered=True,
             )
 
-        return x
+        return x, r
 
-    x = jax.lax.fori_loop(0, nsteps, body, x)
-    return x
+    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    return x, r
 
 
 def _build_interp_matrix(x_src, x_query, method, period):
@@ -965,9 +1001,11 @@ def _multigrid_cycle_recursive(
             "level={k} before presmooth err: {err:.3e}", err=err, k=k, ordered=True
         )
 
+    # Pre-smooth: x is always zero on entry (top-level uses zeros_like(vector);
+    # recursive calls pass x=jnp.zeros_like(rkm1)), so r0 = rhs - A.mv(0) = rhs.
+    # The smoother returns the up-to-date residual, eliminating a separate mv.
     vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
-    rk = rhs - Ak.mv(x)
+    x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0), r0=rhs)
 
     if verbose:
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
@@ -1012,9 +1050,11 @@ def _multigrid_cycle_recursive(
                 ordered=True,
             )
 
+        # Post-smooth: x has been modified by coarse_correction so rk is stale;
+        # let the smoother compute its initial residual internally (r0=None).
+        # The returned rk is up-to-date, so we don't need a separate mv after.
         vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        x = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
-        rk = rhs - Ak.mv(x)
+        x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
         if verbose:
             err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
             jax.debug.print(

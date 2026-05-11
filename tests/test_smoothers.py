@@ -165,7 +165,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         operator_weights=operator_weights,
     )[0]
     r = (x_true + b) / 2
-    x_smoothed = smooth_op(
+    x_smoothed, _ = smooth_op(
         jnp.zeros_like(x_true), A, r, smoothers, nsteps=v, verbose=True
     )
     L = DKELaplacian(field, pitchgrid, speedgrid, species)
@@ -229,7 +229,7 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
         operator_weights=operator_weights,
     )[0]
     r = (x_true + b) / 2
-    x_smoothed = smooth_op(
+    x_smoothed, _ = smooth_op(
         jnp.zeros_like(x_true), A, r, smoothers, nsteps=v, verbose=True
     )
     L = DKELaplacian(field, pitchgrid, speedgrid, species)
