@@ -1,5 +1,6 @@
 """Main interface for solving drift kinetic equations in yancc."""
 
+import copy
 from typing import Any, Optional, Union
 
 import jax
@@ -85,7 +86,10 @@ def solve_mdke(
         products, final residual etc.
 
     """
-    multigrid_options = {} if multigrid_options is None else multigrid_options
+    # create a copy so we don't modify user input for repeated calls
+    multigrid_options = (
+        {} if multigrid_options is None else copy.copy(multigrid_options)
+    )
 
     p1 = options.pop("p1", "4d")
     p2 = options.pop("p2", 4)
@@ -257,7 +261,10 @@ def solve_dke(  # noqa: C901
         products, final residual etc.
 
     """
-    multigrid_options = {} if multigrid_options is None else multigrid_options
+    # create a copy so we don't modify user input for repeated calls
+    multigrid_options = (
+        {} if multigrid_options is None else copy.copy(multigrid_options)
+    )
 
     p1 = options.pop("p1", "4d")
     p2 = options.pop("p2", 4)
@@ -468,7 +475,7 @@ def _print_dke_resolutions(preconditioner):
             f"na={na:4d}, "
             f"nt={nt:4d}, "
             f"nz={nz:4d}, "
-            f"N={ns*nx*na*nt*nz}",
+            f"N={ns*nx*na*nt*nz:,d}",
             ordered=True,
         )
 
