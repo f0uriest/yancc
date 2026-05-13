@@ -4,10 +4,16 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import orthax
+import pytest
 import quadax
+import scipy.integrate
 
 from yancc.misc import _d3v
-from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import (
+    MaxwellSpeedGrid,
+    UniformPitchAngleGrid,
+    composite_newton_cotes_weights,
+)
 
 
 def test_speed_quadrature():
@@ -74,3 +80,52 @@ def test_velocity_integral(speedgrid, pitchgrid, species1):
     d3v = _d3v(speedgrid, pitchgrid, species1)
     n = (species1[0](speedgrid.x * species1[0].v_thermal)[None, :, None] * d3v).sum()
     np.testing.assert_allclose(n, species1[0].density)
+
+
+@pytest.mark.parametrize("order", [2, 4, 6])
+def test_newton_cotes(order):
+    """Test composite newton cotes integration."""
+    Ns = 2 ** (np.arange(2, 10)).astype(int) + 1
+
+    fun = lambda x: jnp.sin(10 * x) ** 2 / (1 + (5 * x) ** 2)
+    domain_xi = (-1, 1)
+    domain_a = (0, np.pi)
+
+    c = 0.7
+
+    def map1(x):
+        x = 2 * (x / np.pi - 0.5)
+        x = c * x**3 + (1 - c) * x
+        x = (x + 1) / 2 * np.pi
+        return x
+
+    integral_exact = scipy.integrate.quad(fun, domain_xi[0], domain_xi[1])[0]
+
+    errs_uni = []
+    errs_non = []
+
+    for N in Ns:
+        a_uni = jnp.linspace(domain_a[0], domain_a[1], N, endpoint=False) + (
+            domain_a[1] - domain_a[0]
+        ) / (2 * N)
+        xi_uni = -np.cos(a_uni)
+        a_non = map1(a_uni)
+        xi_non = -np.cos(a_non)
+
+        f_uni = fun(xi_uni)
+        f_non = fun(xi_non)
+        w_uni = composite_newton_cotes_weights(
+            xi_uni, order=order, global_limits=(domain_xi[0], domain_xi[1])
+        )
+        w_non = composite_newton_cotes_weights(
+            xi_non, order=order, global_limits=(domain_xi[0], domain_xi[1])
+        )
+        integral_uni = jnp.sum(f_uni * w_uni)
+        integral_non = jnp.sum(f_non * w_non)
+        errs_uni.append(np.abs(integral_exact - integral_uni))
+        errs_non.append(np.abs(integral_exact - integral_non))
+
+    order_uni, _ = np.polyfit(np.log(Ns)[-4:], -np.log(errs_uni)[-4:], deg=1)
+    order_non, _ = np.polyfit(np.log(Ns)[-4:], -np.log(errs_non)[-4:], deg=1)
+    assert order_uni >= order
+    assert order_non >= order

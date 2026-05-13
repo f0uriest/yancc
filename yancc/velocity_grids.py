@@ -1,5 +1,7 @@
 """Velocity grids for yancc."""
 
+from typing import Optional
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -349,23 +351,99 @@ class UniformPitchAngleGrid(eqx.Module):
         a += jnp.pi / (2 * na)
         self.a = a
         self.xi = -jnp.cos(a)
-
-        # fejer type 1 quadrature
-        length = na // 2
-        r = na - length
-
-        kappa = jnp.arange(r)
-        beta = jnp.hstack(
-            [
-                2 * jnp.exp(1j * jnp.pi * kappa / na) / (1 - 4 * kappa**2),
-                jnp.zeros(length + 1),
-            ]
-        )
-        beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
-
-        wxi = jnp.fft.ifft(beta)
-        self.wxi = wxi.real
+        # uniform in a means chebyshev nodes in xi, so we can do better than
+        # newton-cotes: fejer type 1 quadrature
+        self.wxi = fejer_type_1_weights(na)
 
     def resample(self, na):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(na)
+
+
+def composite_newton_cotes_weights(
+    x: jax.Array, order: int, global_limits: Optional[tuple] = None
+):
+    """Computes composite quadrature weights.
+
+    Parameters
+    ----------
+    x : jax.Array
+        Sample points. May be non-uniform
+    order : int
+        Formal order of accuracy desired.
+    global_limits : tuple of floats
+        Limits for integration. If not given assumed to be x[0] and x[-1]
+
+    Returns
+    -------
+    w : jax.Array
+        Quadrature weights.
+    """
+    N = x.shape[0]
+    points_per_panel = order + 1
+    R = N % points_per_panel
+    num_main_panels = N // points_per_panel
+
+    # 1. Calculate interior edges exactly as before
+    # This slicing elegantly captures boundaries between main panels AND
+    # the boundary between the last main panel and the remainder panel.
+    end_of_panels = x[points_per_panel - 1 : N - 1 : points_per_panel]
+    start_of_next = x[points_per_panel:N:points_per_panel]
+    interior_edges = (end_of_panels + start_of_next) / 2.0
+
+    # 2. Assign global limits
+    if global_limits is not None:
+        a, b = global_limits
+    else:
+        a, b = x[0], x[-1]
+
+    panel_edges = jnp.concatenate([jnp.array([a]), interior_edges, jnp.array([b])])
+
+    weights = []
+
+    # 3. Vectorize and compute the main uniform panels
+    if num_main_panels > 0:
+        x_main = x[: N - R].reshape((num_main_panels, points_per_panel))
+        A_main = panel_edges[:num_main_panels]
+        B_main = panel_edges[1 : num_main_panels + 1]
+
+        def vmap_helper(xp, a_edge, b_edge):
+            j = jnp.arange(points_per_panel)
+            V_T = xp[None, :] ** j[:, None]
+            rhs = (b_edge ** (j + 1) - a_edge ** (j + 1)) / (j + 1)
+            return jnp.linalg.solve(V_T, rhs)
+
+        w_main = jax.vmap(vmap_helper)(x_main, A_main, B_main)
+        weights.append(w_main.flatten())
+
+    # 4. Compute the leftover remainder panel
+    if R > 0:
+        x_rem = x[N - R :]
+        A_rem = panel_edges[-2]
+        B_rem = panel_edges[-1]
+
+        # Determine the polynomial degree based on the number of leftover points
+        j = jnp.arange(R)
+        V_T_rem = x_rem[None, :] ** j[:, None]
+        rhs_rem = (B_rem ** (j + 1) - A_rem ** (j + 1)) / (j + 1)
+        w_rem = jnp.linalg.solve(V_T_rem, rhs_rem)
+
+        weights.append(w_rem)
+
+    return jnp.concatenate(weights)
+
+
+def fejer_type_1_weights(n):
+    """Fejer (chebyshev) type 1 quadrature."""
+    length = n // 2
+    r = n - length
+    kappa = jnp.arange(r)
+    beta = jnp.hstack(
+        [
+            2 * jnp.exp(1j * jnp.pi * kappa / n) / (1 - 4 * kappa**2),
+            jnp.zeros(length + 1),
+        ]
+    )
+    beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
+    w = jnp.fft.ifft(beta)
+    return w.real
