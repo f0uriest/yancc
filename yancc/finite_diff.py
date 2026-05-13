@@ -212,3 +212,91 @@ def fdfwd(f, p, h=1, bc="periodic", axis=0):
     stencil = fd_coeffs[1][p] / h
     df = _fdctr(f, stencil, bc)
     return jnp.moveaxis(df, -1, axis)
+
+
+@functools.partial(jax.jit, static_argnames=["order"])
+def build_lorentz_matrix(a: jax.Array, order: int = 2) -> jax.Array:
+    """Finite difference Lorentz scattering operator.
+
+    1/sin(a) ∂ₐ [sin(a) ∂ₐ]
+
+    Assumes symmetric boundary conditions on [0,π]:
+    f(-a) = f(a),  f(π-a) = f(π+a)
+
+    Parameters
+    ----------
+    a : jax.Array
+        Coordinates of pitch angle grid. May be non-uniform,
+        but should NOT include endpoints at [0,π].
+    order : int
+        Order of accuracy.
+
+    Returns
+    -------
+    L : jax.Array
+        Finite difference Lorentz operator.
+    """
+    assert order % 2 == 0
+    n = a.shape[0]
+    N = order + 1
+
+    # We pad the grid by N points on both sides to guarantee the stencil
+    # always has enough room to center itself without overflowing.
+    P = N
+
+    # left ghost points (mirrored across 0)
+    a_left = -a[:P][::-1]
+    idx_left = jnp.arange(P)[::-1]
+    # right ghost points (mirrored across π)
+    a_right = 2 * jnp.pi - a[-P:][::-1]
+    idx_right = jnp.arange(n - P, n)[::-1]
+
+    # augment the grid and create a mapping back to interior indices
+    a_aug = jnp.concatenate([a_left, a, a_right])
+    map_aug = jnp.concatenate([idx_left, jnp.arange(n), idx_right])
+
+    indices = jnp.arange(n)
+
+    def get_row_weights(i):
+        # Center the stencil around the target point in the augmented grid.
+        # Since we padded by P, the target interior point x[i] is at index i + P.
+        start = i + P - N // 2
+
+        # Dynamically slice the stencil from the augmented grid
+        a_stencil = jax.lax.dynamic_slice(a_aug, (start,), (N,))
+        mapped_idx = jax.lax.dynamic_slice(map_aug, (start,), (N,))
+
+        da = a_stencil - a[i]
+
+        # Vandermonde solve (same stabilizing logic as before)
+        h_scale = jnp.max(jnp.abs(da))
+        h_scale = jnp.where(h_scale == 0, 1.0, h_scale)
+        da_scaled = da / h_scale
+
+        m = jnp.arange(N)[:, None]
+        V = da_scaled[None, :] ** m
+
+        b1_scaled = jnp.zeros(N).at[1].set(1.0)
+        w1 = jnp.linalg.solve(V, b1_scaled) / h_scale
+
+        b2_scaled = jnp.zeros(N).at[2].set(2.0)
+        w2 = jnp.linalg.solve(V, b2_scaled) / (h_scale**2)
+
+        cot_x = jnp.cos(a[i]) / jnp.sin(a[i])
+        w_op = w2 + cot_x * w1
+
+        return mapped_idx, w_op
+
+    mapped_idx, w_op = jax.vmap(get_row_weights)(indices)
+
+    # Assemble the matrix.
+    D = jnp.zeros((n, n))
+    row_idx = jnp.arange(n)[:, None]
+
+    # important: use .add() instead of .set().
+    # If a stencil crosses the boundary, it will contain both a_k and its
+    # ghost equivalent. Both share the same 'mapped_idx'. .add() ensures
+    # their weights are summed together, perfectly enforcing the symmetry.
+    D = D.at[row_idx, mapped_idx].add(w_op)
+
+    return D

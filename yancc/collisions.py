@@ -13,7 +13,7 @@ import quadax
 from jaxtyping import Array, ArrayLike, Bool, Float
 
 from .field import Field
-from .finite_diff import fd2, fd_coeffs, fdfwd
+from .finite_diff import build_lorentz_matrix, fd_coeffs
 from .linalg import TransposedLinearOperator, banded_to_dense, dense_to_banded
 from .species import LocalMaxwellian, gamma_ab, nuD_ab, nupar_ab
 from .utils import (
@@ -84,17 +84,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
+        self._D = -self.nuhat / 2 * build_lorentz_matrix(pitchgrid.a, p2)
         h = jnp.pi / pitchgrid.na
-        f1 = jnp.ones(pitchgrid.na)
-        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
-        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
-        sina = jnp.sqrt(1 - pitchgrid.xi**2)
-        cosa = -pitchgrid.xi
-        w1 = -(self.nuhat / 2 * cosa / sina)
-        w2 = -self.nuhat / 2
-        # w1, w2 only depend on pitch (na), not state size, so fold into a
-        # single (na, na) operator.
-        self._D = w1[:, None] * D1 + w2 * D2
         self._scale = self.nuhat / h**2
 
     @eqx.filter_jit
@@ -601,14 +592,9 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             nus.append(nu)
         self.nus = jnp.asarray(nus)
         h = jnp.pi / pitchgrid.na
-        f1 = jnp.ones(pitchgrid.na)
-        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
-        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
-        sina = jnp.sqrt(1 - pitchgrid.xi**2)
-        cosa = -pitchgrid.xi
-        # cos/sin only depends on pitchgrid; fold into a single (na, na) op.
+        # Lorentz operator only depends on pitchgrid; fold into a single (na, na) op.
         # The species/x-dependent prefactor (-nus/2) is applied in mv.
-        self._D = (cosa / sina)[:, None] * D1 + D2
+        self._D = build_lorentz_matrix(pitchgrid.a, p2)
         idxx = self.speedgrid.gauge_idx
         self._scale = self.nus[:, idxx] / h**2
 
