@@ -1,6 +1,7 @@
 """Functions for computing finite difference derivatives."""
 
 import functools
+import math
 import operator
 
 import jax
@@ -99,6 +100,101 @@ fd_coeffs = {
                 -1 / 560,
             ]
         ),
+    },
+}
+
+# these are kwargs to build_advection_matrix that give the same stencils
+# as the above for uniform spacing. Note that 2b, 2c, 3b are kappa methods
+# and can't easily be handled in the same way, but we never really use them so its fine.
+
+fd_kwargs = {
+    "1a": {
+        "stencil": jnp.array([0, 1]),
+        "order": 1,
+    },
+    "1b": {
+        "stencil": jnp.array([-1, 0, 1]),
+        "order": 1,
+        "hyper_nu": jnp.array(0.15),
+        "hyper_order": 2,
+        "hyper_accuracy": 2,
+        "scale_hyper_nu": 1,
+    },
+    "2a": {
+        "stencil": jnp.array([0, 1, 2]),
+        "order": 2,
+    },
+    "2d": {
+        "stencil": jnp.array([0, 1, 4]),
+        "order": 2,
+    },
+    "2z": {
+        "stencil": jnp.array([-1, 0, 1]),
+        "order": 2,
+    },
+    "3a": {
+        "stencil": jnp.array([0, 1, 2, 3]),
+        "order": 3,
+    },
+    "3c": {
+        "stencil": jnp.array([-2, -1, 0, 1, 2]),
+        "order": 4,
+        "hyper_nu": jnp.array(0.025),
+        "hyper_order": 4,
+        "hyper_accuracy": 2,
+        "scale_hyper_nu": 3,
+    },
+    "3d": {
+        "stencil": jnp.array([-2, 0, 1, 3]),
+        "order": 3,
+    },
+    "4a": {
+        "stencil": jnp.array([0, 1, 2, 3, 4]),
+        "order": 4,
+    },
+    "4b": {
+        "stencil": jnp.array([-1, 0, 1, 2, 3]),
+        "order": 4,
+    },
+    "4d": {
+        "stencil": jnp.array([-2, 0, 1, 3, 4]),
+        "order": 4,
+    },
+    "5a": {
+        "stencil": jnp.array([0, 1, 2, 3, 4, 5]),
+        "order": 5,
+    },
+    "5b": {
+        "stencil": jnp.array([-2, -1, 0, 1, 2, 3]),
+        "order": 5,
+    },
+    "5c": {
+        "stencil": jnp.array([-3, -2, -1, 0, 1, 2, 3]),
+        "order": 6,
+        "hyper_nu": jnp.array(0.04 / 243),
+        "hyper_order": 6,
+        "hyper_accuracy": 2,
+        "scale_hyper_nu": 5,
+    },
+    "5d": {
+        "stencil": jnp.array([-3, -2, 0, 1, 3, 4]),
+        "order": 5,
+    },
+    "6a": {
+        "stencil": jnp.array([0, 1, 2, 3, 4, 5, 6]),
+        "order": 6,
+    },
+    "6z": {
+        "stencil": jnp.array([-3, -2, -1, 0, 1, 2, 3]),
+        "order": 6,
+    },
+    "7a": {
+        "stencil": jnp.array([-4, -3, -2, 0, 1, 2, 3, 4]),
+        "order": 7,
+    },
+    "7b": {
+        "stencil": jnp.array([-4, -3, -2, 0, 1, 2, 4, 5]),
+        "order": 7,
     },
 }
 
@@ -298,5 +394,190 @@ def build_lorentz_matrix(a: jax.Array, order: int = 2) -> jax.Array:
     # ghost equivalent. Both share the same 'mapped_idx'. .add() ensures
     # their weights are summed together, perfectly enforcing the symmetry.
     D = D.at[row_idx, mapped_idx].add(w_op)
+
+    return D
+
+
+@functools.partial(
+    jax.jit,
+    static_argnames=["direction", "order", "bc_type", "hyper_order", "hyper_accuracy"],
+)
+def build_advection_matrix(
+    x,
+    stencil=(-1, 0, 1),
+    direction="fwd",
+    bc_type="periodic",
+    domain=None,
+    order=2,
+    penalty_ratio=10.0,
+    hyper_nu=0.0,
+    hyper_order=None,
+    hyper_accuracy=None,
+    scale_hyper_nu="auto",
+):
+    """Constructs a global finite difference matrix for advection.
+
+    Contains explicit hyperdiffusion, supporting arbitrary stencils, grid scaling,
+    and independent hyperdiffusion accuracy.
+
+    Parameters
+    ----------
+    x : array_like
+        A 1D array of the spatial coordinates of the grid points.
+    stencil : array_like, default=(-1, 0, 1)
+        A 1D array or tuple of relative integer indices defining the footprint.
+    direction : {"fwd", "bwd"}
+        Direction of advective flow, for forward/backward differences. "bwd" reverses
+        the stencil.
+    bc_type : str, default='periodic'
+        Boundary condition type: 'periodic' (wraps domain) or 'symmetric' (mirror
+        reflection).
+    domain : tuple of float, optional
+        Where the boundary conditions should be applied. Defaults to x[0] and x[-1]
+    order : int, default=2
+        The formal order of accuracy for the advection (first derivative) approximation.
+    penalty_ratio : float, default=10.0
+        The weighting ratio used to enforce diagonal dominance for underdetermined
+        stencils.
+    hyper_nu : float, default=0.0
+        The artificial viscosity coefficient (acts as a grid-independent dampener).
+    hyper_order : int, default=None
+        The even derivative used for hyperdiffusion (defaults to order+2 or order+1).
+    hyper_accuracy : int, default=None
+        The formal order of accuracy for the hyperdiffusion operator. Defaults to
+        matching the advection 'order'.
+    scale_hyper_nu : int, default hyper_order
+        hyper_nu is scaled by h**scale_hyper_nu to make hyperdiffusion grid independent.
+
+    Returns
+    -------
+    jax.numpy.ndarray
+        A dense 2D JAX array of shape (N, N) representing the fully constructed
+        operator.
+    """
+    x = jnp.asarray(x)
+    stencil = jnp.asarray(stencil, dtype=jnp.int32)
+    assert direction in {"fwd", "bwd"}
+    if direction == "bwd":
+        stencil = -stencil
+        hyper_nu *= -1
+    stencil = jnp.sort(stencil)
+
+    N = x.shape[0]
+    M = stencil.shape[0]
+
+    if domain is None:
+        domain = (x[0], x[-1])
+    period = domain[1] - domain[0]
+
+    if hyper_order == "auto":
+        hyper_order = order + 2 if order % 2 == 0 else order + 1
+    if hyper_accuracy is None:
+        hyper_accuracy = order
+    if scale_hyper_nu == "auto":
+        scale_hyper_nu = hyper_order
+    if scale_hyper_nu is None:
+        scale_hyper_nu = 0
+    assert isinstance(scale_hyper_nu, (jax.Array, float, int))
+
+    # The desired Taylor polynomial degree to achieve the requested accuracy
+    desired_hyper_req = (
+        (hyper_order + hyper_accuracy - 1) if hyper_order is not None else 0
+    )
+
+    # Cap the constraints by the available degrees of freedom (M).
+    # For symmetric stencils, unconstrained odd derivatives will naturally cancel.
+    req_hyper_order = min(desired_hyper_req, M - 1)
+
+    if M < order + 1:
+        raise ValueError(
+            f"Stencil size M={M} is too small to support advection order={order}."
+        )
+    if hyper_order is not None and M < req_hyper_order + 1:
+        raise ValueError(
+            f"Stencil size M={M} is too small to support hyper_order={hyper_order} "
+            f"with hyper_accuracy={hyper_accuracy}. You need at least "
+            f"{req_hyper_order + 1} points."
+        )
+
+    # Maximum required derivative to generate Taylor factorial constraints
+    K_max = max(order + 1, (req_hyper_order + 1) if hyper_order is not None else 0)
+    facts = jnp.array([math.factorial(k) for k in range(K_max)])
+
+    # Setup Penalty matrix Pi
+    Pi = jnp.full(M, penalty_ratio)
+    Pi = jnp.where(stencil == 0, 1.0, Pi)
+
+    def solve_weights(dx, target_deriv, req_order):
+        """Generates scale-invariant finite difference weights via lstsq."""
+        # Scale dx to avoid Vandermonde ill-conditioning at high powers
+        h = jnp.max(jnp.abs(dx))
+        h = jnp.where(h == 0.0, 1.0, h)
+        dx_scaled = dx / h
+
+        K_local = req_order + 1
+        powers = jnp.arange(K_local)[:, None]
+
+        # Build Vandermonde Matrix: V[k, j] = (dx_j)^k / k!
+        V = (dx_scaled[None, :] ** powers) / facts[:K_local, None]
+
+        # We want to solve C * y = b, where C = V * Pi^{-1/2} and y = Pi^{1/2} * w
+        Pi_inv_sqrt = 1.0 / jnp.sqrt(Pi)
+        C = V * Pi_inv_sqrt[None, :]
+
+        b = jnp.zeros(K_local).at[target_deriv].set(1.0)
+
+        # jnp.linalg.lstsq finds the minimum L2-norm solution for underdetermined
+        # systems, y will have shape (M,)
+        y, _, _, _ = jnp.linalg.lstsq(C, b, rcond=None)
+
+        w_scaled = y * Pi_inv_sqrt
+        w = w_scaled / (h**target_deriv)
+        return w, h
+
+    def get_row(i):
+        raw_idx = i + stencil
+
+        if bc_type == "periodic":
+            idx = raw_idx % N
+            dx = x[idx] - x[i]
+            dx = dx - period * jnp.round(dx / period)
+        elif bc_type == "symmetric":
+            idx = jnp.where(
+                raw_idx < 0,
+                -raw_idx - 1,
+                jnp.where(raw_idx >= N, 2 * N - 1 - raw_idx, raw_idx),
+            )
+            x_ghost = jnp.where(
+                raw_idx < 0,
+                2 * domain[0] - x[idx],
+                jnp.where(raw_idx >= N, 2 * domain[1] - x[idx], x[idx]),
+            )
+            dx = x_ghost - x[i]
+        else:
+            idx = jnp.clip(raw_idx, 0, N - 1)
+            dx = x[idx] - x[i]
+
+        # advection
+        w_total, _ = solve_weights(dx, target_deriv=1, req_order=order)
+
+        # hyperdiffusion
+        if hyper_order is not None:
+            w_hyp, max_h = solve_weights(
+                dx, target_deriv=hyper_order, req_order=req_hyper_order
+            )
+            sign = (-1.0) ** (hyper_order // 2 + 1)
+            grid_scale = max_h**scale_hyper_nu
+            w_total = w_total + hyper_nu * sign * w_hyp * grid_scale
+
+        return idx, w_total
+
+    indices, weights = jax.vmap(get_row)(jnp.arange(N))
+
+    D = jnp.zeros((N, N))
+    row_indices = jnp.arange(N)[:, None]
+    # boundary conditions mean indices may contain duplicates due to reflection,
+    # so use .add rather than .set to combine weights correctly.
+    D = D.at[row_indices, indices].add(weights)
 
     return D

@@ -5,7 +5,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.finite_diff import build_lorentz_matrix, fd2, fd_coeffs, fdbwd, fdfwd
+from yancc.finite_diff import (
+    build_advection_matrix,
+    build_lorentz_matrix,
+    fd2,
+    fd_coeffs,
+    fd_kwargs,
+    fdbwd,
+    fdfwd,
+)
 
 
 @pytest.mark.parametrize("p", fd_coeffs[2].keys())
@@ -165,3 +173,85 @@ def test_lorentz(p):
     order_non, _ = np.polyfit(np.log(ns)[-4:], -np.log(errs_non)[-4:], deg=1)
     assert order_uni > p - 0.2
     assert order_non > p - 0.2
+
+
+@pytest.mark.parametrize("direction", ["fwd", "bwd"])
+@pytest.mark.parametrize("p", fd_kwargs.keys())
+@pytest.mark.parametrize("bc", ["periodic", "symmetric"])
+def test_advection_uniform(direction, p, bc):
+    """Test finite difference advection operator with uniform spacing."""
+    # we already test order of convergence for these stencils above,
+    # so this is just to test that different ways of constructing the matrix is the same
+    if direction == "fwd":
+        fdfun = fdfwd
+    else:
+        fdfun = fdbwd
+
+    n = 101
+    if bc == "periodic":
+        a_uni = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        domain = (0, 2 * np.pi)
+    else:
+        a_uni = np.linspace(0, np.pi, n, endpoint=False) + np.pi / (2 * n)
+        domain = (0, np.pi)
+    kwargs = fd_kwargs[p]
+    D_uni = build_advection_matrix(
+        a_uni, direction=direction, bc_type=bc, domain=domain, **kwargs
+    )
+    h = (domain[1] - domain[0]) / n
+    D_old = jax.jacfwd(fdfun)(a_uni, p, h, bc)
+    np.testing.assert_allclose(D_old, D_uni, atol=1e-10, rtol=1e-6)
+
+
+@pytest.mark.parametrize("direction", ["fwd", "bwd"])
+@pytest.mark.parametrize("p", fd_kwargs.keys())
+def test_advection_nonuniform(direction, p):
+    """Test finite difference advection operator with nonuniform spacing."""
+    # we already test order of convergence for these stencils above,
+    # so this is just testing that nonuniform grid has lower error for local features.
+
+    # test function that has lots of wiggles near xi=0
+    def fun_xi(x):
+        return 2 * jnp.sin(10 * x) / (1 + (10 * x) ** 2) + jnp.tanh(5 * x)
+
+    def fun(a):
+        x = -jnp.cos(a)
+        return fun_xi(x)
+
+    dfun = jnp.vectorize(jax.grad(fun))
+
+    n = 257
+    c = 0.7
+    kwargs = fd_kwargs[p]
+
+    # nonuniform mapping function to pack nodes near center
+    def map1(x):
+        x = 2 * (x / np.pi - 0.5)
+        x = c * x**3 + (1 - c) * x
+        x = (x + 1) / 2 * np.pi
+        return x
+
+    a_uni = np.linspace(0, np.pi, n, endpoint=False) + np.pi / (2 * n)
+    a_non = map1(a_uni)
+    f_uni = fun(a_uni)
+    f_non = fun(a_non)
+    D_uni = build_advection_matrix(
+        a_uni, direction=direction, bc_type="symmetric", domain=(0, np.pi), **kwargs
+    )
+    D_non = build_advection_matrix(
+        a_non, direction=direction, bc_type="symmetric", domain=(0, np.pi), **kwargs
+    )
+    Df1_uni = dfun(a_uni)
+    Df1_non = dfun(a_non)
+    Df2_uni = D_uni @ f_uni
+    Df2_non = D_non @ f_non
+    err_uni = max(abs(Df1_uni - Df2_uni))
+    err_non = max(abs(Df1_non - Df2_non))
+
+    # nonuniform grid that packs nodes near strong gradients should have
+    # much lower error
+    if kwargs["order"] > 1:
+        fac = 0.1
+    else:
+        fac = 0.5
+    assert err_non < fac * err_uni
