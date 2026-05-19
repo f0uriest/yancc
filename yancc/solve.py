@@ -21,7 +21,7 @@ from .misc import (
     mdke_rhs,
 )
 from .preconditioner import DKEPreconditioner, MDKEPreconditioner
-from .solution import DKE_OUTPUTS, DKESolution, MDKESolution, clean_units
+from .solution import DKESolution, MDKESolution
 from .species import Estar, LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -410,43 +410,12 @@ def solve_dke(  # noqa: C901
     )
 
     if verbose:
-        _print_dke_outputs(sol)
+        sol.print_summary()
 
     return (
         sol,
         info,
     )
-
-
-_DEFAULT_OUTPUT_QTYS = (
-    "<heat_flux>",
-    "<particle_flux>",
-    "<V||B>",
-    "<J||B>",
-    "J_rho",
-)
-
-
-def _print_dke_outputs(sol, qtys=_DEFAULT_OUTPUT_QTYS):
-    """Print headline output moments of a ``DKESolution`` with units.
-
-    Per-species quantities (shape ``(ns,)``) render as
-    ``[ v0 v1 ... ] (per species, units)``; scalar quantities (sums over
-    species, e.g. ``<J||B>`` and ``J_rho``) render as ``v (units)``.
-    """
-    ns = len(sol.species)
-    width = max(len(q) for q in qtys)
-    for qty in qtys:
-        vals = sol.get(qty)
-        units = clean_units(DKE_OUTPUTS[qty].get("units", ""))
-        if jnp.ndim(vals) == 0:
-            suffix = f" ({units})" if units else ""
-            s = f"{qty:<{width}s}: " + "{: .3e}" + suffix
-            jax.debug.print(s, vals, ordered=True)
-        else:
-            suffix = f" (per species, {units})" if units else " (per species)"
-            s = f"{qty:<{width}s}: [" + "{: .3e} " * ns + "]" + suffix
-            jax.debug.print(s, *vals, ordered=True)
 
 
 def _print_species_summary(species, field, speedgrid, background):

@@ -16,6 +16,14 @@ from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 MDKE_OUTPUTS = {}
 DKE_OUTPUTS = {}
 
+DKE_DEFAULT_OUTPUT_QTYS = (
+    "<heat_flux>",
+    "<particle_flux>",
+    "<V||B>",
+    "<J||B>",
+    "J_rho",
+)
+
 _SUPERSCRIPT_DIGITS = str.maketrans("0123456789-+=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺⁼⁽⁾")
 
 
@@ -205,6 +213,27 @@ class DKESolution(eqx.Module):
     def qtys_list(self) -> list[str]:
         """List of all computable output quantities."""
         return list(DKE_OUTPUTS.keys())
+
+    def print_summary(self, qtys: tuple[str, ...] = DKE_DEFAULT_OUTPUT_QTYS) -> None:
+        """Print headline output moments with units.
+
+        Per-species quantities (shape ``(ns,)``) render as
+        ``[ v0 v1 ... ] (per species, units)``; scalar quantities (sums over
+        species, e.g. ``<J||B>`` and ``J_rho``) render as ``v (units)``.
+        """
+        ns = len(self.species)
+        width = max(len(q) for q in qtys)
+        for qty in qtys:
+            vals = self.get(qty)
+            units = clean_units(DKE_OUTPUTS[qty].get("units", ""))
+            if jnp.ndim(vals) == 0:
+                suffix = f" ({units})" if units else ""
+                s = f"{qty:<{width}s}: " + "{: .3e}" + suffix
+                jax.debug.print(s, vals, ordered=True)
+            else:
+                suffix = f" (per species, {units})" if units else " (per species)"
+                s = f"{qty:<{width}s}: [" + "{: .3e} " * ns + "]" + suffix
+                jax.debug.print(s, *vals, ordered=True)
 
 
 class MDKESolution(eqx.Module):
