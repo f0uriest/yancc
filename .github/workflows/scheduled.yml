@@ -60,7 +60,7 @@ jobs:
             ./cov.xml
       - name: Upload coverage
         id : codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           name: codecov-umbrella
           files: ./cov.xml
