@@ -388,7 +388,7 @@ def _dke_VparB(sol, **kwargs):
 def _dke_bootstrap_current(sol, **kwargs):
     ns = jnp.array([sp.density for sp in sol.species])
     qs = jnp.array([sp.species.charge for sp in sol.species])
-    BVpar = sol.get("V||B")
+    BVpar = sol.get("<V||B>")
     bootstrap_current = ns * qs * BVpar
     bootstrap_current = bootstrap_current.sum(axis=(-1))
     return bootstrap_current
