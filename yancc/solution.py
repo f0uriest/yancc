@@ -1,5 +1,7 @@
 """Solution objects and computation of output moments."""
 
+import re
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -13,6 +15,33 @@ from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 MDKE_OUTPUTS = {}
 DKE_OUTPUTS = {}
+
+_SUPERSCRIPT_DIGITS = str.maketrans("0123456789-+=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺⁼⁽⁾")
+
+
+def clean_units(s: str) -> str:
+    r"""Render a LaTeX units string from ``DKE_OUTPUTS`` as plain unicode.
+
+    For example ``"kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}"`` becomes
+    ``"kg·m⁻¹·s⁻³ = W·m⁻³"``. Returns the empty string for ``"None"`` or empty
+    input.
+    """
+    if not s or s == "None":
+        return ""
+    out = s.replace("\\cdot", "·")
+    out = re.sub(r"\\mathrm\{([^}]*)\}", r"\1", out)
+    out = re.sub(
+        r"\^\{([^}]*)\}",
+        lambda m: m.group(1).translate(_SUPERSCRIPT_DIGITS),
+        out,
+    )
+    out = re.sub(
+        r"\^(-?\d)",
+        lambda m: m.group(1).translate(_SUPERSCRIPT_DIGITS),
+        out,
+    )
+    out = re.sub(r"\s*·\s*", "·", out)
+    return out.strip()
 
 
 def register_mdke_output(name, label, units, description, dim):
