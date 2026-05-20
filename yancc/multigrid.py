@@ -252,7 +252,7 @@ def get_grid_resolutions(
     if coarsening_factor is not None and max_grids is not None:
         raise ValueError("Cannot specify both coarsening_factor and max_grids")
     elif coarsening_factor is None and max_grids is None:
-        coarsening_factor = 2
+        coarsening_factor = 2.5
         max_grids = int(
             np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
         )

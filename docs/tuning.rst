@@ -136,7 +136,7 @@ Coarsening
    Smaller is cheaper per cycle but less effective at damping long-wavelength
    error. Increase if you see slow convergence on large problems.
 
-``coarsening_factor`` *(int or float, default 2)*
+``coarsening_factor`` *(int or float, default 2.5)*
    Factor by which each axis is coarsened between levels. Mutually exclusive
    with ``max_grids``. Can be as large as 3-4 before convergence significantly decays
    for many problems.
