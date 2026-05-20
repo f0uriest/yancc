@@ -121,8 +121,10 @@ class DKESolution(eqx.Module):
 
     Attributes
     ----------
-    f : jax.Array, shape (ns, nx, na, nt, nz)
-        Solution of the DKE.
+    F0 : jax.Array, shape (ns, nx, 1, 1, 1)
+        Maxwellian background distribution, broadcastable against ``f1``.
+    f1 : jax.Array, shape (ns, nx, na, nt, nz)
+        Perturbation solved for by the DKE.
     rhs : jax.Array, shape (ns, nx, na, nt, nz)
         Drive terms for DKE
     field : Field
@@ -142,7 +144,8 @@ class DKESolution(eqx.Module):
         solving for df.
     """
 
-    f: jax.Array
+    F0: jax.Array
+    f1: jax.Array
     rhs: jax.Array
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -156,7 +159,8 @@ class DKESolution(eqx.Module):
 
     def __init__(
         self,
-        f: jax.Array,
+        F0: jax.Array,
+        f1: jax.Array,
         rhs: jax.Array,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
@@ -166,21 +170,23 @@ class DKESolution(eqx.Module):
         EparB: jax.Array,
         background: list[LocalMaxwellian],
     ):
-        shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
-        f = f.flatten()
+        ns = len(species)
+        shape = (ns, speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
         N = np.prod(shape)
-        if f.size == N:
-            f = f.reshape(shape)
-            particle_source = jnp.full(len(species), jnp.nan)
-            heat_source = jnp.full(len(species), jnp.nan)
-        elif f.size == N + 2 * len(species):
-            heat_source = f[-len(species) :]
-            particle_source = f[-2 * len(species) : -len(species)]
-            f = f[:N].reshape(shape)
+        f1 = f1.flatten()
+        if f1.size == N:
+            f1 = f1.reshape(shape)
+            particle_source = jnp.full(ns, jnp.nan)
+            heat_source = jnp.full(ns, jnp.nan)
+        elif f1.size == N + 2 * ns:
+            heat_source = f1[-ns:]
+            particle_source = f1[-2 * ns : -ns]
+            f1 = f1[:N].reshape(shape)
         else:
-            raise ValueError("got wrong size for f")
+            raise ValueError("got wrong size for f1")
 
-        self.f = f
+        self.F0 = jnp.asarray(F0).reshape(ns, speedgrid.nx, 1, 1, 1)
+        self.f1 = f1
         self.rhs = rhs.flatten()[:N].reshape(shape)
         self._particle_source = particle_source
         self._heat_source = heat_source
@@ -191,6 +197,11 @@ class DKESolution(eqx.Module):
         self.background = background
         self.Erho = Erho
         self.EparB = EparB
+
+    @property
+    def f(self) -> jax.Array:
+        """Full distribution function ``F0 + f1``."""
+        return self.F0 + self.f1
 
     def get(self, qty, **kwargs):
         """Compute desired moments of the solution.
