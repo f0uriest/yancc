@@ -472,7 +472,7 @@ def gcrotmk(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
-) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
+) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
 
@@ -529,6 +529,9 @@ def gcrotmk(
         Number of matrix vector products.
     residual : float
         Residual of the linear system.
+    success : jax.Array
+        Boolean flag, True if the solver converged to the requested tolerance,
+        False if it hit ``maxiter`` first.
     C, U : pytree of jax.Array
         Matrices C and U in the GCROT(m,k) algorithm. For details, see [2]_.
 
@@ -599,10 +602,10 @@ def gcrotmk(
             flexible,
         )
 
-    x, (j_outer, nmv, res, C, U) = jax.lax.custom_linear_solve(
+    x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
     )
-    return x, j_outer, nmv, res, C, U
+    return x, j_outer, nmv, res, success, C, U
 
 
 def _gcrot_init_UC(
@@ -807,11 +810,12 @@ def _gcrotmk_solve(
     carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
     j_outer, nmv, x, r, beta, C, U, _, _ = carry
+    success = beta <= tol
     # Include the solution vector to the span
     U = tree_map(_roll_prepend, U, x)
     C = tree_map(_roll_prepend, C, _sub(b, r))
 
-    return x, (j_outer, nmv, beta, C, U)
+    return x, (j_outer, nmv, beta, success, C, U)
 
 
 @eqx.filter_jit
@@ -834,7 +838,7 @@ def lgmres(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
-) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
+) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
 
@@ -898,6 +902,9 @@ def lgmres(
         Number of matrix vector products.
     residual : float
         Residual of the linear system.
+    success : jax.Array
+        Boolean flag, True if the solver converged to the requested tolerance,
+        False if it hit ``maxiter`` first.
     outer_v, outer_Av : pytree of jax.Array
         Vectors and corresponding matrix-vector products, used to augment the Krylov
         subspace, and carried between inner GMRES iterations.
@@ -979,10 +986,10 @@ def lgmres(
             flexible,
         )
 
-    x, (j_outer, nmv, res, outer_v, outer_Av) = jax.lax.custom_linear_solve(
+    x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
     )
-    return x, j_outer, nmv, res, outer_v, outer_Av
+    return x, j_outer, nmv, res, success, outer_v, outer_Av
 
 
 def _lgmres_solve(
@@ -1164,5 +1171,6 @@ def _lgmres_solve(
     carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor)
     carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
     j_outer, nmv, x, r, beta, outer_v, outer_Av, _, _ = carry
+    success = beta <= tol
 
-    return x, (j_outer, nmv, beta, outer_v, outer_Av)
+    return x, (j_outer, nmv, beta, success, outer_v, outer_Av)

@@ -136,7 +136,7 @@ def solve_mdke(
 
     if f1 is None:
         f1 = jnp.zeros_like(rhs[:, 0])
-    f1, j1, nmv1, res1, C1, U1 = gcrotmk(
+    f1, j1, nmv1, res1, success1, C1, U1 = gcrotmk(
         A,
         rhs[:, 0],
         x0=f1,
@@ -153,7 +153,7 @@ def solve_mdke(
     )
     if f2 is None:
         f2 = jnp.zeros_like(rhs[:, 0])
-    f2, j2, nmv2, res2, C2, U2 = gcrotmk(
+    f2, j2, nmv2, res2, success2, C2, U2 = gcrotmk(
         A,
         rhs[:, 2],
         x0=f2,
@@ -172,9 +172,11 @@ def solve_mdke(
         "j1": j1,
         "nmv1": nmv1,
         "res1": res1 / jnp.linalg.norm(rhs[:, 0]),
+        "success1": success1,
         "j2": j2,
         "nmv2": nmv2,
         "res2": res2 / jnp.linalg.norm(rhs[:, 2]),
+        "success2": success2,
         "U1": U1,
         "C1": C1,
         "U2": U2,
@@ -357,7 +359,7 @@ def solve_dke(  # noqa: C901
         assert f1.size == size
         f1 = jnp.pad(f1, [(0, 2 * len(species))])
 
-    f1, j1, nmv1, res1, C1, U1 = gcrotmk(
+    f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
         rhs,
         x0=f1,
@@ -376,6 +378,7 @@ def solve_dke(  # noqa: C901
         "niter": j1,
         "nmv": nmv1,
         "res": res1 / jnp.linalg.norm(rhs),
+        "success": success,
         "C": C1[:size],
         "U": U1[:size],
     }

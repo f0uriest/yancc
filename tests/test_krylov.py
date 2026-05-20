@@ -347,7 +347,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False, flexible=flexible
     )
 
@@ -370,7 +370,7 @@ def test_gcrotmk(flexible):
         np.array(A.matrix), b, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
     )
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         rtol=tol,
@@ -406,7 +406,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         rtol=tol,
@@ -438,7 +438,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         x0=x2,
@@ -478,7 +478,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         x0=x2,
@@ -527,7 +527,7 @@ def test_lgmres(flexible):
     V1 = np.array([v for (v, Av) in outer_v])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False, flexible=flexible
     )
 
@@ -553,7 +553,7 @@ def test_lgmres(flexible):
     V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
         A,
         b,
         rtol=tol,
@@ -590,7 +590,7 @@ def test_lgmres(flexible):
     V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
         A,
         b,
         rtol=tol,
@@ -628,11 +628,11 @@ def test_left_right_preconditioner(flexible):
     maxiter = 10
     tol = 1e-5
 
-    x1, j1, nmv1, beta1, _, _ = lgmres(
+    x1, j1, nmv1, beta1, _, _, _ = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M, flexible=flexible
     )
 
-    x2, j2, nmv2, beta2, _, _ = lgmres(
+    x2, j2, nmv2, beta2, _, _, _ = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M, flexible=flexible
     )
 
@@ -645,11 +645,11 @@ def test_left_right_preconditioner(flexible):
     maxiter = 10
     tol = 1e-5
 
-    x1, j1, nmv1, beta1, _, _ = gcrotmk(
+    x1, j1, nmv1, beta1, _, _, _ = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M, flexible=flexible
     )
 
-    x2, j2, nmv2, beta2, _, _ = gcrotmk(
+    x2, j2, nmv2, beta2, _, _, _ = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M, flexible=flexible
     )
 
@@ -675,7 +675,7 @@ def test_krylov_autodiff(flexible):
         A = get_A(x)
         bx = b * x
         M = InverseLinearOperator(A)
-        y, _, _, res, _, _ = gcrotmk(
+        y, _, _, res, _, _, _ = gcrotmk(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
         y = eqx.error_if(y, res > 1e-5, "didn't converge")
@@ -685,7 +685,9 @@ def test_krylov_autodiff(flexible):
         A = get_A(x)
         bx = b * x
         M = InverseLinearOperator(A)
-        y, _, _, res, _, _ = lgmres(A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible)
+        y, _, _, res, _, _, _ = lgmres(
+            A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
+        )
         y = eqx.error_if(y, res > 1e-5, "didn't converge")
         return jnp.dot(c, y)
 
