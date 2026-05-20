@@ -204,7 +204,7 @@ def test_collisionality_increases_with_background(
 # ---------------------------------------------------------------------------
 # NRL formulary comparisons for coulomb_logarithm
 # ---------------------------------------------------------------------------
-# NRL Plasma Formulary 2019, p. 34. All formulas use n in cm^{-3}, T in eV.
+# NRL Plasma Formulary 2019, p. 34.
 # The NRL expressions are derived from ln(b_max/b_min) with specific choices
 # for the typical collision velocity; agreement within ~1–2 is expected.
 
@@ -290,10 +290,7 @@ def test_coulomb_logarithm_ii_nrl():
 # ---------------------------------------------------------------------------
 # NRL formulary comparisons for collisionality
 # ---------------------------------------------------------------------------
-# NRL Plasma Formulary 2019, p. 31. The NRL expressions are effective thermal
-# collision frequencies averaged over a Maxwellian; yancc evaluates nuD_ab at
-# a single speed v=v_th, so the ~20% prefactor difference is expected and
-# rtol=0.3 is the appropriate tolerance.
+# NRL Plasma Formulary 2019, p. 31.
 
 
 def _nrl_nuD_ee_slow(n_m3, T_eV, lnlambda, energy_eV):

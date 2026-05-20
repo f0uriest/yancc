@@ -14,14 +14,16 @@ def _sizes_tex(sizes):
     for s in sizes:
         if s == "ns":
             out += "n_s,"
-        if s == "nx":
+        elif s == "nx":
             out += "n_x,"
-        if s == "na":
+        elif s == "na":
             out += "n_{\\alpha},"
-        if s == "nt":
+        elif s == "nt":
             out += "n_{\\theta},"
-        if s == "nz":
+        elif s == "nz":
             out += "n_{\\zeta},"
+        else:
+            out += str(s) + ","
     if out[-1] == ",":
         out = out[:-1]
     return out + ")"

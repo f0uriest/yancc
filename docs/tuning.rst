@@ -113,7 +113,7 @@ Multigrid preconditioner options
 ================================
 
 The preconditioner is a geometric multigrid cycle on the
-:math:`(\theta, \zeta, \xi)` axes. Pass options as a dict via the
+:math:`(a, \theta, \zeta)` axes. Pass options as a dict via the
 ``multigrid_options`` argument to either solver:
 
 .. code-block:: python
@@ -141,17 +141,15 @@ Coarsening
    with ``max_grids``. Can be as large as 3-4 before convergence significantly decays
    for many problems.
 
-``max_grids`` *(int, default None — derived from coarse_N)*
+``max_grids`` *(int, default None — derived from coarsening_factor)*
    Maximum number of multigrid levels. Mutually exclusive with
    ``coarsening_factor``. Compile time is superlinear in the number of grid levels,
    so capping this to 3 or 4 will keep compile time reasonable without affecting runtime
    for most problems.
 
 ``min_nt``, ``min_nz``, ``min_na`` *(int, default 5)*
-   Minimum resolution in each axis on the coarsest grid. Bumping ``min_na``
-   up to 9 or 11 sometimes helps at very low collisionality where the
-   trapped/passing boundary layer is the bottleneck. Note that values less than 5 may
-   require lower order finite difference stencils.
+   Minimum resolution in each axis on the coarsest grid. Note that values less than
+   5 may require lower order finite difference stencils.
 
 ``resolutions`` *(list of (ns, nx, na, nt, nz) tuples, default None — auto)*
    Manually specify the resolutions at every level, fine to coarse. Pass
@@ -218,7 +216,8 @@ DKE-only multigrid options
 ``smooth_type`` *(int, default 1)*
    Selects between two structurally different smoothers for the DKE
    preconditioner. ``1`` is the default; ``2`` uses a different block
-   factorization that occasionally helps for multiple species at high collisionality.
+   factorization that occasionally helps for multiple species at high collisionality,
+   at the cost of significantly more memory.
 
 ``operator_weights``, ``smoother_weights``
    As above for the operator. The preconditioner defaults to the same

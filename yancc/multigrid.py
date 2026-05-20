@@ -713,8 +713,7 @@ class Prolongation(lx.AbstractLinearOperator):
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
     method : str
-        Interpolation method. ``"linear"`` is implemented as a dense matrix;
-        anything else is passed to ``interpax.interp1d``.
+        Interpolation method. Passed to ``interpax.interp1d``.
     """
 
     field_coarse: Field

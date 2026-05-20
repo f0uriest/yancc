@@ -6,8 +6,8 @@
    :caption: Getting Started
 
    quickstart
-   loading_fields
    theory
+   loading_fields
    performance
    tuning
 
