@@ -277,6 +277,10 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         # f assumed to be shape(xi, x, theta, zeta)
         return (f * self.wx[None, :, None, None]).sum(axis=1)
 
+    def resample(self, nx):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nx)
+
 
 class LegendrePitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable xi=v||/v.
