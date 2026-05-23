@@ -10,6 +10,7 @@ import pytest
 
 import yancc
 from yancc.field import Field
+from yancc.preconditioner import DKEMPreconditioner
 from yancc.solve import solve_dke, solve_mdke
 from yancc.species import LocalMaxwellian
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -260,6 +261,81 @@ def test_solve_dke_ncsx(idx):
         sfincs_data["heatFlux_vm_rN"][idx],
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rN"]))),
     )
+
+
+def test_solve_dke_ncsx_with_dkem_preconditioner():
+    """Solve the NCSX problem using DKEMPreconditioner (monoenergetic per-x
+    preconditioner stack) passed in via the M= kwarg, and check it converges
+    to the same answer as the default DKEPreconditioner.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    rho = 0.5
+    nt = 15
+    nz = 31
+    na = 61
+    nx = 6
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
+    pitchgrid = UniformPitchAngleGrid(na)
+    speedgrid = MaxwellSpeedGrid(nx)
+    species = [
+        LocalMaxwellian(
+            yancc.species.Hydrogen,
+            0.8e3,
+            1.5e20,
+            -2e3 * field.a_minor,
+            -0.4e20 * field.a_minor,
+        )
+    ]
+    C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
+    operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
+
+    path = "tests/data/20251212-01_sfincs_yancc_benchmark_NCSX_1species_Er_scan.txt"
+    sfincs_data = np.loadtxt(path, skiprows=1)
+    Er = sfincs_data[10, 0]  # one Er value, midrange
+    Erho = Er * field.a_minor * 1000
+
+    M = DKEMPreconditioner(
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species,
+        Erho=Erho,
+        max_grids=3,
+        coarse_N=2000,
+    )
+
+    sol_dkem, info_dkem = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Erho=Erho,
+        operator_weights=operator_weights,
+        verbose=1,
+        rtol=1e-5,
+        M=M,
+    )
+    assert info_dkem["success"]
+
+    # Cross-check against the default DKEPreconditioner result.
+    sol_default, info_default = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Erho=Erho,
+        operator_weights=operator_weights,
+        verbose=1,
+        rtol=1e-5,
+        multigrid_options={"max_grids": 3, "coarse_N": 2000},
+    )
+    assert info_default["success"]
+
+    for qty in ("<particle_flux>", "<heat_flux>", "<V||B>"):
+        a = sol_dkem.get(qty)
+        b = sol_default.get(qty)
+        np.testing.assert_allclose(a, b, rtol=5e-3, atol=5e-3 * float(np.abs(b).max()))
 
 
 def _jvp_1_arg(fun, x0, argnum, rel_step, abs_step):

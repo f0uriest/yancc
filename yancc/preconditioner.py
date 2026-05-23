@@ -403,6 +403,8 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     background: list[LocalMaxwellian]
     M: MultigridOperator
     vs: jax.Array
+    smooth_method: str = eqx.field(static=True)
+    coarse_method: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -421,8 +423,10 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         self.species = species
         if background is None:
             background = []
-        background = background
+        self.background = background
         self.Erho = jnp.asarray(Erho)
+        self.smooth_method = options.get("smooth_method", "standard")
+        self.coarse_method = options.get("coarse_method", "standard")
 
         erhohats = []
         nuhats = []
@@ -504,13 +508,46 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         )
 
     def transpose(self):
-        """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
+        """Transpose of the operator.
 
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
+        ``mv`` is ``(M @ v) / vs`` (per ``(species, x)`` block), so its adjoint
+        is ``M^T @ (u / vs)``. Closed-form so we don't reverse-mode through the
+        underlying multigrid ``while_loop``.
+        """
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        vs = self.vs
+        M = self.M
 
-        return lx.FunctionLinearOperator(fun, x)
+        def _mv(u):
+            u = u.reshape((ns, nx, -1)) / vs[:, :, None]
+            out = jax.vmap(jax.vmap(lambda Mi, v: Mi.transpose().mv(v)))(M, u)
+            return out.flatten()
+
+        return lx.FunctionLinearOperator(_mv, jnp.zeros(self.in_size()))
+
+    def print_resolution_summary(self) -> None:
+        """Print one ``Grid i: ...`` line per multigrid level. The same grid
+        stack is shared across all (species, x) pairs; only the underlying
+        ``nuhat`` / ``erhohat`` coefficients vary.
+        """
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        for i, op in enumerate(self.M.operators):
+            # cast is a no-op at runtime; just narrows the declared
+            # AbstractLinearOperator type to MDKE for pyright.
+            op = cast(MDKE, op)
+            na = op.pitchgrid.na
+            nt = op.field.ntheta
+            nz = op.field.nzeta
+            jax.debug.print(
+                f"Grid {i}: nx={nx:4d}, "
+                f"na={na:4d}, "
+                f"nt={nt:4d}, "
+                f"nz={nz:4d}, "
+                f"N={ns * nx * na * nt * nz:,d}",
+                ordered=True,
+            )
 
 
 @lx.is_symmetric.register(DKEMPreconditioner)
