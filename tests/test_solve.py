@@ -7,12 +7,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from scipy.constants import elementary_charge, proton_mass
 
 import yancc
 from yancc.field import Field
 from yancc.preconditioner import DKEMPreconditioner
 from yancc.solve import solve_dke, solve_mdke
-from yancc.species import LocalMaxwellian
+from yancc.species import JOULE_PER_EV, LocalMaxwellian
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
@@ -260,6 +261,51 @@ def test_solve_dke_ncsx(idx):
         sol.get("heatFlux_vm_rN_sfincs"),
         sfincs_data["heatFlux_vm_rN"][idx],
         atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_vm_rN"]))),
+    )
+    # Check the remaining SFINCS-normalization outputs by inverting their
+    # normalization and comparing to the raw physical quantity. These use the
+    # default kwargs from yancc.solution: Tbar=1 keV, mbar=proton, nbar=1e20,
+    # Bbar=1, Rbar=1.
+    Tbar = 1e3 * JOULE_PER_EV
+    mbar = proton_mass
+    nbar = 1e20
+    Bbar = 1.0
+    Rbar = 1.0
+    vbar = np.sqrt(2 * Tbar / mbar)
+    density = np.array([sp.density for sp in species])
+
+    # J|| = sum_s q_s n_s V||_s
+    qs = np.array([sp.species.charge for sp in species])
+    Vpar = np.asarray(sol.get("V||"))
+    Jpar_expected = (qs[:, None, None] * density[:, None, None] * Vpar).sum(axis=0)
+    np.testing.assert_allclose(sol.get("J||"), Jpar_expected, rtol=1e-10)
+
+    # flow_sfincs = V|| * n_s / (nbar * vbar)
+    np.testing.assert_allclose(
+        sol.get("flow_sfincs") * (nbar * vbar) / density[:, None, None],
+        Vpar,
+        rtol=1e-10,
+    )
+
+    # FSABjHat_sfincs = <J||B> / (e * nbar * vbar * Bbar)
+    np.testing.assert_allclose(
+        sol.get("FSABjHat_sfincs") * (elementary_charge * nbar * vbar * Bbar),
+        sol.get("<J||B>"),
+        rtol=1e-10,
+    )
+
+    # j_rN_sfincs = J_rho * Rbar / (e * nbar * vbar)  # noqa: E800
+    np.testing.assert_allclose(
+        sol.get("j_rN_sfincs") * (elementary_charge * nbar * vbar) / Rbar,
+        sol.get("J_rho"),
+        rtol=1e-10,
+    )
+
+    # jHat_sfincs = J|| / (e * nbar * vbar)
+    np.testing.assert_allclose(
+        sol.get("jHat_sfincs") * (elementary_charge * nbar * vbar),
+        sol.get("J||"),
+        rtol=1e-10,
     )
 
 
