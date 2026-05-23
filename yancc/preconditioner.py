@@ -1,6 +1,6 @@
 """Stuff for preconditioners."""
 
-from typing import Optional, Union
+from typing import Optional, Union, cast
 
 import equinox as eqx
 import jax
@@ -24,6 +24,7 @@ from .multigrid import (
     get_restrictions,
 )
 from .species import LocalMaxwellian, collisionality
+from .trajectories import DKE, MDKE
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
@@ -158,6 +159,9 @@ class MDKEPreconditioner(MultigridOperator):
     def print_resolution_summary(self) -> None:
         """Print one ``Grid i: ...`` line per multigrid level."""
         for i, op in enumerate(self.operators):
+            # cast is a no-op at runtime; just narrows the declared
+            # AbstractLinearOperator type to MDKE for pyright.
+            op = cast(MDKE, op)
             jax.debug.print(
                 f"Grid {i}: na={op.pitchgrid.na:4d}, "
                 f"nt={op.field.ntheta:4d}, "
@@ -349,6 +353,9 @@ class DKEPreconditioner(MultigridOperator):
         ns = len(self.species)
         nx = self.speedgrid.nx
         for i, op in enumerate(self.operators):
+            # cast is a no-op at runtime; just narrows the declared
+            # AbstractLinearOperator type to DKE for pyright.
+            op = cast(DKE, op)
             na = op.pitchgrid.na
             nt = op.field.ntheta
             nz = op.field.nzeta
