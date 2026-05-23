@@ -69,6 +69,32 @@ def test_pitch_quadrature():
     np.testing.assert_allclose(i1, i2)
 
 
+def test_maxwell_speed_grid_resample():
+    """resample() should give a fresh grid of the requested size, and the
+    high-nx branch (which builds its own recurrence rather than using the
+    tabulated default) should still produce a valid quadrature.
+    """
+    g_lo = MaxwellSpeedGrid(8)
+    assert g_lo.nx == 8
+    g_hi = g_lo.resample(24)  # crosses the nx==20 threshold -> generate_recurrence
+    assert g_hi.nx == 24
+    assert g_hi.x.shape == (24,)
+    assert g_hi.gauge_idx.shape == (2,)
+
+    # Verify the high-nx grid still integrates a known function correctly.
+    weight = g_hi.xrec.weight
+    p = np.random.default_rng(0).random(24)
+
+    def foo(x):
+        return weight(x) * orthax.orthval(x, p, g_hi.xrec)
+
+    np.testing.assert_allclose(
+        quadax.quadgk(foo, jnp.array((0, np.inf)))[0],
+        (foo(g_hi.x) * g_hi.wx).sum(),
+        rtol=1e-6,
+    )
+
+
 def test_velocity_integral(speedgrid, pitchgrid, species1):
     """Test integrals over all velocity space."""
     d3v = _d3v(speedgrid, pitchgrid, species1)
