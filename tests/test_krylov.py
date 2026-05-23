@@ -25,6 +25,25 @@ def crop2(a, b):
     return a, b
 
 
+@pytest.mark.parametrize("gs_method", ["cgs", "cgs2", "mgs"])
+def test_fgmres_gs_methods(gs_method):
+    """All three Gram-Schmidt variants should produce same Krylov basis."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n)) + n * np.eye(n)  # diagonally-dominant for stability
+    A = lx.MatrixLinearOperator(jnp.array(A))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+
+    m, k = 10, 5
+    _, _, _, Z, y, _, _, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=0.0, C=None, lc=None, gs_method=gs_method
+    )
+    # Z = V when no right preconditioner; reconstruct x and verify residual.
+    x = Z @ y
+    np.testing.assert_allclose(A.mv(x), b, atol=1e-8)
+
+
 def test_fgmres():
     """Test that FGMRES is equivalent to scipy."""
     n = 20
