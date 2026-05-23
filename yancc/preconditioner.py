@@ -107,16 +107,6 @@ class MDKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
 
-        if verbose:
-            for i, res in enumerate(resolutions):
-                ns, nx, na, nt, nz = res
-                jax.debug.print(
-                    f"Grid {i}: na={na:4d}, "
-                    f"nt={nt:4d}, "
-                    f"nz={nz:4d}, "
-                    f"N={ns*nx*na*nt*nz}"
-                )
-
         fields, grids = get_fields_grids(
             field=field,
             pitchgrid=pitchgrid,
@@ -164,6 +154,17 @@ class MDKEPreconditioner(MultigridOperator):
             coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )
+
+    def print_resolution_summary(self) -> None:
+        """Print one ``Grid i: ...`` line per multigrid level."""
+        for i, op in enumerate(self.operators):
+            jax.debug.print(
+                f"Grid {i}: na={op.pitchgrid.na:4d}, "
+                f"nt={op.field.ntheta:4d}, "
+                f"nz={op.field.nzeta:4d}, "
+                f"N={op.pitchgrid.na * op.field.ntheta * op.field.nzeta:,d}",
+                ordered=True,
+            )
 
 
 @lx.is_symmetric.register(MDKEPreconditioner)
@@ -342,6 +343,23 @@ class DKEPreconditioner(MultigridOperator):
             coarse_method=coarse_method,
             verbose=max(0, verbose - 2),
         )
+
+    def print_resolution_summary(self) -> None:
+        """Print one ``Grid i: ...`` line per multigrid level."""
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        for i, op in enumerate(self.operators):
+            na = op.pitchgrid.na
+            nt = op.field.ntheta
+            nz = op.field.nzeta
+            jax.debug.print(
+                f"Grid {i}: nx={nx:4d}, "
+                f"na={na:4d}, "
+                f"nt={nt:4d}, "
+                f"nz={nz:4d}, "
+                f"N={ns * nx * na * nt * nz:,d}",
+                ordered=True,
+            )
 
 
 @lx.is_symmetric.register(DKEPreconditioner)

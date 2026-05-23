@@ -122,6 +122,8 @@ def solve_mdke(
         verbose=verbose,
         **multigrid_options,
     )
+    if verbose:
+        M.print_resolution_summary()
     flexible = not _preconditioner_is_linear(M)
     A = MDKE(
         field,
@@ -322,7 +324,7 @@ def solve_dke(  # noqa: C901
         M = DKEPreconditioner(**multigrid_options)
 
     if verbose and not skip_init_print:
-        _print_dke_resolutions(M)
+        M.print_resolution_summary()
 
     if B is None:
         B = DKESources(field, pitchgrid, speedgrid, species)
@@ -462,23 +464,6 @@ def _print_thermodynamic_forces(species, field, Erho, EparB):
     jax.debug.print(s, *forces[1], ordered=True)
     s = "A₃: [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *forces[2], ordered=True)
-
-
-def _print_dke_resolutions(preconditioner):
-    for i, op in enumerate(preconditioner.operators):
-        ns = len(op.species)
-        nx = op.speedgrid.nx
-        na = op.pitchgrid.na
-        nt = op.field.ntheta
-        nz = op.field.nzeta
-        jax.debug.print(
-            f"Grid {i}: nx={nx:4d}, "
-            f"na={na:4d}, "
-            f"nt={nt:4d}, "
-            f"nz={nz:4d}, "
-            f"N={ns*nx*na*nt*nz:,d}",
-            ordered=True,
-        )
 
 
 def _print_field_summary(field: Field) -> None:
