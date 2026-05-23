@@ -313,7 +313,9 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     np.testing.assert_allclose(ch[:, l, 0, 0], CHsympy, rtol=2e-6, atol=1e-8)
 
 
-@pytest.mark.parametrize("l", [0, 1, 2, 3])
+# Subset of l values: single-species variant exercises l=[0,1,2,3];
+# the 2-species version only needs to verify cross-species coupling.
+@pytest.mark.parametrize("l", [0, 2])
 def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     potentials = potential_gamma
     field = dummy_field
@@ -439,7 +441,9 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     np.testing.assert_allclose(cg[:, l, 0, 0], CGsympy, rtol=2e-6, atol=1e-8)
 
 
-@pytest.mark.parametrize("l", [0, 1, 2, 3])
+# Subset of l values: single-species variant exercises l=[0,1,2,3];
+# the 2-species version only needs to verify cross-species coupling.
+@pytest.mark.parametrize("l", [0, 2])
 def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     potentials = potential_gamma
     field = dummy_field

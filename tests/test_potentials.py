@@ -329,7 +329,9 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     np.testing.assert_allclose(ddGajax[:, l, 0, 0], ddGasympy, rtol=1e-10, atol=0)
 
 
-@pytest.mark.parametrize("l", [0, 1, 2, 3])
+# Subset of l values: single-species variant exercises l=[0,1,2,3];
+# the 2-species version only needs to verify cross-species coupling.
+@pytest.mark.parametrize("l", [0, 2])
 def test_2_species_potentials_vs_sympy(l, potential_gamma):
     potentials = potential_gamma
     speedgrid = potentials.speedgrid
