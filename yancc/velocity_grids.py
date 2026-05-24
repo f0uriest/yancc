@@ -188,6 +188,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     gauge_idx: jax.Array
 
     def __init__(self, nx, **kwargs):
+        assert nx >= 2, "MaxwellSpeedGrid requires nx >= 2"
         self.nx = nx
         if nx < 20:
             self.xrec = default_xrec
@@ -250,8 +251,6 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         gauge_idx = kwargs.get("gauge_idx", None)
         if gauge_idx is None:
             gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
-            if self.nx == 1:
-                gauge_idx = gauge_idx[0]
         self.gauge_idx = jnp.sort(gauge_idx)
 
     def resample(self, nx):
