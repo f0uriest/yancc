@@ -17,6 +17,7 @@ from yancc.multigrid import (
     standard_smooth,
 )
 from yancc.smoothers import (
+    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
@@ -236,3 +237,66 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
     err = np.linalg.norm(L.mv(x_smoothed - x_true)) / np.linalg.norm(L.mv(x_true))
     print("err=", err)
     assert err < 1
+
+
+# ---------------------------------------------------------------------------
+# operator protocol sweep: out_structure / in_structure / transpose / as_matrix
+# ---------------------------------------------------------------------------
+
+
+def _check_protocol(op):
+    """in/out structures agree (square) and transpose matches matrix transpose."""
+    assert op.out_structure() == op.in_structure()
+    opT = op.transpose()
+    assert opT.in_structure() == op.out_structure()
+    assert opT.out_structure() == op.in_structure()
+    M = op.as_matrix()
+    # TransposedLinearOperator.as_matrix is defined as operator.as_matrix().T
+    np.testing.assert_allclose(opT.as_matrix(), M.T)
+    # and the transpose action (via jax.linear_transpose) matches M.T @ v
+    rng = np.random.default_rng(0)
+    v = jnp.asarray(rng.standard_normal(M.shape[0]))
+    np.testing.assert_allclose(opT.mv(v), M.T @ v, atol=1e-8, rtol=1e-6)
+
+
+def test_smoother_protocol_mdke(field, pitchgrid):
+    op = MDKEJacobiSmoother(field, pitchgrid, 1e-3, 1e-3, smooth_solver="dense")
+    _check_protocol(op)
+
+
+def test_smoother_protocol_dke_jacobi(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    op = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        axorder="atzsx",
+        smooth_solver="dense",
+        operator_weights=jnp.ones(8).at[-2:].set(0),
+    )
+    _check_protocol(op)
+
+
+def test_smoother_protocol_dke_jacobi2(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    op = DKEJacobi2Smoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        smooth_solver="dense",
+    )
+    _check_protocol(op)
+
+
+@pytest.mark.parametrize("normalize", [True, False])
+def test_dke_laplacian_protocol(field, pitchgrid, speedgrid, species2, normalize):
+    op = DKELaplacian(field, pitchgrid, speedgrid, species2, normalize=normalize)
+    _check_protocol(op)

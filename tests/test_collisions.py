@@ -11,7 +11,10 @@ from yancc.collisions import (
     FieldPartCD,
     FieldPartCG,
     FieldPartCH,
+    FieldParticleScattering,
     FokkerPlanckLandau,
+    MDKEPitchAngleScattering,
+    PitchAngleScattering,
     RosenbluthPotentials,
 )
 from yancc.species import JOULE_PER_EV, GlobalMaxwellian, Hydrogen, gamma_ab
@@ -571,3 +574,47 @@ def test_verify_collision_null_single_species(dummy_field):
     # should have a null space of dimension 3*nt*nz
     # maxwellian, v*maxwellian, v^2*maxwellian
     assert sum(np.abs(es) < 1e-14 * np.max(np.abs(es))) == 3 * nt * nz
+
+
+def _check_operator_interface(op, rng):
+    """Exercise the lineax interface: structures, as_matrix, transpose."""
+    ins = op.in_structure()
+    outs = op.out_structure()
+    A = np.asarray(op.as_matrix())
+    assert A.shape == (outs.shape[0], ins.shape[0])
+
+    x = rng.standard_normal(ins.shape[0])
+    np.testing.assert_allclose(op.mv(x), A @ x, rtol=1e-6, atol=1e-10)
+
+    opT = op.transpose()
+    np.testing.assert_allclose(np.asarray(opT.as_matrix()), A.T, rtol=1e-6, atol=1e-10)
+    y = rng.standard_normal(outs.shape[0])
+    np.testing.assert_allclose(opT.mv(y), A.T @ y, rtol=1e-6, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda f, pg, sg, sp, pot: PitchAngleScattering(f, pg, sg, sp),
+        lambda f, pg, sg, sp, pot: EnergyScattering(f, pg, sg, sp),
+        lambda f, pg, sg, sp, pot: FieldPartCD(f, pg, sg, sp, pot),
+        lambda f, pg, sg, sp, pot: FieldPartCG(f, pg, sg, sp, pot),
+        lambda f, pg, sg, sp, pot: FieldParticleScattering(f, pg, sg, sp, pot),
+        # potentials=None exercises the default RosenbluthPotentials construction
+        lambda f, pg, sg, sp, pot: FokkerPlanckLandau(f, pg, sg, sp),
+    ],
+    ids=["CL", "CE", "CD", "CG", "FPS", "FPL"],
+)
+def test_collision_operator_interface(dummy_field, species1, build):
+    """out_structure/transpose/as_matrix are self-consistent."""
+    pitchgrid = UniformPitchAngleGrid(7)
+    speedgrid = MaxwellSpeedGrid(3)
+    potentials = RosenbluthPotentials(speedgrid, species1)
+    op = build(dummy_field, pitchgrid, speedgrid, species1, potentials)
+    _check_operator_interface(op, np.random.default_rng(0))
+
+
+def test_mdke_pitch_angle_scattering_interface(dummy_field):
+    """out_structure/transpose for the monoenergetic scattering operator."""
+    op = MDKEPitchAngleScattering(dummy_field, UniformPitchAngleGrid(7), 1.0)
+    _check_operator_interface(op, np.random.default_rng(0))
