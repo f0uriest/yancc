@@ -21,6 +21,7 @@ from yancc.species import (
     gamma_ab,
     nuD_ab,
     nupar_ab,
+    rhostar,
 )
 
 
@@ -120,6 +121,47 @@ def test_global_maxwellian_localize_gradient():
     )
     lm = gm.localize(0.5)
     np.testing.assert_allclose(float(lm.dTdrho), dT_drho, rtol=1e-6)
+
+
+def test_global_maxwellian_v_thermal():
+    """GlobalMaxwellian.v_thermal matches sqrt(2 T / m) and the localized value."""
+    T0, n0 = 1000.0, 1e19
+    gm = GlobalMaxwellian(
+        Hydrogen,
+        temperature=lambda r: T0 * jnp.ones_like(r),
+        density=lambda r: n0 * jnp.ones_like(r),
+    )
+    expected = float(jnp.sqrt(2 * T0 * JOULE_PER_EV / Hydrogen.mass))
+    np.testing.assert_allclose(float(gm.v_thermal(0.5)), expected, rtol=1e-12)
+    # the global v_thermal at r should equal the localized Maxwellian's v_thermal
+    np.testing.assert_allclose(
+        float(gm.v_thermal(0.5)), float(gm.localize(0.5).v_thermal), rtol=1e-12
+    )
+
+
+def test_global_maxwellian_call_peaks_at_zero():
+    """GlobalMaxwellian(rho, v) peaks at v=0 and matches the analytic value there."""
+    T0, n0 = 1000.0, 1e19
+    gm = GlobalMaxwellian(
+        Hydrogen,
+        temperature=lambda r: T0 * jnp.ones_like(r),
+        density=lambda r: n0 * jnp.ones_like(r),
+    )
+    rho = 0.5
+    vth = float(gm.v_thermal(rho))
+    f0 = float(gm(rho, 0.0))
+    f1 = float(gm(rho, vth))
+    assert f0 > f1
+    expected0 = n0 / (np.sqrt(np.pi) * vth) ** 3
+    np.testing.assert_allclose(f0, expected0, rtol=1e-10)
+
+
+def test_rhostar_scales_linearly_with_x(hydrogen_maxwellian, field):
+    lm = hydrogen_maxwellian
+    r1 = float(rhostar(lm, field, 1.0))
+    r2 = float(rhostar(lm, field, 2.0))
+    assert r1 > 0
+    np.testing.assert_allclose(r2 / r1, 2.0, rtol=1e-10)
 
 
 def test_chandrasekhar_positive():

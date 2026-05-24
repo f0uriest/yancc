@@ -7,7 +7,11 @@ import orthax
 import quadax
 
 from yancc.misc import _d3v
-from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import (
+    LegendrePitchAngleGrid,
+    MaxwellSpeedGrid,
+    UniformPitchAngleGrid,
+)
 
 
 def test_speed_quadrature():
@@ -93,6 +97,18 @@ def test_maxwell_speed_grid_resample():
         (foo(g_hi.x) * g_hi.wx).sum(),
         rtol=1e-6,
     )
+
+
+def test_legendre_pitch_grid_resample():
+    """LegendrePitchAngleGrid.resample returns a fresh grid of the
+    requested size.
+    """
+    g = LegendrePitchAngleGrid(6)
+    assert g.na == 6
+    g2 = g.resample(10)
+    assert isinstance(g2, LegendrePitchAngleGrid)
+    assert g2.na == 10
+    assert g2.xi.shape == (10,)
 
 
 def test_velocity_integral(speedgrid, pitchgrid, species1):

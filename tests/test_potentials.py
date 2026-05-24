@@ -8,7 +8,7 @@ import orthax
 import pytest
 import sympy
 
-from yancc.utils import lGammainc, lGammaincc
+from yancc.utils import Gammainc, Gammaincc, lGammainc, lGammaincc
 from yancc.velocity_grids import UniformPitchAngleGrid
 
 from .conftest import _compute_G_sympy, _compute_H_sympy, _eval_f
@@ -273,6 +273,32 @@ def test_upper_Gamma_derivative():
     )
     assert np.all(sf == s2)
     assert np.all(sr == s2)
+
+
+@np.vectorize
+def mpGammainc(s, x):
+    return float(mpmath.gammainc(s, 0, x))
+
+
+@np.vectorize
+def mpGammaincc(s, x):
+    return float(mpmath.gammainc(s, x, mpmath.inf))
+
+
+def test_Gammainc_Gammaincc_values():
+    """The non-log wrappers Gammainc/Gammaincc (sgn * exp(lGamma))
+    must reproduce the actual incomplete-gamma values from mpmath, including
+    negative s. Range kept moderate so values don't under/overflow.
+    """
+    s = np.array([-1.5, -0.5, 0.5, 1.0, 2.5, 5.0])[:, None]
+    x = np.array([0.1, 0.7, 1.3, 5.0, 30.0])[None, :]
+
+    np.testing.assert_allclose(
+        np.asarray(Gammainc(s, x)), mpGammainc(s, x), rtol=1e-10, atol=1e-300
+    )
+    np.testing.assert_allclose(
+        np.asarray(Gammaincc(s, x)), mpGammaincc(s, x), rtol=1e-7, atol=1e-300
+    )
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
