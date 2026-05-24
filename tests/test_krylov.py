@@ -677,6 +677,77 @@ def test_left_right_preconditioner(flexible):
     np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
 
 
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres])
+def test_complex_system(solver):
+    """Solve a complex-valued ``A x = b`` end to end."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
+    Aop = lx.MatrixLinearOperator(jnp.array(A))
+    b = rng.random(n) + 1j * rng.random(n)
+    x_true = np.linalg.solve(A, b)
+
+    x, _, _, _, _, _, _ = solver(
+        Aop, jnp.array(b), rtol=1e-10, maxiter=50, m=20, k=5, refine=False
+    )
+    np.testing.assert_allclose(np.asarray(x), x_true, rtol=1e-6, atol=1e-7)
+
+
+def test_fgmres_optional_defaults():
+    """FGMRES derives lv, outer_Av from outer_v, lc from C when they are None."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k = 7, 5
+
+    # outer_v given, lv and outer_Av defaulted (computed internally).
+    outer_v = rng.random((n, 3))
+    outer_Av = jax.vmap(A.mv, in_axes=1, out_axes=1)(outer_v)
+    out_def = _fgmres(A.mv, b, m=m, k=k, atol=0.0, outer_v=outer_v)
+    out_exp = _fgmres(
+        A.mv, b, m=m, k=k, atol=0.0, outer_v=outer_v, outer_Av=outer_Av, lv=3
+    )
+    for a, c in zip(out_def[:5], out_exp[:5]):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(c), rtol=1e-10)
+
+    # C given, lc defaulted (derived from C column count).
+    C = np.linalg.qr(rng.random((n, 3)))[0]  # orthonormal columns
+    out_def = _fgmres(A.mv, b, m=m, k=k, atol=0.0, C=C)
+    out_exp = _fgmres(A.mv, b, m=m, k=k, atol=0.0, C=C, lc=3)
+    for a, c in zip(out_def[:5], out_exp[:5]):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(c), rtol=1e-10)
+
+
+def test_gcrotmk_optional_defaults():
+    """GCROT with U supplied but C=None recomputes C = AU, k=None defaults to m."""
+    n = 20
+    rng = np.random.default_rng(1)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = rng.random(n)
+    U = rng.random((n, 2))
+
+    # k=None -> k=m
+    x, _, _, _, _, _, _ = gcrotmk(A, b, rtol=1e-10, maxiter=30, m=5, U=U)
+    np.testing.assert_allclose(np.asarray(A.mv(x)), b, rtol=1e-6, atol=1e-7)
+
+
+def test_lgmres_optional_defaults():
+    """LGMRES with explicit x0 and verbose=True,
+    exercising the print branches in the solve loop.
+    """
+    n = 20
+    rng = np.random.default_rng(2)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = rng.random(n)
+
+    x, _, _, _, _, _, _ = lgmres(
+        A, b, x0=jnp.zeros(n), rtol=1e-10, maxiter=30, m=5, k=3, verbose=True
+    )
+    np.testing.assert_allclose(np.asarray(A.mv(x)), b, rtol=1e-6, atol=1e-7)
+
+
 @pytest.mark.parametrize("flexible", [True, False])
 def test_krylov_autodiff(flexible):
     """Test that gcrot is differentiable."""
