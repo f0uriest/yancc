@@ -1,12 +1,13 @@
 """Velocity grids for yancc."""
 
-from typing import Optional
+from typing import Callable, Optional, cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import orthax
 from jax import config
+from jaxtyping import ArrayLike, Float
 
 # need this here as well so that const default_xrec uses 64 bit
 config.update("jax_enable_x64", True)
@@ -280,6 +281,26 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         return (f * self.wx[None, :, None, None]).sum(axis=1)
 
 
+class _MapFunction(eqx.Module):
+    f: Callable
+
+    @eqx.filter_jit
+    def __call__(self, x):
+        x = (x / jnp.pi) * 2 - 1  # map [0,pi] to [-1,1]
+        x = self.f(x)  # map [-1,1] to [-1,1]
+        x = (x + 1) / 2 * jnp.pi  # map [-1,1] to [0,pi]
+        return x
+
+
+class AbstractPitchAngleGrid(eqx.Module):
+    """Base class for pitch angle coordinate grids."""
+
+    na: int = eqx.field(static=True)
+    a: jax.Array
+    xi: jax.Array
+    wxi: jax.Array
+
+
 class LegendrePitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable xi=v||/v.
 
@@ -327,7 +348,40 @@ class LegendrePitchAngleGrid(eqx.Module):
         return self.__class__(na)
 
 
-class UniformPitchAngleGrid(eqx.Module):
+class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
+    """Base class for grids in pitch angle coordinate a = -arccos(v||/v).
+
+    Parameters
+    ----------
+    na : int
+        Number of points in pitch angle coordinate.
+    map_func : callable
+        Smooth, odd, monotonic function that maps the domain [-1,1] to [-1,1].
+        Defines the spacing of nodes in the domain.
+    """
+
+    map_func: _MapFunction
+
+    def __init__(self, na, map_func):
+        na = eqx.error_if(na, na % 2 == 0, "na must be odd")
+        self.na = na
+        a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
+        self.map_func = _MapFunction(map_func)
+
+        self.a = self.map_func(a)
+        self.xi = -jnp.cos(self.a)
+        self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+    def resample(self, na):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(na, self.map_func.f)
+
+
+def _linear_map(x):
+    return x
+
+
+class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
     """Grid for pitch angle variable a = -arccos(v||/v).
 
     Uniform grid not including endpoints.
@@ -339,18 +393,8 @@ class UniformPitchAngleGrid(eqx.Module):
 
     """
 
-    na: int = eqx.field(static=True)
-    a: jax.Array
-    xi: jax.Array
-    wxi: jax.Array
-
     def __init__(self, na):
-        na = eqx.error_if(na, na % 2 == 0, "na must be odd")
-        self.na = na
-        a = jnp.linspace(0, jnp.pi, na, endpoint=False)
-        a += jnp.pi / (2 * na)
-        self.a = a
-        self.xi = -jnp.cos(a)
+        super().__init__(na, _linear_map)
         # uniform in a means chebyshev nodes in xi, so we can do better than
         # newton-cotes: fejer type 1 quadrature
         self.wxi = fejer_type_1_weights(na)
@@ -358,6 +402,51 @@ class UniformPitchAngleGrid(eqx.Module):
     def resample(self, na):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(na)
+
+
+class _QuadraticMap(eqx.Module):
+    c: jax.Array
+
+    def __call__(self, x):
+        return self.c * x**3 + (1 - self.c) * x
+
+
+class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
+    """Pitch angle grid with quadratic spacing near v|| = 0.
+
+    At low collisionality, the DKE develops very sharp features near v||=0 (a=pi/2).
+    This grid packs nodes closer to that region to resolve it more accurately,
+    while sacrificing nodes near the endpoints where the solution varies less.
+
+    Parameters
+    ----------
+    na : int
+        Number of points in pitch angle coordinate.
+    c : float in [0,1]
+        Grid packing parameter. ``c=0`` means nodes uniformly spaced in a, ``c=1``
+        packs quadratically near a=pi/2 (v||=0). Recommended values are in the range
+        ``c=[0.5, 0.8]`` at low collisionality.
+    """
+
+    c: jax.Array
+
+    def __init__(self, na: int, c: Float[ArrayLike, ""]):
+        na = eqx.error_if(na, na % 2 == 0, "na must be odd")
+        c = jnp.asarray(c)
+        c = eqx.error_if(c, jnp.logical_or(c > 1, c < 0), "c must be between [0,1]")
+        # error_if loses the static type, so reassert it (c is an array post-asarray)
+        self.na = na
+        self.c = cast(jax.Array, c)
+        a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
+        self.map_func = _MapFunction(_QuadraticMap(self.c))
+
+        self.a = self.map_func(a)
+        self.xi = -jnp.cos(self.a)
+        self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+    def resample(self, na):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(na, self.c)
 
 
 def composite_newton_cotes_weights(
