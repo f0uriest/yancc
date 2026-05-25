@@ -90,7 +90,7 @@ def test_solve_mdke_w7x_eim(idx):
         )
     )
     t2 = time.perf_counter()
-    print(f"Took {t2-t1:.3e} s")
+    print(f"Took {t2 - t1:.3e} s")
     Dij = sol.get("Dij_DKES")
 
     D11_yancc = Dij[0, 0]
@@ -188,7 +188,7 @@ def test_solve_dke_ncsx(idx):
         jax.clear_caches()
     rho = 0.5
     # hydrogen ion charge and mass (no electrons)
-    # n = 1.5e20 / m^3     # noqa E800
+    # n = 1.5e20 / m^3     # noqa: ERA001
     # T = 0.8 keV
     # dn/dr = -0.4e20 / m^4
     # dT/dr = -2.0 keV/m
@@ -294,7 +294,7 @@ def test_solve_dke_ncsx(idx):
         rtol=1e-10,
     )
 
-    # j_rN_sfincs = J_rho * Rbar / (e * nbar * vbar)  # noqa: E800
+    # j_rN_sfincs = J_rho * Rbar / (e * nbar * vbar)  # noqa: ERA001
     np.testing.assert_allclose(
         sol.get("j_rN_sfincs") * (elementary_charge * nbar * vbar) / Rbar,
         sol.get("J_rho"),

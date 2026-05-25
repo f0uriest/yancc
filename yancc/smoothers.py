@@ -2,7 +2,6 @@
 
 import itertools
 import warnings
-from typing import Optional
 
 import equinox as eqx
 import interpax
@@ -245,8 +244,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         p2: int = 2,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver: Optional[str] = None,
-        weight: Optional[jax.Array] = None,
+        smooth_solver: str | None = None,
+        weight: jax.Array | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -385,15 +384,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
-        potentials: Optional[RosenbluthPotentials] = None,
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
         p1="2d",
         p2=2,
         axorder="sxatz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver: Optional[str] = None,
-        weight: Optional[jax.Array] = None,
-        operator_weights: Optional[jax.Array] = None,
+        smooth_solver: str | None = None,
+        weight: jax.Array | None = None,
+        operator_weights: jax.Array | None = None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -599,15 +598,15 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
-        potentials: Optional[RosenbluthPotentials] = None,
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
         p1="2d",
         p2=2,
         axorder="atzsx",
         gauge: Bool[ArrayLike, ""] = True,
         smooth_solver="dense",
-        weight: Optional[jax.Array] = None,
-        operator_weights: Optional[jax.Array] = None,
+        weight: jax.Array | None = None,
+        operator_weights: jax.Array | None = None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert axorder[-2:] == "sx"

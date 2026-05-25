@@ -174,7 +174,7 @@ def mpdlGammainc(s, x):
     h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
     f1 = mplGammainc(s, x + h, False)[1]
     f2 = mplGammainc(s, x - h, False)[1]
-    return int(0), float((f1 - f2) / h / 2)
+    return 0, float((f1 - f2) / h / 2)
 
 
 @np.vectorize
@@ -182,7 +182,7 @@ def mpdlGammaincc(s, x):
     h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
     f1 = mplGammaincc(s, x + h, False)[1]
     f2 = mplGammaincc(s, x - h, False)[1]
-    return int(0), float((f1 - f2) / h / 2)
+    return 0, float((f1 - f2) / h / 2)
 
 
 def test_lower_Gamma():
@@ -198,7 +198,7 @@ def test_lower_Gamma():
     atol = 1e-12
     mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
     np.testing.assert_allclose(
-        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
     )
     assert np.all(s1 == s2)
 
@@ -219,11 +219,11 @@ def test_lower_Gamma_derivative():
     atol = 1e-12
     mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
     np.testing.assert_allclose(
-        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
     )
     mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
     np.testing.assert_allclose(
-        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
     )
     assert np.all(sf == s2)
     assert np.all(sr == s2)
@@ -244,7 +244,7 @@ def test_upper_Gamma():
     atol = 5e-8
     mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
     np.testing.assert_allclose(
-        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
     )
     assert np.all(s1 == s2)
 
@@ -265,11 +265,11 @@ def test_upper_Gamma_derivative():
     atol = 5e-7
     mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
     np.testing.assert_allclose(
-        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
     )
     mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
     np.testing.assert_allclose(
-        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
+        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
     )
     assert np.all(sf == s2)
     assert np.all(sr == s2)

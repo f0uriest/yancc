@@ -12,11 +12,7 @@ sphinx-rtd-theme >= 1.0, <= 3.1
 sphinx-github-style >= 1.0, <= 1.2.2
 
 # linting
-black == 26.3.1
-flake8 >= 5.0, <= 7.3
-flake8-docstrings >= 1.0, <= 1.7
-flake8-eradicate >= 1.0, <= 1.5
-flake8-isort >= 5.0, <= 7.0
+ruff == 0.15.14
 pre-commit <= 4.5.1
 pyright < 1.2
 

@@ -3,7 +3,6 @@
 import operator
 from collections.abc import Callable
 from functools import partial
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -130,7 +129,6 @@ def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
 
 
 def _maybe_print(flag, j, res, pre=""):
-
     def truefun():
         jax.debug.print(pre + "iter={j:3d}   res={res:.3e}", j=j, res=res, ordered=True)
 
@@ -180,7 +178,6 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
 
     max_k = Q_mat.shape[0]
     if method in ["cgs", "cgs2"]:
-
         # dynamic mask to handle the dynamic k
         mask = jnp.arange(max_k) < k
 
@@ -236,13 +233,13 @@ def _fgmres(
     m: int,
     k: int,
     atol: Float[ArrayLike, ""],
-    lpsolve: Optional[Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]]] = None,
-    rpsolve: Optional[Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]]] = None,
-    C: Optional[PyTree[ArrayLike]] = None,
-    lc: Optional[int] = None,
-    outer_v: Optional[PyTree[ArrayLike]] = None,
-    outer_Av: Optional[PyTree[ArrayLike]] = None,
-    lv: Optional[int] = None,
+    lpsolve: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]] | None = None,
+    rpsolve: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]] | None = None,
+    C: PyTree[ArrayLike] | None = None,
+    lc: int | None = None,
+    outer_v: PyTree[ArrayLike] | None = None,
+    outer_Av: PyTree[ArrayLike] | None = None,
+    lv: int | None = None,
     verbose: bool = False,
     *,
     print_every: ArrayLike = jnp.array(1),
@@ -456,17 +453,17 @@ def _fgmres(
 def gcrotmk(
     A: lx.AbstractLinearOperator,
     b: PyTree[ArrayLike],
-    x0: Optional[PyTree[ArrayLike]] = None,
+    x0: PyTree[ArrayLike] | None = None,
     *,
     rtol: Float[ArrayLike, ""] = jnp.array(1e-5),
     atol: Float[ArrayLike, ""] = jnp.array(0.0),
     maxiter: Int[ArrayLike, ""] = jnp.array(1000),
-    ML: Optional[lx.AbstractLinearOperator] = None,
-    MR: Optional[lx.AbstractLinearOperator] = None,
+    ML: lx.AbstractLinearOperator | None = None,
+    MR: lx.AbstractLinearOperator | None = None,
     m: int = 20,
-    k: Optional[int] = None,
-    C: Optional[PyTree[ArrayLike]] = None,
-    U: Optional[PyTree[ArrayLike]] = None,
+    k: int | None = None,
+    C: PyTree[ArrayLike] | None = None,
+    U: PyTree[ArrayLike] | None = None,
     verbose: bool = False,
     print_every: ArrayLike = jnp.array(1),
     print_every_inner: ArrayLike = jnp.array(1),
@@ -609,8 +606,8 @@ def gcrotmk(
 
 
 def _gcrot_init_UC(
-    U: Optional[PyTree[ArrayLike]],
-    C: Optional[PyTree[ArrayLike]],
+    U: PyTree[ArrayLike] | None,
+    C: PyTree[ArrayLike] | None,
     x: PyTree[ArrayLike],
     matvec: Callable,
     k: int,
@@ -822,17 +819,17 @@ def _gcrotmk_solve(
 def lgmres(
     A: lx.AbstractLinearOperator,
     b: PyTree[ArrayLike],
-    x0: Optional[PyTree[ArrayLike]] = None,
+    x0: PyTree[ArrayLike] | None = None,
     *,
     rtol: Float[ArrayLike, ""] = jnp.array(1e-5),
     atol: Float[ArrayLike, ""] = jnp.array(0.0),
     maxiter: Int[ArrayLike, ""] = jnp.array(1000),
-    ML: Optional[lx.AbstractLinearOperator] = None,
-    MR: Optional[lx.AbstractLinearOperator] = None,
+    ML: lx.AbstractLinearOperator | None = None,
+    MR: lx.AbstractLinearOperator | None = None,
     m: int = 30,
     k: int = 3,
-    outer_v: Optional[PyTree[ArrayLike]] = None,
-    outer_Av: Optional[PyTree[ArrayLike]] = None,
+    outer_v: PyTree[ArrayLike] | None = None,
+    outer_Av: PyTree[ArrayLike] | None = None,
     verbose: bool = False,
     print_every: ArrayLike = jnp.array(1),
     print_every_inner: ArrayLike = jnp.array(1),

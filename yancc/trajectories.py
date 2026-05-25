@@ -2,7 +2,6 @@
 
 import functools
 import itertools
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -721,7 +720,7 @@ def sfincs_w_theta(
     vpar = v * xi
     w = (
         field.B_sup_t / field.Bmag * vpar
-        + field.B_sub_z / field.Bmag**2 / field.sqrtg * (-Erho)
+        + field.B_sub_z / field.Bmag** 2 / field.sqrtg * (-Erho)
     )
     return w
 
@@ -738,7 +737,7 @@ def sfincs_w_zeta(
     vpar = v * xi
     w = (
         field.B_sup_z / field.Bmag * vpar
-        - field.B_sub_t / field.Bmag**2 / field.sqrtg * (-Erho)
+        - field.B_sub_t / field.Bmag** 2 / field.sqrtg * (-Erho)
     )
     return w
 
@@ -1949,13 +1948,13 @@ class DKE(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
-        potentials: Optional[RosenbluthPotentials] = None,
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
         p1: str = "4d",
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
-        operator_weights: Optional[jax.Array] = None,
+        operator_weights: jax.Array | None = None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field

@@ -1,6 +1,6 @@
 """Stuff for preconditioners."""
 
-from typing import Optional, Union, cast
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -62,10 +62,9 @@ class MDKEPreconditioner(MultigridOperator):
         pitchgrid: UniformPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
-        verbose: Union[bool, int] = False,
+        verbose: bool | int = False,
         **options,
     ):
-
         self.field = field
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.asarray(erhohat)
@@ -213,12 +212,11 @@ class DKEPreconditioner(MultigridOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]],
+        background: list[LocalMaxwellian] | None,
         potentials: RosenbluthPotentials,
-        verbose: Union[bool, int] = False,
+        verbose: bool | int = False,
         **options,
     ):
-
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -413,10 +411,9 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
+        background: list[LocalMaxwellian] | None = None,
         **options,
     ):
-
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
