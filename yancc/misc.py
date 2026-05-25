@@ -10,7 +10,7 @@ from scipy.constants import elementary_charge
 
 from .field import Field
 from .species import LocalMaxwellian
-from .velocity_grids import AbstractSpeedGrid, NonUniformPitchAngleGrid
+from .velocity_grids import AbstractPitchAngleGrid, AbstractSpeedGrid
 
 
 def _dr(field):
@@ -37,7 +37,7 @@ class DKESources(lx.MatrixLinearOperator):
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Grid of coordinates in pitch angle.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -47,14 +47,14 @@ class DKESources(lx.MatrixLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
     ):
@@ -93,7 +93,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Grid of coordinates in pitch angle.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -106,7 +106,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     normalize: bool
@@ -114,7 +114,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         normalize=True,
@@ -150,7 +150,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
 def radial_magnetic_drift(
     field: Field,
     speedgrid: AbstractSpeedGrid,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     species: list[LocalMaxwellian],
 ) -> jax.Array:
     """Radial magnetic drift 𝐯ₘ ⋅ ∇ ψ
@@ -161,7 +161,7 @@ def radial_magnetic_drift(
         Magnetic field information
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Grid of coordinates in pitch angle.
     species : list[LocalMaxwellian]
         Species being considered
@@ -187,7 +187,7 @@ def radial_magnetic_drift(
 
 def dke_rhs(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: Union[float, Float[Any, ""]],
@@ -201,7 +201,7 @@ def dke_rhs(
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Grid of coordinates in pitch angle.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -255,7 +255,7 @@ def _dke_thermodynamic_forces(species, field, Erho, EparB):
 
 def _dke_rhs_3(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
 ) -> Float[jax.Array, "3 ns ns nx na nt nz"]:
@@ -279,7 +279,7 @@ def _dke_rhs_3(
 
 def mdke_rhs(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
 ) -> jax.Array:
     """RHS of monoenergetic DKE.
 

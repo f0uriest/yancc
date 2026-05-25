@@ -27,10 +27,10 @@ from .linalg import (
 from .species import LocalMaxwellian
 from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _refold
 from .velocity_grids import (
+    AbstractPitchAngleGrid,
     AbstractSpeedGrid,
     MaxwellSpeedGrid,
     MonoenergeticSpeedGrid,
-    NonUniformPitchAngleGrid,
 )
 
 
@@ -52,7 +52,7 @@ def _advection_matrices(x, p, bc_type, domain):
 
 
 def dkes_w_theta(
-    field: Field, pitchgrid: NonUniformPitchAngleGrid, erhohat: Float[Array, ""]
+    field: Field, pitchgrid: AbstractPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in theta direction for MDKE."""
     w = (
@@ -63,7 +63,7 @@ def dkes_w_theta(
 
 
 def dkes_w_zeta(
-    field: Field, pitchgrid: NonUniformPitchAngleGrid, erhohat: Float[Array, ""]
+    field: Field, pitchgrid: AbstractPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in zeta direction for MDKE."""
     w = (
@@ -74,7 +74,7 @@ def dkes_w_zeta(
 
 
 def dkes_w_pitch(
-    field: Field, pitchgrid: NonUniformPitchAngleGrid
+    field: Field, pitchgrid: AbstractPitchAngleGrid
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in xi/pitch direction for MDKE."""
     sina = jnp.sqrt(1 - pitchgrid.xi**2)
@@ -94,7 +94,7 @@ class MDKETheta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -112,7 +112,7 @@ class MDKETheta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -126,7 +126,7 @@ class MDKETheta(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -260,7 +260,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -278,7 +278,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -292,7 +292,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -426,7 +426,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -444,7 +444,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -458,7 +458,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -592,7 +592,7 @@ class MDKE(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -610,7 +610,7 @@ class MDKE(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     erhohat: Float[Array, ""]
     nuhat: Float[Array, ""]
@@ -626,7 +626,7 @@ class MDKE(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -728,7 +728,7 @@ def _(operator):
 
 def sfincs_w_theta(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -745,7 +745,7 @@ def sfincs_w_theta(
 
 def sfincs_w_zeta(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -762,7 +762,7 @@ def sfincs_w_zeta(
 
 def sfincs_w_pitch(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -779,7 +779,7 @@ def sfincs_w_pitch(
 
 def sfincs_w_speed(
     field: Field,
-    pitchgrid: NonUniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     x: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -797,7 +797,7 @@ class DKETheta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -817,7 +817,7 @@ class DKETheta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -834,7 +834,7 @@ class DKETheta(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1094,7 +1094,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1114,7 +1114,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1131,7 +1131,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1389,7 +1389,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1409,7 +1409,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1426,7 +1426,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1682,7 +1682,7 @@ class DKESpeed(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1695,7 +1695,7 @@ class DKESpeed(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1705,7 +1705,7 @@ class DKESpeed(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1920,7 +1920,7 @@ class DKE(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : NonUniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
@@ -1942,7 +1942,7 @@ class DKE(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: NonUniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1962,7 +1962,7 @@ class DKE(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: NonUniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
