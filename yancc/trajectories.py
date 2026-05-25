@@ -516,7 +516,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
-    @jax.named_scope("MDKEPitch.blcok_diagonal")
+    @jax.named_scope("MDKEPitch.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "z":
