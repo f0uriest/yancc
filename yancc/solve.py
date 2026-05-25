@@ -24,7 +24,7 @@ from .preconditioner import DKEPreconditioner, MDKEPreconditioner
 from .solution import DKESolution, MDKESolution
 from .species import Estar, LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE
-from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import MaxwellSpeedGrid, NonUniformPitchAngleGrid
 
 
 def _preconditioner_is_linear(M) -> bool:
@@ -42,7 +42,7 @@ def _preconditioner_is_linear(M) -> bool:
 
 def solve_mdke(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: NonUniformPitchAngleGrid,
     erhohat: Union[float, Float[Any, ""]],
     nuhat: Union[float, Float[Any, ""]],
     verbose: Union[bool, int] = False,
@@ -55,7 +55,7 @@ def solve_mdke(
     ----------
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v = -∂Φ /∂ρ /v in units of V*s/m.
@@ -211,7 +211,7 @@ def solve_mdke(
 
 def solve_dke(  # noqa: C901
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: NonUniformPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: Union[float, Float[Any, ""]],
@@ -227,7 +227,7 @@ def solve_dke(  # noqa: C901
     ----------
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Speed grid data.

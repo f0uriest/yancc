@@ -25,7 +25,7 @@ from .multigrid import (
 )
 from .species import LocalMaxwellian, collisionality
 from .trajectories import DKE, MDKE
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import AbstractSpeedGrid, NonUniformPitchAngleGrid
 
 
 class MDKEPreconditioner(MultigridOperator):
@@ -35,7 +35,7 @@ class MDKEPreconditioner(MultigridOperator):
     ----------
     field : yancc.Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -50,7 +50,7 @@ class MDKEPreconditioner(MultigridOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     erhohat: Float[Array, ""]
     nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -59,7 +59,7 @@ class MDKEPreconditioner(MultigridOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
         verbose: Union[bool, int] = False,
@@ -185,7 +185,7 @@ class DKEPreconditioner(MultigridOperator):
     ----------
     field : yancc.Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Speed grid data.
@@ -198,7 +198,7 @@ class DKEPreconditioner(MultigridOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -209,7 +209,7 @@ class DKEPreconditioner(MultigridOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -383,7 +383,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     ----------
     field : yancc.Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Speed grid data.
@@ -396,7 +396,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -409,7 +409,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],

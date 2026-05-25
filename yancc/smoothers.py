@@ -23,7 +23,12 @@ from .linalg import (
 )
 from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import (
+    AbstractSpeedGrid,
+    MaxwellSpeedGrid,
+    NonUniformPitchAngleGrid,
+    UniformPitchAngleGrid,
+)
 
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
@@ -194,7 +199,7 @@ OPTIMAL_SMOOTHING_COEFFS_4D = {
 
 
 def permute_f_3d(
-    f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
+    f: jax.Array, field: Field, pitchgrid: NonUniformPitchAngleGrid, axorder: str
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_3d(
@@ -208,7 +213,7 @@ def permute_f_3d(
 def permute_f_4d(
     f: jax.Array,
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: NonUniformPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
@@ -223,7 +228,7 @@ def permute_f_4d(
 
 
 def inverse_permute_f_3d(
-    f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
+    f: jax.Array, field: Field, pitchgrid: NonUniformPitchAngleGrid, axorder: str
 ) -> jax.Array:
     """Inverse of permute_f_3d: canonical (a,t,z) layout back to axorder layout."""
     nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
@@ -236,7 +241,7 @@ def inverse_permute_f_3d(
 def inverse_permute_f_4d(
     f: jax.Array,
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: NonUniformPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
@@ -281,7 +286,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -293,7 +298,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
         p1: str = "2d",
@@ -421,7 +426,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -436,7 +441,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -635,7 +640,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -650,7 +655,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -790,6 +795,10 @@ class DKELaplacian(lx.AbstractLinearOperator):
     norm: jax.Array
 
     def __init__(self, field, pitchgrid, speedgrid, species, normalize=True):
+        assert isinstance(pitchgrid, UniformPitchAngleGrid), (
+            "DKELaplacian smoother requires a uniform pitch grid "
+            "(use smooth_method='standard' for non-uniform grids)."
+        )
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid

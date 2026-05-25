@@ -27,7 +27,7 @@ from .velocity_grids import (
     AbstractSpeedGrid,
     LegendrePitchAngleGrid,
     MaxwellSpeedGrid,
-    UniformPitchAngleGrid,
+    NonUniformPitchAngleGrid,
 )
 
 
@@ -38,7 +38,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     nuhat : float
         Monoenergetic collisionality, nu/v in units of 1/m
@@ -56,7 +56,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -68,7 +68,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -535,7 +535,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -550,7 +550,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -564,7 +564,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         background: Optional[list[LocalMaxwellian]] = None,
@@ -817,7 +817,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -830,7 +830,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -843,7 +843,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         background: Optional[list[LocalMaxwellian]] = None,
@@ -1116,7 +1116,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1127,7 +1127,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -1464,7 +1464,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1477,7 +1477,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -1902,7 +1902,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1916,7 +1916,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -2349,7 +2349,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
 
     field: Field
     speedgrid: MaxwellSpeedGrid
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     axorder: str = eqx.field(static=True)
@@ -2361,7 +2361,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -2484,7 +2484,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Grid of coordinates in pitch angle.
     speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
@@ -2502,7 +2502,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -2518,7 +2518,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         background: Optional[list[LocalMaxwellian]] = None,

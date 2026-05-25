@@ -11,7 +11,7 @@ from scipy.constants import elementary_charge, proton_mass
 from .field import Field
 from .misc import _d3v, _dr, radial_magnetic_drift
 from .species import JOULE_PER_EV, LocalMaxwellian
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import AbstractSpeedGrid, NonUniformPitchAngleGrid
 
 MDKE_OUTPUTS = {}
 DKE_OUTPUTS = {}
@@ -129,7 +129,7 @@ class DKESolution(eqx.Module):
         Drive terms for DKE
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -148,7 +148,7 @@ class DKESolution(eqx.Module):
     f1: jax.Array
     rhs: jax.Array
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: jax.Array
@@ -163,7 +163,7 @@ class DKESolution(eqx.Module):
         f1: jax.Array,
         rhs: jax.Array,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: jax.Array,
@@ -258,7 +258,7 @@ class MDKESolution(eqx.Module):
         Drive terms for MDKE
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : NonUniformPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v = -∂Φ /∂ρ /v in units of V*s/m.
@@ -269,7 +269,7 @@ class MDKESolution(eqx.Module):
     f: jax.Array
     rhs: jax.Array
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: NonUniformPitchAngleGrid
     nuhat: jax.Array
     erhohat: jax.Array
 
@@ -278,7 +278,7 @@ class MDKESolution(eqx.Module):
         f: jax.Array,
         rhs: jax.Array,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: NonUniformPitchAngleGrid,
         nuhat: jax.Array,
         erhohat: jax.Array,
     ):
