@@ -322,7 +322,10 @@ class LegendrePitchAngleGrid(AbstractPitchAngleGrid):
 
 
 class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
-    """Base class for grids in pitch angle coordinate a = -arccos(v||/v).
+    """User controlled non-uniform grid in pitch angle coordinate a = -arccos(v||/v).
+
+    Allows an arbitrary mapping function to control grid spacing. Nodes are initially
+    created uniformly, then mapped through ``map_func``.
 
     Parameters
     ----------

@@ -69,8 +69,11 @@ With these conventions the local Maxwellian for species :math:`s` is
     F_{M,s}(\rho, x_s) = n_s \left( \frac{m_s}{2 \pi T_s} \right)^{3/2}
                         e^{-x_s^2}.
 
-The pitch-angle grid (:class:`~yancc.velocity_grids.UniformPitchAngleGrid`)
-has ``na`` uniformly spaced points on :math:`a \in [0, \pi]`. The speed
+The pitch-angle grid has ``na`` points on :math:`a \in [0, \pi]`, either
+uniformly spaced (:class:`~yancc.velocity_grids.UniformPitchAngleGrid`) or
+concentrated near :math:`v_\parallel = 0` to resolve low-collisionality
+boundary layers (:class:`~yancc.velocity_grids.QuadraticPitchAngleGrid` and
+:class:`~yancc.velocity_grids.NonUniformPitchAngleGrid`). The speed
 grid (:class:`~yancc.velocity_grids.MaxwellSpeedGrid`) has ``nx`` collocation
 nodes chosen as the roots of polynomials orthogonal under the Maxwellian
 weight :math:`e^{-x^2}` on :math:`[0, \infty)`; this is what makes a small
