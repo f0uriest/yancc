@@ -262,7 +262,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
 
 class _MapFunction(eqx.Module):
-    f: Callable
+    f: Callable = eqx.field(static=True)
 
     @eqx.filter_jit
     def __call__(self, x):
