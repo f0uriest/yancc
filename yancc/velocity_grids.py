@@ -1,5 +1,6 @@
 """Velocity grids for yancc."""
 
+from abc import ABC, abstractmethod
 from typing import Callable, Optional, cast
 
 import equinox as eqx
@@ -281,7 +282,7 @@ class _MapFunction(eqx.Module):
         return x
 
 
-class AbstractPitchAngleGrid(eqx.Module):
+class AbstractPitchAngleGrid(ABC, eqx.Module):
     """Base class for pitch angle coordinate grids."""
 
     na: int = eqx.field(static=True)
@@ -289,8 +290,12 @@ class AbstractPitchAngleGrid(eqx.Module):
     xi: jax.Array
     wxi: jax.Array
 
+    @abstractmethod
+    def resample(self, na) -> "AbstractPitchAngleGrid":
+        """Resample grid to a lower or higher resolution."""
 
-class LegendrePitchAngleGrid(eqx.Module):
+
+class LegendrePitchAngleGrid(AbstractPitchAngleGrid):
     """Grid for pitch angle variable xi=v||/v.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
@@ -303,34 +308,13 @@ class LegendrePitchAngleGrid(eqx.Module):
 
     """
 
-    na: int = eqx.field(static=True)
     xirec: orthax.recurrence.AbstractRecurrenceRelation
-    xi: jax.Array
-    wxi: jax.Array
-    xivander: jax.Array
-    xivander_inv: jax.Array
-    Dxi: jax.Array
-    Dxi_pseudospectral: jax.Array
-    L: jax.Array
 
     def __init__(self, na):
         self.na = na
         self.xirec = orthax.recurrence.Legendre()
         self.xi, self.wxi = orthax.orthgauss(na, self.xirec)
-        self.xivander = orthax.orthvander(self.xi, self.na - 1, self.xirec)
-        self.xivander_inv = jnp.linalg.pinv(self.xivander)
-
-        def _dxifun(c):
-            c = jnp.append(c, jnp.array([0.0]))
-            dc = orthax.orthder(c, self.xirec)
-            return dc
-
-        self.Dxi = jax.jacfwd(_dxifun)(self.xi)
-        self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
-        k = jnp.arange(self.na)
-        kk = -jnp.diag(k * (k + 1))
-        # pitch angle scattering operator ~ -k(k+1)
-        self.L = self.xivander @ kk @ self.xivander_inv
+        self.a = -jnp.acos(self.xi)
 
     def resample(self, na):
         """Resample grid to a lower or higher resolution."""
