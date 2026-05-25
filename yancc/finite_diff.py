@@ -597,8 +597,14 @@ def build_advection_matrix(
 
         if bc_type == "periodic":
             idx = raw_idx % N
-            dx = x[idx] - x[i]
-            dx = dx - period * jnp.round(dx / period)
+            # Use the unwrapped coordinate along the periodic extension so a
+            # stencil that wraps keeps its true geometric offset (and upwind
+            # character) rather than folding to the minimal image. This only
+            # matters when a stencil reaches past the half-period (very coarse
+            # grids); otherwise it is identical, and it matches the
+            # convolution-based fdfwd/fdbwd there.
+            n_wrap = jnp.floor(raw_idx / N)
+            dx = x[idx] + period * n_wrap - x[i]
         elif bc_type == "symmetric":
             idx = jnp.where(
                 raw_idx < 0,

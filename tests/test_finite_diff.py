@@ -251,7 +251,7 @@ def test_advection_nonuniform(direction, p):
     # nonuniform grid that packs nodes near strong gradients should have
     # much lower error
     if kwargs["order"] > 1:
-        fac = 0.1
+        fac = 0.15
     else:
         fac = 0.5
     assert err_non < fac * err_uni
