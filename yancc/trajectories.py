@@ -17,7 +17,7 @@ from .collisions import (
     RosenbluthPotentials,
 )
 from .field import Field
-from .finite_diff import fd_coeffs, fdbwd, fdfwd
+from .finite_diff import build_advection_matrix, fd_coeffs, fd_kwargs
 from .linalg import (
     TransposedLinearOperator,
     banded_mm,
@@ -32,6 +32,23 @@ from .velocity_grids import (
     MonoenergeticSpeedGrid,
     UniformPitchAngleGrid,
 )
+
+
+def _advection_matrices(x, p, bc_type, domain):
+    """Forward/backward advection matrices for stencil id ``p``.
+
+    Builds the matrices from the actual node coordinates ``x`` (so non-uniform
+    spacing is handled correctly), reproducing the uniform stencil ``p`` via the
+    ``fd_kwargs`` lookup.
+    """
+    kwargs = fd_kwargs[p]
+    fd = build_advection_matrix(
+        x, direction="fwd", bc_type=bc_type, domain=domain, **kwargs
+    )
+    bd = build_advection_matrix(
+        x, direction="bwd", bc_type=bc_type, domain=domain, **kwargs
+    )
+    return fd, bd
 
 
 def dkes_w_theta(
@@ -126,9 +143,9 @@ class MDKETheta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
-        f1 = jnp.ones(field.ntheta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.theta, p1, bc_type="periodic", domain=(0, 2 * np.pi)
+        )
         self._w = dkes_w_theta(field, pitchgrid, self.erhohat)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
@@ -292,9 +309,9 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        f1 = jnp.ones(field.nzeta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+        )
         self._w = dkes_w_zeta(field, pitchgrid, self.erhohat)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
@@ -458,9 +475,9 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.na
-        f1 = jnp.ones(pitchgrid.na)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="symmetric")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
+        self._fd, self._bd = _advection_matrices(
+            pitchgrid.a, p1, bc_type="symmetric", domain=(0, np.pi)
+        )
         self._w = dkes_w_pitch(field, pitchgrid)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
@@ -839,9 +856,9 @@ class DKETheta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
-        f1 = jnp.ones(field.ntheta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.theta, p1, bc_type="periodic", domain=(0, 2 * np.pi)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_theta(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
@@ -1136,9 +1153,9 @@ class DKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        f1 = jnp.ones(field.nzeta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_zeta(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
@@ -1431,9 +1448,9 @@ class DKEPitch(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.na
-        f1 = jnp.ones(pitchgrid.na)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="symmetric")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
+        self._fd, self._bd = _advection_matrices(
+            pitchgrid.a, p1, bc_type="symmetric", domain=(0, np.pi)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_pitch(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
