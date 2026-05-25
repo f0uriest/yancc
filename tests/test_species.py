@@ -21,6 +21,7 @@ from yancc.species import (
     gamma_ab,
     nuD_ab,
     nupar_ab,
+    rhostar,
 )
 
 
@@ -122,6 +123,47 @@ def test_global_maxwellian_localize_gradient():
     np.testing.assert_allclose(float(lm.dTdrho), dT_drho, rtol=1e-6)
 
 
+def test_global_maxwellian_v_thermal():
+    """GlobalMaxwellian.v_thermal matches sqrt(2 T / m) and the localized value."""
+    T0, n0 = 1000.0, 1e19
+    gm = GlobalMaxwellian(
+        Hydrogen,
+        temperature=lambda r: T0 * jnp.ones_like(r),
+        density=lambda r: n0 * jnp.ones_like(r),
+    )
+    expected = float(jnp.sqrt(2 * T0 * JOULE_PER_EV / Hydrogen.mass))
+    np.testing.assert_allclose(float(gm.v_thermal(0.5)), expected, rtol=1e-12)
+    # the global v_thermal at r should equal the localized Maxwellian's v_thermal
+    np.testing.assert_allclose(
+        float(gm.v_thermal(0.5)), float(gm.localize(0.5).v_thermal), rtol=1e-12
+    )
+
+
+def test_global_maxwellian_call_peaks_at_zero():
+    """GlobalMaxwellian(rho, v) peaks at v=0 and matches the analytic value there."""
+    T0, n0 = 1000.0, 1e19
+    gm = GlobalMaxwellian(
+        Hydrogen,
+        temperature=lambda r: T0 * jnp.ones_like(r),
+        density=lambda r: n0 * jnp.ones_like(r),
+    )
+    rho = 0.5
+    vth = float(gm.v_thermal(rho))
+    f0 = float(gm(rho, 0.0))
+    f1 = float(gm(rho, vth))
+    assert f0 > f1
+    expected0 = n0 / (np.sqrt(np.pi) * vth) ** 3
+    np.testing.assert_allclose(f0, expected0, rtol=1e-10)
+
+
+def test_rhostar_scales_linearly_with_x(hydrogen_maxwellian, field):
+    lm = hydrogen_maxwellian
+    r1 = float(rhostar(lm, field, 1.0))
+    r2 = float(rhostar(lm, field, 2.0))
+    assert r1 > 0
+    np.testing.assert_allclose(r2 / r1, 2.0, rtol=1e-10)
+
+
 def test_chandrasekhar_positive():
     xs = jnp.array([0.1, 0.5, 1.0, 2.0, 5.0])
     vals = chandrasekhar(xs)
@@ -204,7 +246,7 @@ def test_collisionality_increases_with_background(
 # ---------------------------------------------------------------------------
 # NRL formulary comparisons for coulomb_logarithm
 # ---------------------------------------------------------------------------
-# NRL Plasma Formulary 2019, p. 34. All formulas use n in cm^{-3}, T in eV.
+# NRL Plasma Formulary 2019, p. 34.
 # The NRL expressions are derived from ln(b_max/b_min) with specific choices
 # for the typical collision velocity; agreement within ~1–2 is expected.
 
@@ -290,10 +332,7 @@ def test_coulomb_logarithm_ii_nrl():
 # ---------------------------------------------------------------------------
 # NRL formulary comparisons for collisionality
 # ---------------------------------------------------------------------------
-# NRL Plasma Formulary 2019, p. 31. The NRL expressions are effective thermal
-# collision frequencies averaged over a Maxwellian; yancc evaluates nuD_ab at
-# a single speed v=v_th, so the ~20% prefactor difference is expected and
-# rtol=0.3 is the appropriate tolerance.
+# NRL Plasma Formulary 2019, p. 31.
 
 
 def _nrl_nuD_ee_slow(n_m3, T_eV, lnlambda, energy_eV):

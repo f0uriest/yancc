@@ -3,10 +3,13 @@ yancc
 
 Yet Another NeoClassical Code.
 
+``yancc`` solves the drift kinetic equation to compute neoclassical flows and transport
+fluxes in toroidal geometry (both tokamaks and stellarators).
+
 Installation
 ------------
 
-yancc is a pure-Python package built on `JAX <https://github.com/google/jax>`_
+``yancc`` is a pure-Python package built on `JAX <https://github.com/google/jax>`_
 and requires Python 3.10 or newer.
 
 From PyPI::

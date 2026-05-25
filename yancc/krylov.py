@@ -321,8 +321,8 @@ def _fgmres(
     if outer_v is None:
         assert lv is None, "if outer_v is None, lv must also be None"
         assert outer_Av is None, "if outer_v is None, outer_Av must also be None"
-        outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
-        outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
+        outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
+        outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
         lv = 0
 
     if lv is None:
@@ -336,7 +336,7 @@ def _fgmres(
 
     if C is None:
         assert lc is None, "if C is None, lc must also be None"
-        C = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
+        C = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
         lc = 0
     else:
         C = tree_map(jnp.asarray, C)
@@ -472,7 +472,7 @@ def gcrotmk(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
-) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
+) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
 
@@ -529,6 +529,9 @@ def gcrotmk(
         Number of matrix vector products.
     residual : float
         Residual of the linear system.
+    success : jax.Array
+        Boolean flag, True if the solver converged to the requested tolerance,
+        False if it hit ``maxiter`` first.
     C, U : pytree of jax.Array
         Matrices C and U in the GCROT(m,k) algorithm. For details, see [2]_.
 
@@ -599,10 +602,10 @@ def gcrotmk(
             flexible,
         )
 
-    x, (j_outer, nmv, res, C, U) = jax.lax.custom_linear_solve(
+    x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
     )
-    return x, j_outer, nmv, res, C, U
+    return x, j_outer, nmv, res, success, C, U
 
 
 def _gcrot_init_UC(
@@ -616,8 +619,8 @@ def _gcrot_init_UC(
     if U is None:
         assert C is None
         lc = jnp.array(0)
-        U = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-        C = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        U = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        C = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
     else:  # U provided
         U = tree_map(lambda x: jnp.atleast_2d(x.T).T, U)
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
@@ -807,11 +810,12 @@ def _gcrotmk_solve(
     carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
     j_outer, nmv, x, r, beta, C, U, _, _ = carry
+    success = beta <= tol
     # Include the solution vector to the span
     U = tree_map(_roll_prepend, U, x)
     C = tree_map(_roll_prepend, C, _sub(b, r))
 
-    return x, (j_outer, nmv, beta, C, U)
+    return x, (j_outer, nmv, beta, success, C, U)
 
 
 @eqx.filter_jit
@@ -834,7 +838,7 @@ def lgmres(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
-) -> tuple[PyTree[Array], int, int, Array, PyTree[Array], PyTree[Array]]:
+) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
 
@@ -898,6 +902,9 @@ def lgmres(
         Number of matrix vector products.
     residual : float
         Residual of the linear system.
+    success : jax.Array
+        Boolean flag, True if the solver converged to the requested tolerance,
+        False if it hit ``maxiter`` first.
     outer_v, outer_Av : pytree of jax.Array
         Vectors and corresponding matrix-vector products, used to augment the Krylov
         subspace, and carried between inner GMRES iterations.
@@ -979,10 +986,10 @@ def lgmres(
             flexible,
         )
 
-    x, (j_outer, nmv, res, outer_v, outer_Av) = jax.lax.custom_linear_solve(
+    x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
     )
-    return x, j_outer, nmv, res, outer_v, outer_Av
+    return x, j_outer, nmv, res, success, outer_v, outer_Av
 
 
 def _lgmres_solve(
@@ -1023,8 +1030,8 @@ def _lgmres_solve(
     if outer_v is None:
         assert outer_Av is None
         lv = 0
-        outer_v = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
     else:  # outer_v provided
         outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
         lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
@@ -1164,5 +1171,6 @@ def _lgmres_solve(
     carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor)
     carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
     j_outer, nmv, x, r, beta, outer_v, outer_Av, _, _ = carry
+    success = beta <= tol
 
-    return x, (j_outer, nmv, beta, outer_v, outer_Av)
+    return x, (j_outer, nmv, beta, success, outer_v, outer_Av)

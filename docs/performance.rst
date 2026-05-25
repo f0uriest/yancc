@@ -194,7 +194,7 @@ Other tips
   via ``from_vmec`` / ``from_booz_xform``) reads the file from disk and does
   Fourier work; build it once per surface and pass it to as many solves as
   you need.
-- **Check that your gradients are in :math:`\rho`.** A wrong factor of
+- **Check that your gradients are in** :math:`\rho`. A wrong factor of
   ``a_minor`` in ``dndrho`` / ``dTdrho`` will not produce an error — the
   solve will succeed and the fluxes will silently be wrong by the same
   factor. See :ref:`radial-coordinate` in the quickstart.

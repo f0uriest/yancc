@@ -770,3 +770,40 @@ def test_background_species(field, pitchgrid, speedgrid, species2, gauge, weight
     Aboth_e = Aboth[n:, n:]
     np.testing.assert_allclose(Ai, Aboth_i)
     np.testing.assert_allclose(Ae, Aboth_e)
+
+
+# ---------------------------------------------------------------------------
+# operator protocol sweep: out_structure / in_structure / transpose
+# ---------------------------------------------------------------------------
+
+
+def _check_transpose_protocol(op):
+    """Square in/out structures; transpose materializes/acts as the matrix transpose."""
+    assert op.out_structure() == op.in_structure()
+    opT = op.transpose()
+    assert opT.in_structure() == op.out_structure()
+    assert opT.out_structure() == op.in_structure()
+    M = op.as_matrix()
+    # TransposedLinearOperator.as_matrix is defined as operator.as_matrix().T
+    np.testing.assert_allclose(opT.as_matrix(), M.T)
+    # the transpose action (via jax.linear_transpose) matches M.T @ v
+    rng = np.random.default_rng(0)
+    v = jnp.asarray(rng.standard_normal(M.shape[0]))
+    ref = M.T @ v
+    np.testing.assert_allclose(
+        opT.mv(v), ref, rtol=1e-6, atol=1e-6 * np.max(np.abs(np.asarray(ref)))
+    )
+
+
+@pytest.mark.parametrize("cls", ["MDKETheta", "MDKEZeta", "MDKEPitch"])
+def test_mdke_operator_transpose_protocol(cls, field, pitchgrid):
+    op = getattr(trajectories, cls)(field, pitchgrid, np.array(1e3))
+    _check_transpose_protocol(op)
+
+
+@pytest.mark.parametrize("cls", ["DKETheta", "DKEZeta", "DKEPitch", "DKESpeed"])
+def test_dke_operator_transpose_protocol(cls, field, pitchgrid, speedgrid, species2):
+    op = getattr(trajectories, cls)(
+        field, pitchgrid, speedgrid, species2, np.array(1e3)
+    )
+    _check_transpose_protocol(op)

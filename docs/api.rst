@@ -2,8 +2,6 @@
 API Documentation
 =================
 
-.. currentmodule:: yancc
-
 Solving the Drift Kinetic Equation
 ----------------------------------
 
@@ -11,8 +9,8 @@ Solving the Drift Kinetic Equation
     :toctree: _api/
     :recursive:
 
-    solve.solve_dke     -- Solve the standard drift kinetic equation.
-    solve.solve_mdke    -- Solve the monoenergetic drift kinetic equation.
+    yancc.solve.solve_dke     -- Solve the standard drift kinetic equation.
+    yancc.solve.solve_mdke    -- Solve the monoenergetic drift kinetic equation.
 
 Fields and Velocity Grids
 -------------------------
@@ -21,9 +19,9 @@ Fields and Velocity Grids
     :toctree: _api/
     :recursive:
 
-    field.Field                             -- Magnetic field on a flux surface.
-    velocity_grids.MaxwellSpeedGrid         -- Collocation grid for speed coordinate based on Maxwell polynomials.
-    velocity_grids.UniformPitchAngleGrid    -- Finite difference grid with uniform spacing for pitch angle coordinate.
+    yancc.field.Field                             -- Magnetic field on a flux surface.
+    yancc.velocity_grids.MaxwellSpeedGrid         -- Collocation grid for speed coordinate based on Maxwell polynomials.
+    yancc.velocity_grids.UniformPitchAngleGrid    -- Finite difference grid with uniform spacing for pitch angle coordinate.
 
 Species
 -------
@@ -32,48 +30,55 @@ Species
     :toctree: _api/
     :recursive:
 
-    species.Species         -- Atomic species of arbitrary charge and mass.
-    species.LocalMaxwellian -- Local Maxwellian distribution function on a single surface.
-    species.GlobalMaxwellian -- Global Maxwellian distribution function over radius.
+    yancc.species.Species         -- Atomic species of arbitrary charge and mass.
+    yancc.species.LocalMaxwellian -- Local Maxwellian distribution function on a single surface.
+    yancc.species.GlobalMaxwellian -- Global Maxwellian distribution function over radius.
 
-Predefined :class:`~yancc.species.Species` instances for common isotopes:
+Predefined :class:`yancc.species.Species` instances for common isotopes:
 
-.. autodata:: yancc.species.Electron
-   :no-value:
-.. autodata:: yancc.species.Hydrogen
-   :no-value:
-.. autodata:: yancc.species.Deuterium
-   :no-value:
-.. autodata:: yancc.species.Tritium
-   :no-value:
-.. autodata:: yancc.species.Helium4
-   :no-value:
-.. autodata:: yancc.species.Helium
-   :no-value:
-.. autodata:: yancc.species.Lithium6
-   :no-value:
-.. autodata:: yancc.species.Lithium7
-   :no-value:
-.. autodata:: yancc.species.Lithium
-   :no-value:
-.. autodata:: yancc.species.Beryllium9
-   :no-value:
-.. autodata:: yancc.species.Beryllium
-   :no-value:
-.. autodata:: yancc.species.Boron10
-   :no-value:
-.. autodata:: yancc.species.Boron11
-   :no-value:
-.. autodata:: yancc.species.Boron
-   :no-value:
-.. autodata:: yancc.species.Nitrogen14
-   :no-value:
-.. autodata:: yancc.species.Nitrogen
-   :no-value:
-.. autodata:: yancc.species.Oxygen16
-   :no-value:
-.. autodata:: yancc.species.Oxygen
-   :no-value:
+.. list-table::
+   :header-rows: 1
+   :widths: auto
+
+   * - Name
+     - Mass (mp)
+     - Charge (e)
+   * - :data:`yancc.species.Electron`
+     - 1/1836.15
+     - -1
+   * - :data:`yancc.species.Hydrogen`
+     - 1
+     - 1
+   * - :data:`yancc.species.Deuterium`
+     - 2
+     - 1
+   * - :data:`yancc.species.Tritium`
+     - 3
+     - 1
+   * - :data:`yancc.species.Helium4` (alias :data:`yancc.species.Helium`)
+     - 4
+     - 2
+   * - :data:`yancc.species.Lithium6`
+     - 6
+     - 3
+   * - :data:`yancc.species.Lithium7` (alias :data:`yancc.species.Lithium`)
+     - 7
+     - 3
+   * - :data:`yancc.species.Beryllium9` (alias :data:`yancc.species.Beryllium`)
+     - 9
+     - 4
+   * - :data:`yancc.species.Boron10`
+     - 10
+     - 5
+   * - :data:`yancc.species.Boron11` (alias :data:`yancc.species.Boron`)
+     - 11
+     - 5
+   * - :data:`yancc.species.Nitrogen14` (alias :data:`yancc.species.Nitrogen`)
+     - 14
+     - 7
+   * - :data:`yancc.species.Oxygen16` (alias :data:`yancc.species.Oxygen`)
+     - 16
+     - 8
 
 Solution Objects
 ----------------
@@ -82,5 +87,5 @@ Solution Objects
     :toctree: _api/
     :recursive:
 
-    solution.DKESolution    -- Solution returned by ``solve_dke``.
-    solution.MDKESolution   -- Solution returned by ``solve_mdke``.
+    yancc.solution.DKESolution    -- Solution returned by ``solve_dke``.
+    yancc.solution.MDKESolution   -- Solution returned by ``solve_mdke``.

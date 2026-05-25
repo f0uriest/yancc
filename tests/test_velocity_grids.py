@@ -10,6 +10,7 @@ import scipy.integrate
 
 from yancc.misc import _d3v
 from yancc.velocity_grids import (
+    LegendrePitchAngleGrid,
     MaxwellSpeedGrid,
     NonUniformPitchAngleGrid,
     QuadraticPitchAngleGrid,
@@ -160,6 +161,44 @@ def test_nonuniform_pitch_identity_map():
     a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
     np.testing.assert_allclose(grid.a, a)
     np.testing.assert_allclose(grid.xi, -jnp.cos(a))
+
+
+def test_maxwell_speed_grid_resample():
+    """resample() should give a fresh grid of the requested size, and the
+    high-nx branch (which builds its own recurrence rather than using the
+    tabulated default) should still produce a valid quadrature.
+    """
+    g_lo = MaxwellSpeedGrid(8)
+    assert g_lo.nx == 8
+    g_hi = g_lo.resample(24)  # crosses the nx==20 threshold -> generate_recurrence
+    assert g_hi.nx == 24
+    assert g_hi.x.shape == (24,)
+    assert g_hi.gauge_idx.shape == (2,)
+
+    # Verify the high-nx grid still integrates a known function correctly.
+    weight = g_hi.xrec.weight
+    p = np.random.default_rng(0).random(24)
+
+    def foo(x):
+        return weight(x) * orthax.orthval(x, p, g_hi.xrec)
+
+    np.testing.assert_allclose(
+        quadax.quadgk(foo, jnp.array((0, np.inf)))[0],
+        (foo(g_hi.x) * g_hi.wx).sum(),
+        rtol=1e-6,
+    )
+
+
+def test_legendre_pitch_grid_resample():
+    """LegendrePitchAngleGrid.resample returns a fresh grid of the
+    requested size.
+    """
+    g = LegendrePitchAngleGrid(6)
+    assert g.na == 6
+    g2 = g.resample(10)
+    assert isinstance(g2, LegendrePitchAngleGrid)
+    assert g2.na == 10
+    assert g2.xi.shape == (10,)
 
 
 def test_velocity_integral(speedgrid, pitchgrid, species1):

@@ -25,6 +25,25 @@ def crop2(a, b):
     return a, b
 
 
+@pytest.mark.parametrize("gs_method", ["cgs", "cgs2", "mgs"])
+def test_fgmres_gs_methods(gs_method):
+    """All three Gram-Schmidt variants should produce same Krylov basis."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n)) + n * np.eye(n)  # diagonally-dominant for stability
+    A = lx.MatrixLinearOperator(jnp.array(A))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+
+    m, k = 10, 5
+    _, _, _, Z, y, _, _, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=0.0, C=None, lc=None, gs_method=gs_method
+    )
+    # Z = V when no right preconditioner; reconstruct x and verify residual.
+    x = Z @ y
+    np.testing.assert_allclose(A.mv(x), b, atol=1e-8)
+
+
 def test_fgmres():
     """Test that FGMRES is equivalent to scipy."""
     n = 20
@@ -347,7 +366,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False, flexible=flexible
     )
 
@@ -370,7 +389,7 @@ def test_gcrotmk(flexible):
         np.array(A.matrix), b, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
     )
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         rtol=tol,
@@ -406,7 +425,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         rtol=tol,
@@ -438,7 +457,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         x0=x2,
@@ -478,7 +497,7 @@ def test_gcrotmk(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
 
-    x2, _, _, _, C2, U2 = gcrotmk(
+    x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         x0=x2,
@@ -527,7 +546,7 @@ def test_lgmres(flexible):
     V1 = np.array([v for (v, Av) in outer_v])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False, flexible=flexible
     )
 
@@ -553,7 +572,7 @@ def test_lgmres(flexible):
     V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
         A,
         b,
         rtol=tol,
@@ -590,7 +609,7 @@ def test_lgmres(flexible):
     V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
-    x2, j_outer, nmv, beta, V2, A2 = lgmres(
+    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
         A,
         b,
         rtol=tol,
@@ -628,11 +647,11 @@ def test_left_right_preconditioner(flexible):
     maxiter = 10
     tol = 1e-5
 
-    x1, j1, nmv1, beta1, _, _ = lgmres(
+    x1, j1, nmv1, beta1, _, _, _ = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M, flexible=flexible
     )
 
-    x2, j2, nmv2, beta2, _, _ = lgmres(
+    x2, j2, nmv2, beta2, _, _, _ = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M, flexible=flexible
     )
 
@@ -645,17 +664,88 @@ def test_left_right_preconditioner(flexible):
     maxiter = 10
     tol = 1e-5
 
-    x1, j1, nmv1, beta1, _, _ = gcrotmk(
+    x1, j1, nmv1, beta1, _, _, _ = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M, flexible=flexible
     )
 
-    x2, j2, nmv2, beta2, _, _ = gcrotmk(
+    x2, j2, nmv2, beta2, _, _, _ = gcrotmk(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M, flexible=flexible
     )
 
     assert beta1 / np.linalg.norm(b) < tol
     assert beta2 / np.linalg.norm(b) < tol
     np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
+
+
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres])
+def test_complex_system(solver):
+    """Solve a complex-valued ``A x = b`` end to end."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
+    Aop = lx.MatrixLinearOperator(jnp.array(A))
+    b = rng.random(n) + 1j * rng.random(n)
+    x_true = np.linalg.solve(A, b)
+
+    x, _, _, _, _, _, _ = solver(
+        Aop, jnp.array(b), rtol=1e-10, maxiter=50, m=20, k=5, refine=False
+    )
+    np.testing.assert_allclose(np.asarray(x), x_true, rtol=1e-6, atol=1e-7)
+
+
+def test_fgmres_optional_defaults():
+    """FGMRES derives lv, outer_Av from outer_v, lc from C when they are None."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k = 7, 5
+
+    # outer_v given, lv and outer_Av defaulted (computed internally).
+    outer_v = rng.random((n, 3))
+    outer_Av = jax.vmap(A.mv, in_axes=1, out_axes=1)(outer_v)
+    out_def = _fgmres(A.mv, b, m=m, k=k, atol=0.0, outer_v=outer_v)
+    out_exp = _fgmres(
+        A.mv, b, m=m, k=k, atol=0.0, outer_v=outer_v, outer_Av=outer_Av, lv=3
+    )
+    for a, c in zip(out_def[:5], out_exp[:5]):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(c), rtol=1e-10)
+
+    # C given, lc defaulted (derived from C column count).
+    C = np.linalg.qr(rng.random((n, 3)))[0]  # orthonormal columns
+    out_def = _fgmres(A.mv, b, m=m, k=k, atol=0.0, C=C)
+    out_exp = _fgmres(A.mv, b, m=m, k=k, atol=0.0, C=C, lc=3)
+    for a, c in zip(out_def[:5], out_exp[:5]):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(c), rtol=1e-10)
+
+
+def test_gcrotmk_optional_defaults():
+    """GCROT with U supplied but C=None recomputes C = AU, k=None defaults to m."""
+    n = 20
+    rng = np.random.default_rng(1)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = rng.random(n)
+    U = rng.random((n, 2))
+
+    # k=None -> k=m
+    x, _, _, _, _, _, _ = gcrotmk(A, b, rtol=1e-10, maxiter=30, m=5, U=U)
+    np.testing.assert_allclose(np.asarray(A.mv(x)), b, rtol=1e-6, atol=1e-7)
+
+
+def test_lgmres_optional_defaults():
+    """LGMRES with explicit x0 and verbose=True,
+    exercising the print branches in the solve loop.
+    """
+    n = 20
+    rng = np.random.default_rng(2)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = rng.random(n)
+
+    x, _, _, _, _, _, _ = lgmres(
+        A, b, x0=jnp.zeros(n), rtol=1e-10, maxiter=30, m=5, k=3, verbose=True
+    )
+    np.testing.assert_allclose(np.asarray(A.mv(x)), b, rtol=1e-6, atol=1e-7)
 
 
 @pytest.mark.parametrize("flexible", [True, False])
@@ -675,7 +765,7 @@ def test_krylov_autodiff(flexible):
         A = get_A(x)
         bx = b * x
         M = InverseLinearOperator(A)
-        y, _, _, res, _, _ = gcrotmk(
+        y, _, _, res, _, _, _ = gcrotmk(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
         y = eqx.error_if(y, res > 1e-5, "didn't converge")
@@ -685,7 +775,9 @@ def test_krylov_autodiff(flexible):
         A = get_A(x)
         bx = b * x
         M = InverseLinearOperator(A)
-        y, _, _, res, _, _ = lgmres(A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible)
+        y, _, _, res, _, _, _ = lgmres(
+            A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
+        )
         y = eqx.error_if(y, res > 1e-5, "didn't converge")
         return jnp.dot(c, y)
 

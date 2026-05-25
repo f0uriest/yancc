@@ -546,7 +546,7 @@ class Field(eqx.Module):
     def Bxgradrhodotgrad(
         self, f: Float[Array, "ntheta nzeta"]
     ) -> Float[Array, "ntheta nzeta"]:
-        """𝐁 × ∇ ψ ⋅ ∇ f."""
+        """𝐁 × ∇ ρ ⋅ ∇ f."""
         return (
             self.B_sub_z * self._dfdt(f) - self.B_sub_t * self._dfdz(f)
         ) / self.sqrtg

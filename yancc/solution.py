@@ -1,5 +1,7 @@
 """Solution objects and computation of output moments."""
 
+import re
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -13,6 +15,41 @@ from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 MDKE_OUTPUTS = {}
 DKE_OUTPUTS = {}
+
+DKE_DEFAULT_OUTPUT_QTYS = (
+    "<heat_flux>",
+    "<particle_flux>",
+    "<V||B>",
+    "<J||B>",
+    "J_rho",
+)
+
+_SUPERSCRIPT_DIGITS = str.maketrans("0123456789-+=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺⁼⁽⁾")
+
+
+def clean_units(s: str) -> str:
+    r"""Render a LaTeX units string from ``DKE_OUTPUTS`` as plain unicode.
+
+    For example ``"kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}"`` becomes
+    ``"kg·m⁻¹·s⁻³ = W·m⁻³"``. Returns the empty string for ``"None"`` or empty
+    input.
+    """
+    if not s or s == "None":
+        return ""
+    out = s.replace("\\cdot", "·")
+    out = re.sub(r"\\mathrm\{([^}]*)\}", r"\1", out)
+    out = re.sub(
+        r"\^\{([^}]*)\}",
+        lambda m: m.group(1).translate(_SUPERSCRIPT_DIGITS),
+        out,
+    )
+    out = re.sub(
+        r"\^(-?\d)",
+        lambda m: m.group(1).translate(_SUPERSCRIPT_DIGITS),
+        out,
+    )
+    out = re.sub(r"\s*·\s*", "·", out)
+    return out.strip()
 
 
 def register_mdke_output(name, label, units, description, dim):
@@ -84,8 +121,10 @@ class DKESolution(eqx.Module):
 
     Attributes
     ----------
-    f : jax.Array, shape (ns, nx, na, nt, nz)
-        Solution of the DKE.
+    F0 : jax.Array, shape (ns, nx, 1, 1, 1)
+        Maxwellian background distribution, broadcastable against ``f1``.
+    f1 : jax.Array, shape (ns, nx, na, nt, nz)
+        Perturbation solved for by the DKE.
     rhs : jax.Array, shape (ns, nx, na, nt, nz)
         Drive terms for DKE
     field : Field
@@ -105,7 +144,8 @@ class DKESolution(eqx.Module):
         solving for df.
     """
 
-    f: jax.Array
+    F0: jax.Array
+    f1: jax.Array
     rhs: jax.Array
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -119,7 +159,8 @@ class DKESolution(eqx.Module):
 
     def __init__(
         self,
-        f: jax.Array,
+        F0: jax.Array,
+        f1: jax.Array,
         rhs: jax.Array,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
@@ -129,21 +170,23 @@ class DKESolution(eqx.Module):
         EparB: jax.Array,
         background: list[LocalMaxwellian],
     ):
-        shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
-        f = f.flatten()
+        ns = len(species)
+        shape = (ns, speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
         N = np.prod(shape)
-        if f.size == N:
-            f = f.reshape(shape)
-            particle_source = jnp.full(len(species), jnp.nan)
-            heat_source = jnp.full(len(species), jnp.nan)
-        elif f.size == N + 2 * len(species):
-            heat_source = f[-len(species) :]
-            particle_source = f[-2 * len(species) : -len(species)]
-            f = f[:N].reshape(shape)
+        f1 = f1.flatten()
+        if f1.size == N:
+            f1 = f1.reshape(shape)
+            particle_source = jnp.full(ns, jnp.nan)
+            heat_source = jnp.full(ns, jnp.nan)
+        elif f1.size == N + 2 * ns:
+            heat_source = f1[-ns:]
+            particle_source = f1[-2 * ns : -ns]
+            f1 = f1[:N].reshape(shape)
         else:
-            raise ValueError("got wrong size for f")
+            raise ValueError("got wrong size for f1")
 
-        self.f = f
+        self.F0 = jnp.asarray(F0).reshape(ns, speedgrid.nx, 1, 1, 1)
+        self.f1 = f1
         self.rhs = rhs.flatten()[:N].reshape(shape)
         self._particle_source = particle_source
         self._heat_source = heat_source
@@ -154,6 +197,11 @@ class DKESolution(eqx.Module):
         self.background = background
         self.Erho = Erho
         self.EparB = EparB
+
+    @property
+    def f(self) -> jax.Array:
+        """Full distribution function ``F0 + f1``."""
+        return self.F0 + self.f1
 
     def get(self, qty, **kwargs):
         """Compute desired moments of the solution.
@@ -176,6 +224,27 @@ class DKESolution(eqx.Module):
     def qtys_list(self) -> list[str]:
         """List of all computable output quantities."""
         return list(DKE_OUTPUTS.keys())
+
+    def print_summary(self, qtys: tuple[str, ...] = DKE_DEFAULT_OUTPUT_QTYS) -> None:
+        """Print headline output moments with units.
+
+        Per-species quantities (shape ``(ns,)``) render as
+        ``[ v0 v1 ... ] (per species, units)``; scalar quantities (sums over
+        species, e.g. ``<J||B>`` and ``J_rho``) render as ``v (units)``.
+        """
+        ns = len(self.species)
+        width = max(len(q) for q in qtys)
+        for qty in qtys:
+            vals = self.get(qty)
+            units = clean_units(DKE_OUTPUTS[qty].get("units", ""))
+            if jnp.ndim(vals) == 0:
+                suffix = f" ({units})" if units else ""
+                s = f"{qty:<{width}s}: " + "{: .3e}" + suffix
+                jax.debug.print(s, vals, ordered=True)
+            else:
+                suffix = f" (per species, {units})" if units else " (per species)"
+                s = f"{qty:<{width}s}: [" + "{: .3e} " * ns + "]" + suffix
+                jax.debug.print(s, *vals, ordered=True)
 
 
 class MDKESolution(eqx.Module):
@@ -388,7 +457,7 @@ def _dke_VparB(sol, **kwargs):
 def _dke_bootstrap_current(sol, **kwargs):
     ns = jnp.array([sp.density for sp in sol.species])
     qs = jnp.array([sp.species.charge for sp in sol.species])
-    BVpar = sol.get("V||B")
+    BVpar = sol.get("<V||B>")
     bootstrap_current = ns * qs * BVpar
     bootstrap_current = bootstrap_current.sum(axis=(-1))
     return bootstrap_current

@@ -194,15 +194,6 @@ def get_dke_jacobi2_smoothers(
     return smoothers
 
 
-def _half_next_even(k: int, m: Union[int, float] = 2):
-    if int(k // m) == 0:
-        return 2
-    elif int(k // m) % 2 == 0:
-        return int(k // m)
-    else:
-        return int(k // m + 1)
-
-
 def _half_next_odd(k: int, m: Union[int, float] = 2):
     if int(k // m) == 0:
         return 1
@@ -252,7 +243,7 @@ def get_grid_resolutions(
     if coarsening_factor is not None and max_grids is not None:
         raise ValueError("Cannot specify both coarsening_factor and max_grids")
     elif coarsening_factor is None and max_grids is None:
-        coarsening_factor = 2
+        coarsening_factor = 2.5
         max_grids = int(
             np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
         )
@@ -397,9 +388,6 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     mv after smoothing. Pass r0 if the initial residual is known cheaply (e.g.,
     r0=rhs when x is zero) to skip the initial residual mv.
     """
-    if not isinstance(smoothers, (tuple, list)):
-        smoothers = [smoothers]
-
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
@@ -432,9 +420,6 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
     residual mv (e.g., r0=rhs when x is zero).
     """
-    if not isinstance(smoothers, (tuple, list)):
-        smoothers = [smoothers]
-
     if r0 is None:
         r0 = rhs - operator.mv(x)
     res0 = res1 = jnp.linalg.norm(r0)
@@ -478,9 +463,6 @@ def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
     Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
     residual mv (e.g., r0=rhs when x is zero).
     """
-    if not isinstance(smoothers, (tuple, list)):
-        smoothers = [smoothers]
-
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
@@ -531,9 +513,6 @@ def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
     residual mv (e.g., r0=rhs when x is zero).
     """
-    if not isinstance(smoothers, (tuple, list)):
-        smoothers = [smoothers]
-
     L = DKELaplacian(
         operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
     )
@@ -588,9 +567,6 @@ def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
     Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
     residual mv (e.g., r0=rhs when x is zero).
     """
-    if not isinstance(smoothers, (tuple, list)):
-        smoothers = [smoothers]
-
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
@@ -634,9 +610,6 @@ def krylov2s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     Returns (x, r) with r = rhs - operator.mv(x). Pass r0 to skip the initial
     residual mv (e.g., r0=rhs when x is zero).
     """
-    if not isinstance(smoothers, (tuple, list)):
-        smoothers = [smoothers]
-
     L = DKELaplacian(
         operator.field, operator.pitchgrid, operator.speedgrid, operator.species, True
     )
@@ -713,8 +686,7 @@ class Prolongation(lx.AbstractLinearOperator):
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
     method : str
-        Interpolation method. ``"linear"`` is implemented as a dense matrix;
-        anything else is passed to ``interpax.interp1d``.
+        Interpolation method. Passed to ``interpax.interp1d``.
     """
 
     field_coarse: Field

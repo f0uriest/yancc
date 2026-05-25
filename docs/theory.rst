@@ -12,7 +12,7 @@ magnetic equilibrium:
 
 - The **drift kinetic equation** (DKE), linearized about a local Maxwellian,
   for one or more species coupled through their collision operators. This
-  gives the perturbed distribution function :math:`f_s` from which radial
+  gives the perturbed distribution function :math:`f_{1,s}` from which radial
   fluxes, parallel flows, and the bootstrap current follow. The formulation
   is the same as in SFINCS [3]_.
 - The **monoenergetic drift kinetic equation** (MDKE), a single-species
@@ -225,7 +225,7 @@ by DKES [4]_ and used by MONKES [5]_:
           \left[ \sin a \frac{\partial f_1}{\partial a} \right]
     \;=\; S.
 
-After dividing through by :math:`v`, only two scalar drives remain:
+After dividing through by :math:`v`, only two scalar parameters remain:
 
 .. math::
 

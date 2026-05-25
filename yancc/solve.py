@@ -122,6 +122,8 @@ def solve_mdke(
         verbose=verbose,
         **multigrid_options,
     )
+    if verbose:
+        M.print_resolution_summary()
     flexible = not _preconditioner_is_linear(M)
     A = MDKE(
         field,
@@ -136,7 +138,7 @@ def solve_mdke(
 
     if f1 is None:
         f1 = jnp.zeros_like(rhs[:, 0])
-    f1, j1, nmv1, res1, C1, U1 = gcrotmk(
+    f1, j1, nmv1, res1, success1, C1, U1 = gcrotmk(
         A,
         rhs[:, 0],
         x0=f1,
@@ -153,7 +155,7 @@ def solve_mdke(
     )
     if f2 is None:
         f2 = jnp.zeros_like(rhs[:, 0])
-    f2, j2, nmv2, res2, C2, U2 = gcrotmk(
+    f2, j2, nmv2, res2, success2, C2, U2 = gcrotmk(
         A,
         rhs[:, 2],
         x0=f2,
@@ -172,9 +174,11 @@ def solve_mdke(
         "j1": j1,
         "nmv1": nmv1,
         "res1": res1 / jnp.linalg.norm(rhs[:, 0]),
+        "success1": success1,
         "j2": j2,
         "nmv2": nmv2,
         "res2": res2 / jnp.linalg.norm(rhs[:, 2]),
+        "success2": success2,
         "U1": U1,
         "C1": C1,
         "U2": U2,
@@ -320,7 +324,7 @@ def solve_dke(  # noqa: C901
         M = DKEPreconditioner(**multigrid_options)
 
     if verbose and not skip_init_print:
-        _print_dke_resolutions(M)
+        M.print_resolution_summary()
 
     if B is None:
         B = DKESources(field, pitchgrid, speedgrid, species)
@@ -357,7 +361,7 @@ def solve_dke(  # noqa: C901
         assert f1.size == size
         f1 = jnp.pad(f1, [(0, 2 * len(species))])
 
-    f1, j1, nmv1, res1, C1, U1 = gcrotmk(
+    f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
         rhs,
         x0=f1,
@@ -376,6 +380,7 @@ def solve_dke(  # noqa: C901
         "niter": j1,
         "nmv": nmv1,
         "res": res1 / jnp.linalg.norm(rhs),
+        "success": success,
         "C": C1[:size],
         "U": U1[:size],
     }
@@ -389,16 +394,11 @@ def solve_dke(  # noqa: C901
         )
 
     F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
-    F0 = jnp.broadcast_to(
-        F0[:, :, None, None, None],
-        F0.shape + (pitchgrid.na, field.ntheta, field.nzeta),
-    )
-    F0 = jnp.concatenate([F0.flatten(), jnp.zeros(2 * len(species))])
-
-    f = F0 + f1
+    F0 = F0[:, :, None, None, None]
 
     sol = DKESolution(
-        f=f,
+        F0=F0,
+        f1=f1,
         rhs=rhs,
         field=field,
         pitchgrid=pitchgrid,
@@ -408,6 +408,9 @@ def solve_dke(  # noqa: C901
         EparB=EparB,
         background=background,
     )
+
+    if verbose:
+        sol.print_summary()
 
     return (
         sol,
@@ -461,23 +464,6 @@ def _print_thermodynamic_forces(species, field, Erho, EparB):
     jax.debug.print(s, *forces[1], ordered=True)
     s = "A₃: [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *forces[2], ordered=True)
-
-
-def _print_dke_resolutions(preconditioner):
-    for i, op in enumerate(preconditioner.operators):
-        ns = len(op.species)
-        nx = op.speedgrid.nx
-        na = op.pitchgrid.na
-        nt = op.field.ntheta
-        nz = op.field.nzeta
-        jax.debug.print(
-            f"Grid {i}: nx={nx:4d}, "
-            f"na={na:4d}, "
-            f"nt={nt:4d}, "
-            f"nz={nz:4d}, "
-            f"N={ns*nx*na*nt*nz:,d}",
-            ordered=True,
-        )
 
 
 def _print_field_summary(field: Field) -> None:
