@@ -28,6 +28,9 @@ fd_coeffs = {
         "2d": jnp.array(  # optimized, d=0.88
             [0, 0, 0, 0, -5 / 4, 4 / 3, 0, 0, -1 / 12]
         ),
+        "2e": jnp.array([0, 0, 0, -4 / 5, 3 / 4, 0, 0, 0, 1 / 20]),  # optimized, d=0.88
+        "2f": jnp.array([0, 0, -3 / 4, 2 / 3, 0, 0, 1 / 12]),  # optimized, d=0.80
+        "2g": jnp.array([0, 0, 0, -4 / 3, 3 / 2, 0, -1 / 6]),  # optimized, d=0.80
         "2z": jnp.array([-1 / 2, 0, 1 / 2]),  # centered, bad
         "3a": jnp.array([0, 0, 0, -11 / 6, 3, -3 / 2, 1 / 3]),
         "3b": jnp.array([0, -1 / 3, -1 / 2, 1, -1 / 6]),  # CUI
@@ -35,11 +38,20 @@ fd_coeffs = {
             [1 / 12 - y3c, -2 / 3 + 4 * y3c, -6 * y3c, 2 / 3 + 4 * y3c, -1 / 12 - y3c]
         ),
         "3d": jnp.array([0, -1 / 10, 0, -5 / 6, 1, 0, -1 / 15]),  # optimized, d=0.71
+        "3e": jnp.array(
+            [0, 2 / 21, 0, -6 / 5, 13 / 12, 0, 0, 0, 3 / 140]
+        ),  # optimized, d=0.82
+        "3f": jnp.array(
+            [0, -1 / 21, 0, 0, -11 / 12, 1, 0, 0, -1 / 28]
+        ),  # optimized, d=0.84
         "4a": jnp.array([0, 0, 0, 0, -25 / 12, 4, -3, 4 / 3, -1 / 4]),
         "4b": jnp.array([0, 0, -1 / 4, -5 / 6, 3 / 2, -1 / 2, 1 / 12]),
         "4d": jnp.array(  # optimized, d=0.62
             [0, 0, -1 / 15, 0, -13 / 12, 4 / 3, 0, -4 / 15, 1 / 12]
         ),
+        "4e": jnp.array(
+            [0, 0, 1 / 6, -16 / 15, 3 / 4, 0, 1 / 6, 0, -1 / 60]
+        ),  # optimized, d=0.52
         "4z": jnp.array([1 / 12, -2 / 3, 0, 2 / 3, -1 / 12]),  # centered, bad
         "5a": jnp.array([0, 0, 0, 0, 0, -137 / 60, 5, -5, 10 / 3, -5 / 4, 1 / 5]),
         "5b": jnp.array([0, 1 / 20, -1 / 2, -1 / 3, 1, -1 / 4, 1 / 30]),
@@ -57,9 +69,18 @@ fd_coeffs = {
         "5d": jnp.array(  # optimized, d=0.53
             [0, 1 / 21, -1 / 5, 0, -3 / 4, 1 / 1, 0, -2 / 15, 1 / 28]
         ),
+        "5e": jnp.array(
+            [0, 4 / 105, -1 / 6, 0, -11 / 12, 4 / 3, -3 / 10, 0, 1 / 84]
+        ),  # optimized, d=0.49
         "6a": jnp.array(
             [0, 0, 0, 0, 0, 0, -49 / 20, 6, -15 / 2, 20 / 3, -15 / 4, 6 / 5, -1 / 6]
         ),
+        "6b": jnp.array(
+            [0, -5 / 168, 5 / 42, 0, -1, 4 / 5, 0, 0, 5 / 21, -9 / 56, 1 / 30]
+        ),  # optimized, d=0.50
+        "6c": jnp.array(
+            [0, -5 / 648, 0, 5 / 21, -32 / 27, 4 / 5, 0, 5 / 27, 0, -1 / 24, 32 / 2835]
+        ),  # optimized, d=0.48
         "6z": jnp.array(  # centered, bad
             [-1 / 60, 3 / 20, -3 / 4, 0, 3 / 4, -3 / 20, 1 / 60]
         ),
@@ -128,6 +149,18 @@ fd_kwargs = {
         "stencil": jnp.array([0, 1, 4]),
         "order": 2,
     },
+    "2e": {
+        "stencil": jnp.array([-1, 0, 4]),
+        "order": 2,
+    },
+    "2f": {
+        "stencil": jnp.array([-1, 0, 3]),
+        "order": 2,
+    },
+    "2g": {
+        "stencil": jnp.array([0, 1, 3]),
+        "order": 2,
+    },
     "2z": {
         "stencil": jnp.array([-1, 0, 1]),
         "order": 2,
@@ -148,6 +181,14 @@ fd_kwargs = {
         "stencil": jnp.array([-2, 0, 1, 3]),
         "order": 3,
     },
+    "3e": {
+        "stencil": jnp.array([-3, -1, 0, 4]),
+        "order": 3,
+    },
+    "3f": {
+        "stencil": jnp.array([-3, 0, 1, 4]),
+        "order": 3,
+    },
     "4a": {
         "stencil": jnp.array([0, 1, 2, 3, 4]),
         "order": 4,
@@ -158,6 +199,10 @@ fd_kwargs = {
     },
     "4d": {
         "stencil": jnp.array([-2, 0, 1, 3, 4]),
+        "order": 4,
+    },
+    "4e": {
+        "stencil": jnp.array([-2, -1, 0, 2, 4]),
         "order": 4,
     },
     "5a": {
@@ -180,8 +225,20 @@ fd_kwargs = {
         "stencil": jnp.array([-3, -2, 0, 1, 3, 4]),
         "order": 5,
     },
+    "5e": {
+        "stencil": jnp.array([-3, -2, 0, 1, 2, 4]),
+        "order": 5,
+    },
     "6a": {
         "stencil": jnp.array([0, 1, 2, 3, 4, 5, 6]),
+        "order": 6,
+    },
+    "6b": {
+        "stencil": jnp.array([-4, -3, -1, 0, 3, 4, 5]),
+        "order": 6,
+    },
+    "6c": {
+        "stencil": jnp.array([-4, -2, -1, 0, 2, 4, 5]),
         "order": 6,
     },
     "6z": {
