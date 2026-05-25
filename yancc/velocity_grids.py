@@ -262,12 +262,21 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
 
 class _MapFunction(eqx.Module):
+    """Wraps a domain map f(x, *params) defined on [-1, 1].
+
+    f is a static (non-traced) callable, so arbitrary user-supplied maps are
+    allowed. params holds any dynamic (traceable) arguments, e.g. the
+    packing parameter of QuadraticPitchAngleGrid so they remain JAX
+    leaves rather than being baked into the static callable.
+    """
+
     f: Callable = eqx.field(static=True)
+    params: tuple = ()
 
     @eqx.filter_jit
     def __call__(self, x):
         x = (x / jnp.pi) * 2 - 1  # map [0,pi] to [-1,1]
-        x = self.f(x)  # map [-1,1] to [-1,1]
+        x = self.f(x, *self.params)  # map [-1,1] to [-1,1]
         x = (x + 1) / 2 * jnp.pi  # map [-1,1] to [0,pi]
         return x
 
@@ -384,11 +393,8 @@ class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
         return self.__class__(na)
 
 
-class _QuadraticMap(eqx.Module):
-    c: jax.Array
-
-    def __call__(self, x):
-        return self.c * x**3 + (1 - self.c) * x
+def _quadratic_map(x, c):
+    return c * x**3 + (1 - c) * x
 
 
 class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
@@ -418,7 +424,9 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
         self.na = na
         self.c = cast(jax.Array, c)
         a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
-        self.map_func = _MapFunction(_QuadraticMap(self.c))
+        # pass c as a dynamic param (not baked into a static callable) so the
+        # grid can be traced and differentiated through jit.
+        self.map_func = _MapFunction(_quadratic_map, (self.c,))
 
         self.a = self.map_func(a)
         self.xi = -jnp.cos(self.a)
