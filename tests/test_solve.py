@@ -14,7 +14,11 @@ from yancc.field import Field
 from yancc.preconditioner import DKEMPreconditioner
 from yancc.solve import solve_dke, solve_mdke
 from yancc.species import JOULE_PER_EV, LocalMaxwellian
-from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import (
+    MaxwellSpeedGrid,
+    QuadraticPitchAngleGrid,
+    UniformPitchAngleGrid,
+)
 
 
 def _read_monkes_dat(path):
@@ -90,7 +94,7 @@ def test_solve_mdke_w7x_eim(idx):
         )
     )
     t2 = time.perf_counter()
-    print(f"Took {t2-t1:.3e} s")
+    print(f"Took {t2 - t1:.3e} s")
     Dij = sol.get("Dij_DKES")
 
     D11_yancc = Dij[0, 0]
@@ -179,6 +183,31 @@ def test_solve_field_types(nuhat, erhohat):
     np.testing.assert_allclose(D1[2, 2], D2[2, 2], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[2, 2], D3[2, 2], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[2, 2], D4[2, 2], rtol=1e-2, atol=0)
+
+
+@pytest.mark.parametrize("nuhat", [1e-1, 1e0])
+def test_solve_mdke_nonuniform_pitch(field, nuhat):
+    """solve_mdke accepts a non-uniform pitch grid and agrees with a uniform one.
+
+    theta/zeta are discretized identically between the two solves, so any
+    disagreement isolates the non-uniform pitch-angle handling. At a smooth,
+    moderate collisionality both grids resolve the same physics, so the
+    monoenergetic coefficients should match.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    na = 31
+    erhohat = 0.0
+    sol_u, info_u = solve_mdke(field, UniformPitchAngleGrid(na), erhohat, nuhat)
+    sol_q, info_q = solve_mdke(field, QuadraticPitchAngleGrid(na, 0.6), erhohat, nuhat)
+    assert info_u["success1"] and info_u["success2"]
+    assert info_q["success1"] and info_q["success2"]
+    Du = sol_u.get("Dij")
+    Dq = sol_q.get("Dij")
+    np.testing.assert_allclose(Dq[0, 0], Du[0, 0], rtol=1e-2)
+    np.testing.assert_allclose(Dq[2, 2], Du[2, 2], rtol=1e-2)
+    np.testing.assert_allclose(Dq[0, 2], Du[0, 2], rtol=1e-2)
+    np.testing.assert_allclose(Dq[2, 0], Du[2, 0], rtol=1e-2)
 
 
 @pytest.mark.parametrize("idx", [0, 10, 20])
