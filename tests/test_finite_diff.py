@@ -255,3 +255,49 @@ def test_advection_nonuniform(direction, p):
     else:
         fac = 0.5
     assert err_non < fac * err_uni
+
+
+def test_advection_default_domain_from_grid():
+    """With domain=None the integration domain defaults to (x[0], x[-1])."""
+    x = np.linspace(0.0, np.pi, 41)
+    D_default = build_advection_matrix(
+        x, stencil=(-1, 0, 1), order=2, bc_type="symmetric"
+    )
+    D_explicit = build_advection_matrix(
+        x, stencil=(-1, 0, 1), order=2, bc_type="symmetric", domain=(x[0], x[-1])
+    )
+    np.testing.assert_allclose(D_default, D_explicit, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "order, expected_hyper",
+    [(4, 6), (3, 4)],  # even -> order+2, odd -> order+1
+)
+def test_advection_hyper_order_auto_matches_explicit(order, expected_hyper):
+    """hyper_order='auto' equals order+2 (even) / order+1 (odd) explicitly."""
+    x = np.linspace(0.0, np.pi, 41)
+    stencil = jnp.arange(-3, 4)  # large enough for either order
+    kwargs = dict(
+        stencil=stencil,
+        order=order,
+        bc_type="symmetric",
+        domain=(0, np.pi),
+        hyper_nu=0.01,
+    )
+    D_auto = build_advection_matrix(x, hyper_order="auto", **kwargs)
+    D_explicit = build_advection_matrix(x, hyper_order=expected_hyper, **kwargs)
+    np.testing.assert_allclose(D_auto, D_explicit, atol=1e-12)
+
+
+def test_advection_unknown_bc_type_raises():
+    """An unsupported bc_type is rejected rather than silently clamped."""
+    x = np.linspace(0.0, np.pi, 41)
+    with pytest.raises(ValueError, match="Unknown bc_type"):
+        build_advection_matrix(x, stencil=(-1, 0, 1), order=2, bc_type="extrapolate")
+
+
+def test_advection_stencil_too_small_for_order():
+    """A stencil smaller than order+1 cannot represent the advection derivative."""
+    x = np.linspace(0.0, np.pi, 41)
+    with pytest.raises(ValueError, match="too small to support advection order"):
+        build_advection_matrix(x, stencil=(0, 1), order=3)

@@ -550,12 +550,6 @@ def build_advection_matrix(
         raise ValueError(
             f"Stencil size M={M} is too small to support advection order={order}."
         )
-    if hyper_order is not None and M < req_hyper_order + 1:
-        raise ValueError(
-            f"Stencil size M={M} is too small to support hyper_order={hyper_order} "
-            f"with hyper_accuracy={hyper_accuracy}. You need at least "
-            f"{req_hyper_order + 1} points."
-        )
 
     # Maximum required derivative to generate Taylor factorial constraints
     K_max = max(order + 1, (req_hyper_order + 1) if hyper_order is not None else 0)
@@ -618,8 +612,9 @@ def build_advection_matrix(
             )
             dx = x_ghost - x[i]
         else:
-            idx = jnp.clip(raw_idx, 0, N - 1)
-            dx = x[idx] - x[i]
+            raise ValueError(
+                f"Unknown bc_type {bc_type!r}, expected 'periodic' or 'symmetric'."
+            )
 
         # advection
         w_total, _ = solve_weights(dx, target_deriv=1, req_order=order)

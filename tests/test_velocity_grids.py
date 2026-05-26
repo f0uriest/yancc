@@ -255,3 +255,13 @@ def test_newton_cotes(order):
     order_non, _ = np.polyfit(np.log(Ns)[-4:], -np.log(errs_non)[-4:], deg=1)
     assert order_uni >= order
     assert order_non >= order
+
+
+def test_composite_newton_cotes_default_limits():
+    """Omitting global_limits uses the first/last sample points as the domain."""
+    x = jnp.linspace(-1.0, 1.0, 13)
+    w_default = composite_newton_cotes_weights(x, order=2)
+    w_explicit = composite_newton_cotes_weights(x, order=2, global_limits=(x[0], x[-1]))
+    np.testing.assert_allclose(w_default, w_explicit, atol=1e-12)
+    # weights of a quadrature rule on [-1, 1] sum to the interval length.
+    np.testing.assert_allclose(jnp.sum(w_default), 2.0, atol=1e-12)
