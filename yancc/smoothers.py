@@ -621,7 +621,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            smooth_solver = "dense"
         self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
