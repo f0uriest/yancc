@@ -672,7 +672,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
                 self.axorder,
             )
 
-            if self.smooth_solver == "banded":
+            # unreachable: __init__ rejects smooth_solver="banded" for this smoother.
+            if self.smooth_solver == "banded":  # pragma: no cover
                 raise NotImplementedError()
             else:
                 size, N, M = self.mats.shape
