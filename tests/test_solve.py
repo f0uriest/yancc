@@ -393,6 +393,51 @@ def _jvp_1_arg(fun, x0, argnum, rel_step, abs_step):
     return (fh - fl) / h
 
 
+def test_solve_dke_multispecies_warm_start(field, species2):
+    """Two-species solve, then a warm-started re-solve reusing the subspace U and f1.
+
+    Low resolution and maxiter=2 - this exercises the multi-species operator-weight
+    path and the U/f1 recycling branches, not convergence/accuracy.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    pitchgrid = UniformPitchAngleGrid(7)
+    speedgrid = MaxwellSpeedGrid(2)
+    Erho = 100.0
+
+    sol, info = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        maxiter=2,
+        rtol=1e-12,
+        verbose=2,
+    )
+    size = len(species2) * speedgrid.nx * pitchgrid.na * field.ntheta * field.nzeta
+    f1 = np.asarray(sol.f1).reshape(-1)
+    assert f1.size == size
+    U = info["U"]
+    assert U.shape[0] == size + 2 * len(species2)
+
+    # warm-start: feed back the recycled Krylov subspace U and the previous iterate.
+    sol2, info2 = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        maxiter=2,
+        rtol=1e-12,
+        verbose=2,
+        U=U,
+        f1=sol.f1_krylov,
+    )
+    np.testing.assert_allclose(sol.f1, sol2.f1, atol=1e-12, rtol=1e-8)
+    assert info2["nmv"] < info["nmv"]
+
+
 def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     # these are super low res, just to test jax logic, not physical correctness
     if os.environ.get("CI"):

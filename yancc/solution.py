@@ -203,6 +203,14 @@ class DKESolution(eqx.Module):
         """Full distribution function ``F0 + f1``."""
         return self.F0 + self.f1
 
+    @property
+    def f1_krylov(self) -> jax.Array:
+        """Distribution function, including source terms, as seen by krylov solver."""
+        f1 = self.f1.flatten()
+        sources = jnp.concatenate([self._particle_source, self._heat_source])
+        sources = jnp.nan_to_num(sources, nan=0.0)
+        return jnp.concatenate([f1, sources])
+
     def get(self, qty, **kwargs):
         """Compute desired moments of the solution.
 

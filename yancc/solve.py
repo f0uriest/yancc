@@ -352,14 +352,20 @@ def solve_dke(  # noqa: C901
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
     size = np.prod(shape)
-    if U is not None:
-        assert U.shape[0] == size
-        U = U.reshape((size, -1))
-        U = jnp.pad(U, [(0, 2 * len(species)), (0, 0)])
-    if f1 is not None:
+    if f1 is None:
+        f1 = jnp.zeros(size + 2 * len(species))
+    else:
         f1 = f1.flatten()
-        assert f1.size == size
-        f1 = jnp.pad(f1, [(0, 2 * len(species))])
+        assert (f1.shape[0] == size) or (f1.shape[0] == (size + 2 * len(species)))
+        # maybe pad with zeros for sources
+        f1 = jnp.pad(f1, [(0, size + 2 * len(species) - f1.shape[0])])
+    if U is None:
+        U = jnp.zeros((size + 2 * len(species), k))
+    else:
+        assert (U.shape[0] == size) or (U.shape[0] == (size + 2 * len(species)))
+        U = U.reshape((U.shape[0], -1))
+        # maybe pad with zeros for sources
+        U = jnp.pad(U, [(0, size + 2 * len(species) - U.shape[0]), (0, 0)])
 
     f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
@@ -381,8 +387,8 @@ def solve_dke(  # noqa: C901
         "nmv": nmv1,
         "res": res1 / jnp.linalg.norm(rhs),
         "success": success,
-        "C": C1[:size],
-        "U": U1[:size],
+        "C": C1,
+        "U": U1,
     }
     if verbose:
         jax.debug.print(
