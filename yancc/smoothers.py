@@ -490,8 +490,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             else:
                 smooth_solver = "dense"
         if operator_weights is None:
+            # defaults, zero out krook diffusion term
             operator_weights = jnp.ones(8).at[-1].set(0)
             if smooth_solver == "banded":
+                # also zero out field scattering to keep bandwidth small
                 operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
@@ -681,7 +683,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            smooth_solver = "dense"
         self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
@@ -732,7 +736,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
                 self.axorder,
             )
 
-            if self.smooth_solver == "banded":
+            # unreachable: __init__ rejects smooth_solver="banded" for this smoother.
+            if self.smooth_solver == "banded":  # pragma: no cover
                 raise NotImplementedError()
             else:
                 size, N, M = self.mats.shape

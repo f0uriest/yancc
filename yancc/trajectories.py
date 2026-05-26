@@ -1870,12 +1870,13 @@ class DKESpeed(lx.AbstractLinearOperator):
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
             return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
-        if self.axorder[2] == "t":
+        elif self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        if self.axorder[2] == "z":
+        elif self.axorder[2] == "z":
             return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
         else:
-            raise ValueError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

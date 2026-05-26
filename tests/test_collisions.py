@@ -599,11 +599,12 @@ def _check_operator_interface(op, rng):
         lambda f, pg, sg, sp, pot: EnergyScattering(f, pg, sg, sp),
         lambda f, pg, sg, sp, pot: FieldPartCD(f, pg, sg, sp, pot),
         lambda f, pg, sg, sp, pot: FieldPartCG(f, pg, sg, sp, pot),
+        lambda f, pg, sg, sp, pot: FieldPartCH(f, pg, sg, sp, pot),
         lambda f, pg, sg, sp, pot: FieldParticleScattering(f, pg, sg, sp, pot),
         # potentials=None exercises the default RosenbluthPotentials construction
         lambda f, pg, sg, sp, pot: FokkerPlanckLandau(f, pg, sg, sp),
     ],
-    ids=["CL", "CE", "CD", "CG", "FPS", "FPL"],
+    ids=["CL", "CE", "CD", "CG", "CH", "FPS", "FPL"],
 )
 def test_collision_operator_interface(dummy_field, species1, build):
     """out_structure/transpose/as_matrix are self-consistent."""

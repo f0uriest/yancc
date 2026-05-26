@@ -1052,12 +1052,13 @@ class EnergyScattering(lx.AbstractLinearOperator):
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
             return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
-        if self.axorder[2] == "t":
+        elif self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        if self.axorder[2] == "z":
+        elif self.axorder[2] == "z":
             return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
         else:
-            raise ValueError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1310,7 +1311,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
             return -df
-        if self.axorder[-1] == "x":
+        elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
             shape, caxorder = _parse_axorder_shape_4d(
@@ -1350,7 +1351,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 df = dense_to_banded(bw, bw, df)
             return -df
         else:
-            raise NotImplementedError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCD.block_diagonal2")
@@ -1402,12 +1404,13 @@ class FieldPartCD(lx.AbstractLinearOperator):
 
         if self.axorder[2] == "a":
             return _refold(df, self.pitchgrid.na)
-        if self.axorder[2] == "t":
+        elif self.axorder[2] == "t":
             return _refold(df, self.field.ntheta)
-        if self.axorder[2] == "z":
+        elif self.axorder[2] == "z":
             return _refold(df, self.field.nzeta)
         else:
-            raise ValueError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1679,7 +1682,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
             return -df
-        if self.axorder[-1] == "x":
+        elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
             Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
@@ -1708,7 +1711,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # need trick here to avoid big matrices if banded format is desired.
         # note that it isn't actually banded in a, but we can still truncate it
         # if desired.
-        if self.axorder[-1] == "a":
+        elif self.axorder[-1] == "a":
             if bw is None:
                 bw = self.pitchgrid.na // 2  # full matrix
             Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
@@ -1762,7 +1765,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
                 df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
                 return -df
-        raise NotImplementedError()
+        else:
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCG.block_diagonal2")
@@ -1840,10 +1845,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = -df.reshape(N // M, M, M)
             if self.axorder[2] == "t":
                 return _refold(df, self.field.ntheta)
-            if self.axorder[2] == "z":
+            elif self.axorder[2] == "z":
                 return _refold(df, self.field.nzeta)
             else:
-                raise ValueError()
+                # unreachable, just kept to appease type checker
+                raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -2127,7 +2133,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
             return -df
-        if self.axorder[-1] == "x":
+        elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
             Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
@@ -2156,7 +2162,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # need trick here to avoid big matrices if banded format is desired.
         # note that it isn't actually banded in a, but we can still truncate it
         # if desired.
-        if self.axorder[-1] == "a":
+        elif self.axorder[-1] == "a":
             if bw is None:
                 bw = self.pitchgrid.na // 2
             Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
@@ -2208,7 +2214,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
                 df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
                 return -df
-        raise NotImplementedError()
+        else:
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCH.block_diagonal2")
@@ -2289,7 +2297,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
             if self.axorder[2] == "z":
                 return _refold(df, self.field.nzeta)
             else:
-                raise ValueError()
+                # unreachable, just kept to appease type checker
+                raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
