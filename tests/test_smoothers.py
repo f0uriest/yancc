@@ -283,6 +283,25 @@ def test_smoother_protocol_dke_jacobi(
     _check_protocol(op)
 
 
+def test_dke_jacobi_banded_default_operator_weights(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """A banded smoother with default (None) operator_weights also zeros slot -2."""
+    op = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        axorder="atzsx",
+        smooth_solver="banded",
+        operator_weights=None,
+    )
+    assert op.smooth_solver == "banded"
+    _check_protocol(op)
+
+
 def test_smoother_protocol_dke_jacobi2(
     field, pitchgrid, speedgrid, species2, potentials2
 ):
