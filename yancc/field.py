@@ -538,20 +538,6 @@ class Field(eqx.Module):
         return g.mean() / self.sqrtg.mean()
 
     @functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=[0])
-    def bdotgrad(self, f: Float[Array, "ntheta nzeta"]) -> Float[Array, "ntheta nzeta"]:
-        """𝐛 ⋅ ∇ f."""
-        return (self.B_sup_t * self._dfdt(f) + self.B_sup_z * self._dfdz(f)) / self.Bmag
-
-    @functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=[0])
-    def Bxgradrhodotgrad(
-        self, f: Float[Array, "ntheta nzeta"]
-    ) -> Float[Array, "ntheta nzeta"]:
-        """𝐁 × ∇ ρ ⋅ ∇ f."""
-        return (
-            self.B_sub_z * self._dfdt(f) - self.B_sub_t * self._dfdz(f)
-        ) / self.sqrtg
-
-    @functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=[0])
     def _dfdt(self, f: Float[Array, "ntheta nzeta"]) -> Float[Array, "ntheta nzeta"]:
         g = jnp.fft.fft(f, axis=0)
         k = jnp.fft.fftfreq(self.ntheta, 1 / self.ntheta)
@@ -658,12 +644,11 @@ def _read_globals(lines):
     data["Psi"] = -float(dat[4])
     data["a"] = float(dat[5])
     data["R"] = float(dat[6])
+    data["avol"] = data["a"]
+    data["Rvol"] = data["R"]
     if len(dat) > 7:
         data["avol"] = float(dat[7])
         data["Rvol"] = float(dat[8])
-    else:
-        data["avol"] = data["a"]
-        data["Rvol"] = data["R"]
     return data, lines[2:]
 
 
