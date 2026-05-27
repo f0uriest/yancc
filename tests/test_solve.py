@@ -591,3 +591,97 @@ def test_solve_dke_coulomb_log_override(field, pitchgrid, speedgrid):
     assert abs(flux_fixed - flux_default) > 1e-3 * abs(flux_default)
     # setting coulomb_log to the computed value should reproduce the default
     np.testing.assert_allclose(flux_matching, flux_default, rtol=1e-6)
+
+
+def test_solve_mdke_tokamak_axisymmetric():
+    """Axisymmetric (tokamak) MDKE: nzeta=1 reproduces a zeta-resolved solve.
+
+    A tokamak field is independent of zeta, so the toroidal derivative drops
+    (d/dzeta == 0) and a single toroidal point (nzeta=1) must reproduce the
+    transport coefficients computed on a zeta-resolved grid.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    import desc.examples  # pyright: ignore[reportMissingImports]
+
+    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
+    pitchgrid = UniformPitchAngleGrid(31)
+    nuhat = 1e-1
+    erhohat = 0.0
+
+    field_axi = Field.from_desc(eq, 0.5, 11, 1)
+    # nzeta=5 is the smallest zeta-resolved grid the default p1="4d" stencil allows
+    field_res = Field.from_desc(eq, 0.5, 11, 5)
+    assert field_axi.nzeta == 1
+    # the field really is axisymmetric: no toroidal variation of |B|
+    np.testing.assert_allclose(field_axi.dBdz, 0.0, atol=1e-12)
+
+    sol_axi, info_axi = solve_mdke(field_axi, pitchgrid, erhohat, nuhat)
+    sol_res, _ = solve_mdke(field_res, pitchgrid, erhohat, nuhat)
+    assert bool(info_axi["success1"]) and bool(info_axi["success2"])
+
+    Dij_axi = sol_axi.get("Dij_DKES")
+    Dij_res = sol_res.get("Dij_DKES")
+    # nzeta=1 must match the zeta-resolved solve to solver tolerance
+    np.testing.assert_allclose(Dij_axi, Dij_res, rtol=1e-3, atol=1e-5)
+
+    # Onsager symmetry D31 = -D13
+    np.testing.assert_allclose(Dij_axi[2, 0], -Dij_axi[0, 2], rtol=1e-2, atol=1e-4)
+
+
+def test_solve_dke_tokamak_axisymmetric():
+    """Axisymmetric (tokamak) DKE: nzeta=1 reproduces a zeta-resolved solve.
+
+    As for the MDKE, a tokamak field is zeta-independent so d/dzeta == 0 and a
+    single toroidal point must reproduce the fluxes from a zeta-resolved grid.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    import desc.examples  # pyright: ignore[reportMissingImports]
+
+    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
+    pitchgrid = UniformPitchAngleGrid(31)
+    speedgrid = MaxwellSpeedGrid(5)
+
+    def solve(nz):
+        field = Field.from_desc(eq, 0.5, 15, nz)
+        species = [
+            LocalMaxwellian(
+                yancc.species.Hydrogen,
+                0.8e3,
+                1.5e20,
+                -2e3 * field.a_minor,
+                -0.4e20 * field.a_minor,
+            )
+        ]
+        C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
+        operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
+        sol, info = solve_dke(
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            Erho=0.0,
+            operator_weights=operator_weights,
+            rtol=1e-6,
+            multigrid_options={"max_grids": 3, "coarse_N": 2000},
+        )
+        fluxes = np.array(
+            [
+                sol.get("particleFlux_vm_rN_sfincs"),
+                sol.get("heatFlux_vm_rN_sfincs"),
+                sol.get("FSABFlow_sfincs"),
+            ]
+        ).squeeze()
+        return fluxes, info
+
+    # nzeta=5 is the smallest zeta-resolved grid the default p1="4d" stencil allows
+    fluxes_axi, info_axi = solve(1)
+    fluxes_res, _ = solve(5)
+    assert bool(info_axi["success"])
+
+    assert np.all(np.isfinite(fluxes_axi))
+    # heat flux (component 1) is outward (down-gradient) for these profiles
+    assert fluxes_axi[1] > 0
+    # nzeta=1 must match the zeta-resolved solve to solver tolerance
+    np.testing.assert_allclose(fluxes_axi, fluxes_res, rtol=5e-3, atol=1e-8)
