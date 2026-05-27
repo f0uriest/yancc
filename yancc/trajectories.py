@@ -299,8 +299,6 @@ class MDKEZeta(lx.AbstractLinearOperator):
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert field.nzeta > fd_coeffs[1][p1].size // 2
-        assert field.nzeta > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.array(erhohat)
@@ -309,9 +307,14 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        self._fd, self._bd = _advection_matrices(
-            field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
-        )
+        if field.nzeta > 1:
+            assert field.nzeta > fd_coeffs[1][p1].size // 2
+            assert field.nzeta > fd_coeffs[2][p2].size // 2
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
+        else:  # axisymmetric (tokamak): d/dzeta == 0
+            self._fd = self._bd = jnp.zeros((1, 1))
         self._w = dkes_w_zeta(field, pitchgrid, self.erhohat)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
@@ -1141,8 +1144,6 @@ class DKEZeta(lx.AbstractLinearOperator):
         gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
-        assert field.nzeta > fd_coeffs[1][p1].size // 2
-        assert field.nzeta > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1153,9 +1154,14 @@ class DKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        self._fd, self._bd = _advection_matrices(
-            field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
-        )
+        if field.nzeta > 1:
+            assert field.nzeta > fd_coeffs[1][p1].size // 2
+            assert field.nzeta > fd_coeffs[2][p2].size // 2
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
+        else:  # axisymmetric (tokamak): d/dzeta == 0
+            self._fd = self._bd = jnp.zeros((1, 1))
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_zeta(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
@@ -1233,7 +1239,8 @@ class DKEZeta(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "z":  # its just diagonal
+        # off-axis, or axisymmetric (nzeta=1) with no zeta coupling: just diagonal
+        if self.axorder[-1] != "z" or self.field.nzeta == 1:
             if bw is None:
                 bw = 0
             df = self.diagonal()

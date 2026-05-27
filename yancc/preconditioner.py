@@ -10,6 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .finite_diff import fd_coeffs
 from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
@@ -77,9 +78,18 @@ class MDKEPreconditioner(MultigridOperator):
         max_grids = options.pop("max_grids", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         coarse_N = options.pop("coarse_N", 8000)
-        min_nt = options.pop("min_nt", 5)
-        min_nz = options.pop("min_nz", 5)
-        min_na = options.pop("min_na", 5)
+        # The coarsest grid must still fit the FD stencils: every axis needs
+        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+        # hold the stencil should error (via the operator asserts), so we floor
+        # theta/a at min_n rather than capping at the given size. The exception
+        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+        min_n = (
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        )
+        min_nt = options.pop("min_nt", min_n)
+        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
@@ -235,9 +245,18 @@ class DKEPreconditioner(MultigridOperator):
         coarsening_factor = options.pop("coarsening_factor", None)
         max_grids = options.pop("max_grids", None)
         coarse_N = options.pop("coarse_N", 8000)
-        min_nt = options.pop("min_nt", 5)
-        min_nz = options.pop("min_nz", 5)
-        min_na = options.pop("min_na", 5)
+        # The coarsest grid must still fit the FD stencils: every axis needs
+        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+        # hold the stencil should error (via the operator asserts), so we floor
+        # theta/a at min_n rather than capping at the given size. The exception
+        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+        min_n = (
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        )
+        min_nt = options.pop("min_nt", min_n)
+        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
