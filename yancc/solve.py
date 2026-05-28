@@ -11,6 +11,7 @@ from scipy.constants import elementary_charge, proton_mass
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .finite_diff import DEFAULT_P1A, DEFAULT_P2A
 from .krylov import gcrotmk
 from .linalg import BorderedOperator, InverseBorderedOperator
 from .misc import (
@@ -91,8 +92,8 @@ def solve_mdke(
         {} if multigrid_options is None else copy.copy(multigrid_options)
     )
 
-    p1 = options.pop("p1", "4d")
-    p2 = options.pop("p2", 4)
+    p1 = options.pop("p1", DEFAULT_P1A)
+    p2 = options.pop("p2", DEFAULT_P2A)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 150)
@@ -270,8 +271,8 @@ def solve_dke(  # noqa: C901
         {} if multigrid_options is None else copy.copy(multigrid_options)
     )
 
-    p1 = options.pop("p1", "4d")
-    p2 = options.pop("p2", 4)
+    p1 = options.pop("p1", DEFAULT_P1A)
+    p2 = options.pop("p2", DEFAULT_P2A)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 150)

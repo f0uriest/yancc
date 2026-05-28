@@ -11,6 +11,12 @@ from jax import config
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
 
+DEFAULT_P1A = "4d"
+DEFAULT_P2A = 4
+DEFAULT_P1M = "2d"
+DEFAULT_P2M = 2
+
+
 y1b = 0.15
 y3c = 0.2
 y5c = 0.04

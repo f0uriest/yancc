@@ -10,6 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .finite_diff import DEFAULT_P1M, DEFAULT_P2M
 from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
@@ -70,8 +71,8 @@ class MDKEPreconditioner(MultigridOperator):
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.asarray(erhohat)
         self.nuhat = jnp.asarray(nuhat)
-        self.p1 = options.pop("p1", "2d")
-        self.p2 = options.pop("p2", 2)
+        self.p1 = options.pop("p1", DEFAULT_P1M)
+        self.p2 = options.pop("p2", DEFAULT_P2M)
         gauge = options.pop("gauge", True)
         resolutions = options.pop("resolutions", None)
         max_grids = options.pop("max_grids", None)
@@ -228,8 +229,8 @@ class DKEPreconditioner(MultigridOperator):
         self.background = background
         self.Erho = jnp.asarray(Erho)
 
-        self.p1 = options.pop("p1", "2d")
-        self.p2 = options.pop("p2", 2)
+        self.p1 = options.pop("p1", DEFAULT_P1M)
+        self.p2 = options.pop("p2", DEFAULT_P2M)
         gauge = options.pop("gauge", True)
         resolutions = options.pop("resolutions", None)
         coarsening_factor = options.pop("coarsening_factor", None)
