@@ -14,6 +14,39 @@ def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
     return jnp.where(a, b, c)
 
 
+def _banded_row_scale(p, q, A, periodic):
+    """Row-equilibration factors for a matrix in banded storage.
+
+    Returns ``s`` of shape ``(n,)`` with ``s[i] = 1 / max_j |A[i, j]|`` (and
+    ``s[i] = 1`` for an all-zero row). Scaling each dense row ``i`` by ``s[i]``
+    pushes the matrix toward unit-magnitude rows, which improves the
+    conditioning of the (non-pivoted) elimination without changing the
+    solution. For ``periodic=True`` the wrap-around entries are folded into the
+    row maxima via the cyclic row index.
+    """
+    H, n = A.shape
+    r_idx = jnp.arange(H)[:, None]
+    j_idx = jnp.arange(n)[None, :]
+    # Dense row index of each banded entry; entries off the matrix are padding.
+    i_linear = j_idx + r_idx - q
+    in_band = (i_linear >= 0) & (i_linear < n)
+    i_dense = i_linear % n if periodic else jnp.clip(i_linear, 0, n - 1)
+    valid = in_band | periodic
+    contrib = _where(valid, jnp.abs(A), jnp.zeros_like(A))
+    row_max = jnp.zeros(n, dtype=A.dtype).at[i_dense.flatten()].max(contrib.flatten())
+    return _where(row_max > 0, 1.0 / row_max, jnp.ones_like(row_max))
+
+
+def _scale_banded_rows(p, q, A, s, periodic):
+    """Scale dense row ``i`` of a banded matrix by ``s[i]`` in banded storage."""
+    H, n = A.shape
+    r_idx = jnp.arange(H)[:, None]
+    j_idx = jnp.arange(n)[None, :]
+    i_linear = j_idx + r_idx - q
+    i_dense = i_linear % n if periodic else jnp.clip(i_linear, 0, n - 1)
+    return A * s[i_dense]
+
+
 class BorderedOperator(lx.AbstractLinearOperator):
     """Operator for a bordered matrix.
 
@@ -385,12 +418,20 @@ def _safediv(a, b):
     return _where(mask, jnp.array(0), a / b)
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
-@functools.partial(jnp.vectorize, signature="(m,n)->(m,n)", excluded=(0, 1, 3))
-def lu_factor_banded(p, q, A, *, unroll=None):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "equilibrate"))
+@functools.partial(
+    jnp.vectorize,
+    signature="(m,n)->(m,n),(n)",
+    excluded=(0, 1, "unroll", "pivot_tol", "equilibrate"),
+)
+def lu_factor_banded(p, q, A, *, unroll=None, pivot_tol=0.0, equilibrate=False):
     """LU factorization of banded matrix in banded storage format.
 
-    Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
+    Note: does not use row pivoting, so may be unstable unless A is diagonally
+    dominant. Pass ``pivot_tol > 0`` to clamp tiny pivots away from zero
+    ("static pivoting"), which prevents blow-up from near-zero pivots at the
+    cost of a slightly inexact factorization (recoverable via iterative
+    refinement). For ill-conditioned matrices, row equilibration also helps.
 
     Parameters
     ----------
@@ -398,17 +439,35 @@ def lu_factor_banded(p, q, A, *, unroll=None):
         Lower and Upper bandwidth.
     A : jax.Array, shape(...,p+q+1,N)
         Matrix in banded format.
+    pivot_tol : float
+        If positive, any pivot with magnitude below ``pivot_tol`` is replaced by
+        ``+/- pivot_tol`` (matching its sign) before forming the multipliers.
+        Default 0.0 reproduces the unmodified non-pivoted factorization.
+    equilibrate : bool
+        If True, scale each row to unit max-magnitude before factoring. The
+        scaling is stored in the returned tuple and applied automatically by
+        ``lu_solve_banded``.
 
     Returns
     -------
     lu : jax.Array, shape(...,p+q+1,N)
         LU factorized matrix. Upper triangle is U, lower triangle is L (unit diagonal
         is assumed.)
+    s : jax.Array, shape(...,N)
+        Row-equilibration factors (ones when ``equilibrate=False``).
     """
     n = A.shape[1]
     assert p <= n
     assert q <= n
     assert A.shape[0] == (p + q + 1)
+
+    s = (
+        _banded_row_scale(p, q, A, periodic=False)
+        if equilibrate
+        else jnp.ones(n, dtype=A.dtype)
+    )
+    if equilibrate:
+        A = _scale_banded_rows(p, q, A, s, periodic=False)
 
     # Pad A along the columns by q.
     # This acts as a safe "run-off" area for fixed-size slices near the right edge.
@@ -417,6 +476,16 @@ def lu_factor_banded(p, q, A, *, unroll=None):
     def kloop(k, A_acc):
         # --- 1. Vectorized L-update ---
         pivot = A_acc[q, k]
+
+        # Static pivoting: clamp |pivot| up to pivot_tol (no-op when pivot_tol=0).
+        # The clamped value is written back to the diagonal so the U factor used
+        # by lu_solve_banded stays consistent with the multipliers below.
+        pivot = _where(
+            jnp.abs(pivot) < pivot_tol,
+            jnp.where(pivot < 0, -pivot_tol, pivot_tol),
+            pivot,
+        )
+        A_acc = A_acc.at[q, k].set(pivot)
 
         # Extract L multipliers: shape (p,)
         l_vec = jax.lax.dynamic_slice_in_dim(A_acc[:, k], q + 1, p, axis=0) / pivot
@@ -445,30 +514,12 @@ def lu_factor_banded(p, q, A, *, unroll=None):
     A_padded = jax.lax.fori_loop(0, n - 1, kloop, A_padded, unroll=unroll)
 
     # Slice back to the original mathematical shape
-    return A_padded[:, :n]
+    return A_padded[:, :n], s
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
-@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, 4))
-def lu_solve_banded(p, q, lu, b, *, unroll=None):
-    """Solve a linear system with a pre-factored banded matrix in banded storage format.
-
-    Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
-
-    Parameters
-    ----------
-    p, q: int
-        Lower and Upper bandwidth.
-    lu : jax.Array, shape(...,p+q+1,N)
-        LU factorization of matrix in banded format. Output from ``lu_factor_banded``.
-    b : jax.Array, shape(...,N)
-        RHS vector.
-
-    Returns
-    -------
-    x : jax.Array, shape(...,N)
-        Solution to linear system.
-    """
+@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, "unroll"))
+def _lu_solve_banded(p, q, lu, b, *, unroll=None):
     n = lu.shape[1]
     assert p <= n
     assert q <= n
@@ -521,12 +572,42 @@ def lu_solve_banded(p, q, lu, b, *, unroll=None):
     return x_padded[q:]
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
-@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, 4))
-def solve_banded(p, q, A, b, *, unroll=True):
-    """Solve a linear system with a banded matrix in banded storage format.
+def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
+    """Solve a linear system with a pre-factored banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
+
+    Parameters
+    ----------
+    p, q: int
+        Lower and Upper bandwidth.
+    lu_factors : tuple of jax.Array
+        Output from ``lu_factor_banded``. The row-equilibration scaling stored
+        in the tuple is applied to ``b`` automatically.
+    b : jax.Array, shape(...,N)
+        RHS vector.
+
+    Returns
+    -------
+    x : jax.Array, shape(...,N)
+        Solution to linear system.
+    """
+    lu, s = lu_factors
+    return _lu_solve_banded(p, q, lu, s * b, unroll=unroll)
+
+
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "equilibrate"))
+@functools.partial(
+    jnp.vectorize,
+    signature="(m,n),(n)->(n)",
+    excluded=(0, 1, "unroll", "pivot_tol", "equilibrate"),
+)
+def solve_banded(p, q, A, b, *, unroll=None, pivot_tol=0.0, equilibrate=False):
+    """Solve a linear system with a banded matrix in banded storage format.
+
+    Note: does not use row pivoting, so may be unstable unless A is diagonally
+    dominant. Pass ``equilibrate=True`` and/or ``pivot_tol > 0`` to improve
+    robustness on poorly-scaled or nearly-singular matrices.
 
     Parameters
     ----------
@@ -536,25 +617,40 @@ def solve_banded(p, q, A, b, *, unroll=True):
         Matrix in banded format.
     b : jax.Array, shape(...,N)
         RHS vector.
+    pivot_tol : float
+        If positive, clamp pivots smaller than this in magnitude (see
+        ``lu_factor_banded``).
+    equilibrate : bool
+        If True, scale each row to unit max-magnitude before factoring (and
+        scale ``b`` to match). Row scaling does not change the solution but
+        improves conditioning of the non-pivoted elimination.
 
     Returns
     -------
     x : jax.Array, shape(...,N)
         Solution to linear system.
     """
-    lu = lu_factor_banded(p, q, A, unroll=unroll)
+    lu = lu_factor_banded(
+        p, q, A, unroll=unroll, pivot_tol=pivot_tol, equilibrate=equilibrate
+    )
     return lu_solve_banded(p, q, lu, b, unroll=unroll)
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "equilibrate"))
 @functools.partial(
-    jnp.vectorize, signature="(k,n)->(l,n),(n),(n,m),(m,n)", excluded=(0, 1, 3)
+    jnp.vectorize,
+    signature="(k,n)->(l,n),(n),(n,m),(m,n),(n)",
+    excluded=(0, 1, "unroll", "pivot_tol", "equilibrate"),
 )
 @jax.named_call
-def lu_factor_banded_periodic(p, q, A, *, unroll=None):
+def lu_factor_banded_periodic(
+    p, q, A, *, unroll=None, pivot_tol=0.0, equilibrate=False
+):
     """LU factorization of periodic banded matrix in dense storage format.
 
-    Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
+    Note: does not use row pivoting, so may be unstable unless A is diagonally
+    dominant. Pass ``equilibrate=True`` and/or ``pivot_tol > 0`` to improve
+    robustness on poorly-scaled or nearly-singular matrices.
 
     Parameters
     ----------
@@ -562,26 +658,45 @@ def lu_factor_banded_periodic(p, q, A, *, unroll=None):
         Lower and upper bandwidth of A
     A : jax.Array, shape(...,p+q+1,N)
         Matrix in banded format.
+    pivot_tol : float
+        If positive, clamp pivots smaller than this in magnitude (see
+        ``lu_factor_banded``).
+    equilibrate : bool
+        If True, scale each row to unit max-magnitude before factoring. Row
+        scaling does not change the solution but improves conditioning of the
+        non-pivoted elimination. The scaling is stored in the returned factors
+        and applied automatically by ``lu_solve_banded_periodic``.
 
     Returns
     -------
     lu : jax.Array, shape(...,N,N)
         LU factorized matrix. Upper triangle is U, lower triangle is L (unit diagonal
         is assumed.)
+    piv : jax.Array, shape(...,N)
+        Pivots (only used for the small dense fallback).
     BUschur : jax.Array, shape(...,N, 2*r+1)
         Additional matrix for solving the periodic part
     V : jax.Array, shape(...,2*r+1, N)
         Additional matrix for solving the periodic part
+    s : jax.Array, shape(...,N)
+        Row-equilibration factors (ones when ``equilibrate=False``).
     """
     r = p + q
     H, n = A.shape
+    ones = jnp.ones(n, dtype=A.dtype)
     if r == 0:  # diagonal, trivial
-        return A, jnp.arange(n).astype(jnp.int32), jnp.zeros((n, r)), jnp.zeros((r, n))
+        return (
+            A,
+            jnp.arange(n).astype(jnp.int32),
+            jnp.zeros((n, r)),
+            jnp.zeros((r, n)),
+            ones,
+        )
     if n <= r:
         # below is incorrect, so just use dense solution
         A = banded_to_dense(p, q, A)
         lu, piv = jax.scipy.linalg.lu_factor(A)
-        return lu, piv, jnp.zeros((n, r)), jnp.zeros((r, n))
+        return lu, piv, jnp.zeros((n, r)), jnp.zeros((r, n)), ones
 
     # ---------------------------------------------------------
     # 1. Isolate the strictly banded part & identify wrap-arounds
@@ -597,6 +712,13 @@ def lu_factor_banded_periodic(p, q, A, *, unroll=None):
     # A_band is the strictly banded part (wrap-around elements zeroed out)
     A_band = _where(is_wrap, jnp.array(0.0), A)
 
+    # Row equilibration (no-op when equilibrate=False). Scaling the full-system
+    # rows by s scales A_band and the low-rank columns U identically, leaving
+    # the capacitance matrix (and hence the solution) unchanged; see
+    # lu_solve_banded_periodic, which applies s to the RHS.
+    s = _banded_row_scale(p, q, A, periodic=True) if equilibrate else ones
+    A_band = _scale_banded_rows(p, q, A_band, s, periodic=True)
+
     # ---------------------------------------------------------
     # 2. Construct U and V^T for the low-rank update
     # ---------------------------------------------------------
@@ -608,6 +730,8 @@ def lu_factor_banded_periodic(p, q, A, *, unroll=None):
     U = U.at[n - q + jnp.arange(q), jnp.arange(q)].set(1.0)
     # Next p columns map to the top-right corner (rows 0 to p-1)
     U = U.at[jnp.arange(p), q + jnp.arange(p)].set(1.0)
+    # Apply the same row scaling to the low-rank columns.
+    U = s[:, None] * U
 
     # Construct V^T (k_dim x n): Contains the actual wrap-around values
     # Map the cyclic rows to the k_dim coordinate space
@@ -622,16 +746,17 @@ def lu_factor_banded_periodic(p, q, A, *, unroll=None):
     V_T = jnp.zeros((k_dim, n), dtype=A.dtype)
     V_T = V_T.at[safe_k, safe_j].add(safe_vals)
 
-    lu = lu_factor_banded(p, q, A_band, unroll=unroll)
+    lu_factors = lu_factor_banded(p, q, A_band, unroll=unroll, pivot_tol=pivot_tol)
+    lu, _ = lu_factors
     # Z = inv(A_band), Z_U = Z@U
-    Z_U = lu_solve_banded(p, q, lu, U.T, unroll=unroll).T
+    Z_U = lu_solve_banded(p, q, lu_factors, U.T, unroll=unroll).T
 
     # Compute the capacitance matrix C = I + V^T @ Z_U
     C = jnp.eye(k_dim, dtype=A.dtype) + jnp.matmul(V_T, Z_U)
     # Solve the small dense system: C @ Y = V^T @ Z_b
     Y = jnp.linalg.solve(C, V_T)
     piv = jnp.arange(n)  # dummy pivots for now
-    return lu, piv, Z_U, Y
+    return lu, piv, Z_U, Y, s
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
@@ -656,26 +781,27 @@ def lu_solve_banded_periodic(p, q, lu, b, *, unroll=None):
     x : jax.Array, shape(...,N)
         Solution to linear system.
     """
-    lu, piv, Z_U, Y = lu
-    return _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, b, unroll)
+    lu, piv, Z_U, Y, s = lu
+    return _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, s, b, unroll)
 
 
 @functools.partial(
-    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n)->(n)", excluded=(0, 1, 7)
+    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n),(n)->(n)", excluded=(0, 1, 8)
 )
-def _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, b, unroll):
+def _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, s, b, unroll):
     nn = b.shape[-1]
     r = p + q
     if r == 0:  # diagonal
         return b / lu[0]
     if nn <= r:  # use dense method
         return jax.scipy.linalg.lu_solve((lu, piv), b)
-    Binvb = lu_solve_banded(p, q, lu, b, unroll=unroll)
+    # s applies the row equilibration chosen at factor time (ones if disabled).
+    Binvb = _lu_solve_banded(p, q, lu, s * b, unroll=unroll)
     return Binvb - Z_U @ (Y @ Binvb)
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
-@functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1, 4))
+@functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1, "unroll"))
 def solve_banded_periodic(p, q, A, b, *, unroll=None):
     """Solve a periodic banded linear system.
 
