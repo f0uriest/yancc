@@ -263,9 +263,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
@@ -423,9 +425,11 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
