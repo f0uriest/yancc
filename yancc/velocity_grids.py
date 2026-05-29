@@ -261,6 +261,10 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nx)
 
+    def resample(self, nx):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nx)
+
 
 class _MapFunction(eqx.Module):
     """Wraps a domain map f(x, *params) defined on [-1, 1].
