@@ -254,3 +254,25 @@ def _refold(a, k):
     a = a.reshape((N // k, k, M, M))
     # TODO: make this better
     return jax.vmap(lambda x: jax.scipy.linalg.block_diag(*x))(a)
+
+
+### misc utils
+
+
+def safediv(a: jax.Array, b: jax.Array, fill=jnp.array(0), threshold=jnp.array(0)):
+    """Divide a/b with guards for division by zero.
+
+    Parameters
+    ----------
+    a, b : ndarray
+        Numerator and denominator.
+    fill : float, ndarray, optional
+        Value to return where b is zero.
+    threshold : float >= 0
+        How small is b allowed to be.
+
+    """
+    mask = jnp.abs(b) <= threshold
+    num = jnp.where(mask, fill, a)
+    den = jnp.where(mask, 1, b)
+    return num / den
