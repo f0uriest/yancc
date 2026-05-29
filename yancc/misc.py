@@ -171,8 +171,6 @@ def radial_magnetic_drift(
     f : jax.Array, shape(ns, nx, na, nt, nz)
         Radial magnetic drift.
     """
-    if not isinstance(species, (list, tuple)):
-        species = [species]
     vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
     ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
     qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
@@ -222,9 +220,6 @@ def dke_rhs(
     f : jax.Array
         RHS of linear DKE.
     """
-    if not isinstance(species, (list, tuple)):
-        species = [species]
-
     rhs = _dke_rhs_3(field, pitchgrid, speedgrid, species)
     if single_rhs:
         forces = _dke_thermodynamic_forces(species, field, Erho, EparB)[
