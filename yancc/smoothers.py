@@ -452,7 +452,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
@@ -650,7 +650,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
