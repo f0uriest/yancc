@@ -252,9 +252,6 @@ def test_solve_dke_ncsx(idx):
         "energy_source": sfincs_data[:, 4],
     }
 
-    C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
-    operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
-
     Er = sfincs_data["Er"][idx]
     print("Er:", Er)
 
@@ -265,7 +262,7 @@ def test_solve_dke_ncsx(idx):
         speedgrid,
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
-        operator_weights=operator_weights,
+        coulomb_log=17,
         verbose=3,
         rtol=1e-5,
         multigrid_options={"max_grids": 3, "coarse_N": 2000},
@@ -494,3 +491,30 @@ def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     np.testing.assert_allclose(Jr, Jf, rtol=1e-10)
     np.testing.assert_allclose(Jr, Jfd.T, rtol=1e-6)
     np.testing.assert_allclose(Jf, Jfd.T, rtol=1e-6)
+
+
+def test_solve_dke_coulomb_log_override(field, pitchgrid, speedgrid):
+    """coulomb_log kwarg: fixed value changes result; matches computed when equal."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    species = [LocalMaxwellian(yancc.species.Hydrogen, 1e3, 1e19, -1e3, -1e19)]
+
+    computed_ln = float(yancc.species.coulomb_logarithm(species[0], species[0]))
+    fixed_ln = computed_ln * 2
+
+    sol_default, _ = solve_dke(field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10)
+    sol_fixed, _ = solve_dke(
+        field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10, coulomb_log=fixed_ln
+    )
+    sol_matching, _ = solve_dke(
+        field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10, coulomb_log=computed_ln
+    )
+
+    flux_default = float(sol_default.get("<particle_flux>")[0])
+    flux_fixed = float(sol_fixed.get("<particle_flux>")[0])
+    flux_matching = float(sol_matching.get("<particle_flux>")[0])
+
+    # a doubled lnLambda changes the collisionality, so fluxes should differ
+    assert abs(flux_fixed - flux_default) > 1e-3 * abs(flux_default)
+    # setting coulomb_log to the computed value should reproduce the default
+    np.testing.assert_allclose(flux_matching, flux_default, rtol=1e-6)
