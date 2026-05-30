@@ -301,7 +301,7 @@ def solve_dke(  # noqa: C901
 
     if verbose and not skip_init_print:
         _print_field_summary(field)
-        _print_species_summary(species, field, speedgrid, background)
+        _print_species_summary(species, field, speedgrid, background, coulomb_log)
         _print_er_summary(species, field, Erho, EparB)
         _print_thermodynamic_forces(species, field, Erho, EparB)
 
@@ -428,7 +428,7 @@ def solve_dke(  # noqa: C901
     )
 
 
-def _print_species_summary(species, field, speedgrid, background):
+def _print_species_summary(species, field, speedgrid, background, coulomb_log=None):
     for si, spec in enumerate(species):
         jax.debug.print(
             "Species {si:2d}:  "
@@ -451,7 +451,7 @@ def _print_species_summary(species, field, speedgrid, background):
         )
         others = species[:si] + species[si + 1 :] + background
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
-        nustars = nustar(spec, field, tempx, *others)
+        nustars = nustar(spec, field, tempx, *others, lnlambda=coulomb_log)
         for nu, x in zip(nustars, tempx):
             jax.debug.print(
                 " " * 13 + "ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True
