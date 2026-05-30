@@ -1956,6 +1956,7 @@ class DKE(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2001,6 +2002,7 @@ class DKE(lx.AbstractLinearOperator):
             axorder,
             gauge,
             operator_weights=self.operator_weights[4:7],
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit

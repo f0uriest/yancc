@@ -581,6 +581,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -598,7 +599,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         for spa in species:
             nu = 0.0
             for spb in species + background:
-                nu += nuD_ab(spa, spb, x * spa.v_thermal)
+                nu += nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
         h = jnp.pi / pitchgrid.na
@@ -864,6 +865,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         background: Optional[list[LocalMaxwellian]] = None,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -887,9 +889,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
             term1 = 0.0
             term2 = 0.0
             for spb in species + background:
-                nupar = nupar_ab(spa, spb, v)
-                nuD = nuD_ab(spa, spb, v)
-                gamma = gamma_ab(spa, spb)
+                nupar = nupar_ab(spa, spb, v, lnlambda=coulomb_log)
+                nuD = nuD_ab(spa, spb, v, lnlambda=coulomb_log)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 ma, mb = spa.species.mass, spb.species.mass
                 vtb = spb.v_thermal
                 term0 += 4 * jnp.pi * gamma * ma / mb * spb(v)
@@ -1148,6 +1150,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1172,7 +1175,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             v = x * va
             Fa = spa(v)
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 vb = spb.v_thermal
                 mb = spb.species.mass
                 # need to evaluate fb on the speed grid for fa
@@ -1498,6 +1501,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1520,7 +1524,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             Fa = spa(v)
             pb = []
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 pb.append(gamma * Fa * 2 * v**2 / va**4)
             prefactor.append(pb)
 
@@ -1937,6 +1941,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1962,7 +1967,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             temp_prefactor_H = []
             temp_prefactor_dH = []
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 mb = spb.species.mass
                 temp_prefactor_H.append(-2 / va**2 * gamma * Fa)
                 temp_prefactor_dH.append(-2 * v / va**2 * (1 - ma / mb) * gamma * Fa)
@@ -2382,6 +2387,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2400,6 +2406,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
         self.CH = FieldPartCH(
             field,
@@ -2409,6 +2416,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
         self.CD = FieldPartCD(
             field,
@@ -2418,6 +2426,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit
@@ -2581,6 +2590,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2601,13 +2611,35 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.operator_weights = jnp.asarray(operator_weights)
 
         self.CL = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species, background, p2, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            background,
+            p2,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
         self.CE = EnergyScattering(
-            field, pitchgrid, speedgrid, species, background, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            background,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
         self.CF = FieldParticleScattering(
-            field, pitchgrid, speedgrid, species, potentials, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            potentials,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit

@@ -402,6 +402,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         smooth_solver: Optional[str] = None,
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -476,6 +477,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
         ).block_diagonal(self.smooth_solver, self.bandwidth)
 
         if self.smooth_solver == "banded":
@@ -624,6 +626,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         smooth_solver="dense",
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert axorder[-2:] == "sx"
@@ -668,6 +671,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
         ).block_diagonal2()
 
         if self.smooth_solver == "banded":

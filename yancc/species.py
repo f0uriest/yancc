@@ -228,7 +228,10 @@ def collisionality(
 
 
 def nuD_ab(
-    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
+    maxwellian_a: LocalMaxwellian,
+    maxwellian_b: LocalMaxwellian,
+    v: ArrayLike,
+    lnlambda=None,
 ) -> jax.Array:
     """Pairwise collision freq. for species a colliding with species b at velocity v.
 
@@ -250,27 +253,41 @@ def nuD_ab(
     v = jnp.asarray(v)
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
-    prefactor = gamma_ab(maxwellian_a, maxwellian_b) * nb / v**3
+    prefactor = gamma_ab(maxwellian_a, maxwellian_b, lnlambda) * nb / v**3
     erf_part = jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb)
     return prefactor * erf_part
 
 
-def gamma_ab(maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian) -> jax.Array:
+def gamma_ab(
+    maxwellian_a: LocalMaxwellian,
+    maxwellian_b: LocalMaxwellian,
+    lnlambda=None,
+) -> jax.Array:
     """Prefactor for pairwise collisionality."""
-    lnlambda = coulomb_logarithm(maxwellian_a, maxwellian_b)
+    if lnlambda is None:
+        lnlambda = coulomb_logarithm(maxwellian_a, maxwellian_b)
     ea, eb = maxwellian_a.species.charge, maxwellian_b.species.charge
     ma = maxwellian_a.species.mass
     return ea**2 * eb**2 * lnlambda / (4 * jnp.pi * epsilon_0**2 * ma**2)
 
 
 def nupar_ab(
-    maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian, v: ArrayLike
+    maxwellian_a: LocalMaxwellian,
+    maxwellian_b: LocalMaxwellian,
+    v: ArrayLike,
+    lnlambda=None,
 ) -> jax.Array:
     """Parallel collisionality."""
     v = jnp.asarray(v)
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
-    return 2 * gamma_ab(maxwellian_a, maxwellian_b) * nb / v**3 * chandrasekhar(v / vtb)
+    return (
+        2
+        * gamma_ab(maxwellian_a, maxwellian_b, lnlambda)
+        * nb
+        / v**3
+        * chandrasekhar(v / vtb)
+    )
 
 
 def coulomb_logarithm(
