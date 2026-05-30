@@ -244,21 +244,22 @@ def get_grid_resolutions(
     """
     coarse_N = max(coarse_N, ns * nx * min_na * min_nt * min_nz)
     N = ns * nx * na * nt * nz
+    dim = 2 if nz == 1 else 3  # tokamak vs stellarator
 
     if coarsening_factor is not None and max_grids is not None:
         raise ValueError("Cannot specify both coarsening_factor and max_grids")
     elif coarsening_factor is None and max_grids is None:
         coarsening_factor = 2.5
         max_grids = int(
-            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**dim) + 1)
         )
     elif coarsening_factor is None:
         assert isinstance(max_grids, int)
-        coarsening_factor = float((N / coarse_N) ** (1 / (3 * (max_grids - 1))))
+        coarsening_factor = float((N / coarse_N) ** (1 / (dim * (max_grids - 1))))
         coarsening_factor = max(2, coarsening_factor)
     elif max_grids is None:
         max_grids = int(
-            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**3) + 1)
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**dim) + 1)
         )
 
     resolutions = [(ns, nx, na, nt, nz)]
