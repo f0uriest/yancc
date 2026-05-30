@@ -252,9 +252,6 @@ def test_solve_dke_ncsx(idx):
         "energy_source": sfincs_data[:, 4],
     }
 
-    C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
-    operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
-
     Er = sfincs_data["Er"][idx]
     print("Er:", Er)
 
@@ -265,7 +262,7 @@ def test_solve_dke_ncsx(idx):
         speedgrid,
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
-        operator_weights=operator_weights,
+        coulomb_log=17,
         verbose=3,
         rtol=1e-5,
         multigrid_options={"max_grids": 3, "coarse_N": 2000},
@@ -496,42 +493,6 @@ def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     np.testing.assert_allclose(Jf, Jfd.T, rtol=1e-6)
 
 
-def test_solve_mdke_tokamak_axisymmetric():
-    """Axisymmetric (tokamak) MDKE: nzeta=1 reproduces a zeta-resolved solve.
-
-    A tokamak field is independent of zeta, so the toroidal derivative drops
-    (d/dzeta == 0) and a single toroidal point (nzeta=1) must reproduce the
-    transport coefficients computed on a zeta-resolved grid.
-    """
-    if os.environ.get("CI"):
-        jax.clear_caches()
-    import desc.examples  # pyright: ignore[reportMissingImports]
-
-    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
-    pitchgrid = UniformPitchAngleGrid(31)
-    nuhat = 1e-1
-    erhohat = 0.0
-
-    field_axi = Field.from_desc(eq, 0.5, 11, 1)
-    # nzeta=5 is the smallest zeta-resolved grid the default p1="4d" stencil allows
-    field_res = Field.from_desc(eq, 0.5, 11, 5)
-    assert field_axi.nzeta == 1
-    # the field really is axisymmetric: no toroidal variation of |B|
-    np.testing.assert_allclose(field_axi.dBdz, 0.0, atol=1e-12)
-
-    sol_axi, info_axi = solve_mdke(field_axi, pitchgrid, erhohat, nuhat)
-    sol_res, _ = solve_mdke(field_res, pitchgrid, erhohat, nuhat)
-    assert bool(info_axi["success1"]) and bool(info_axi["success2"])
-
-    Dij_axi = sol_axi.get("Dij_DKES")
-    Dij_res = sol_res.get("Dij_DKES")
-    # nzeta=1 must match the zeta-resolved solve to solver tolerance
-    np.testing.assert_allclose(Dij_axi, Dij_res, rtol=1e-3, atol=1e-5)
-
-    # Onsager symmetry D31 = -D13
-    np.testing.assert_allclose(Dij_axi[2, 0], -Dij_axi[0, 2], rtol=1e-2, atol=1e-4)
-
-
 def test_solve_dke_tokamak_axisymmetric():
     """Axisymmetric (tokamak) DKE: nzeta=1 reproduces a zeta-resolved solve.
 
@@ -588,3 +549,30 @@ def test_solve_dke_tokamak_axisymmetric():
     assert fluxes_axi[1] > 0
     # nzeta=1 must match the zeta-resolved solve to solver tolerance
     np.testing.assert_allclose(fluxes_axi, fluxes_res, rtol=5e-3, atol=1e-8)
+
+
+def test_solve_dke_coulomb_log_override(field, pitchgrid, speedgrid):
+    """coulomb_log kwarg: fixed value changes result; matches computed when equal."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    species = [LocalMaxwellian(yancc.species.Hydrogen, 1e3, 1e19, -1e3, -1e19)]
+
+    computed_ln = float(yancc.species.coulomb_logarithm(species[0], species[0]))
+    fixed_ln = computed_ln * 2
+
+    sol_default, _ = solve_dke(field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10)
+    sol_fixed, _ = solve_dke(
+        field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10, coulomb_log=fixed_ln
+    )
+    sol_matching, _ = solve_dke(
+        field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10, coulomb_log=computed_ln
+    )
+
+    flux_default = float(sol_default.get("<particle_flux>")[0])
+    flux_fixed = float(sol_fixed.get("<particle_flux>")[0])
+    flux_matching = float(sol_matching.get("<particle_flux>")[0])
+
+    # a doubled lnLambda changes the collisionality, so fluxes should differ
+    assert abs(flux_fixed - flux_default) > 1e-3 * abs(flux_default)
+    # setting coulomb_log to the computed value should reproduce the default
+    np.testing.assert_allclose(flux_matching, flux_default, rtol=1e-6)

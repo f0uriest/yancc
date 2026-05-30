@@ -289,6 +289,7 @@ def solve_dke(  # noqa: C901
     C = options.pop("C", None)
     U = options.pop("U", None)
     f1 = options.pop("f1", None)
+    coulomb_log = options.pop("coulomb_log", None)
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
@@ -322,6 +323,7 @@ def solve_dke(  # noqa: C901
         multigrid_options.setdefault("potentials", potentials)
         multigrid_options.setdefault("gauge", True)
         multigrid_options.setdefault("verbose", verbose)
+        multigrid_options.setdefault("coulomb_log", coulomb_log)
         M = DKEPreconditioner(**multigrid_options)
 
     if verbose and not skip_init_print:
@@ -344,6 +346,7 @@ def solve_dke(  # noqa: C901
         p2=p2,
         gauge=False,
         operator_weights=operator_weights,
+        coulomb_log=coulomb_log,
     )
 
     operator = BorderedOperator(A, B, C)
