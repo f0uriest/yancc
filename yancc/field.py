@@ -254,13 +254,13 @@ class Field(eqx.Module):
         phi = file.variables["phi"][:].filled()[-1]  # total flux
 
         # assuming the field is only over a single flux surface s
-        g_mnc = interpax.interp1d(s, s_half, g_mnc[1:, :])
-        b_mnc = interpax.interp1d(s, s_half, b_mnc[1:, :])
-        bsupu_mnc = interpax.interp1d(s, s_half, bsupu_mnc[1:, :])
-        bsupv_mnc = interpax.interp1d(s, s_half, bsupv_mnc[1:, :])
-        bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :])
-        bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :])
-        iota = interpax.interp1d(s, s_full, iota)
+        g_mnc = interpax.interp1d(s, s_half, g_mnc[1:, :], extrap=True)
+        b_mnc = interpax.interp1d(s, s_half, b_mnc[1:, :], extrap=True)
+        bsupu_mnc = interpax.interp1d(s, s_half, bsupu_mnc[1:, :], extrap=True)
+        bsupv_mnc = interpax.interp1d(s, s_half, bsupv_mnc[1:, :], extrap=True)
+        bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :], extrap=True)
+        bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :], extrap=True)
+        iota = interpax.interp1d(s, s_full, iota, extrap=True)
 
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
@@ -362,12 +362,13 @@ class Field(eqx.Module):
         a_minor = R0 / aspect
 
         # jlist = 2 + indices of half grid where boozer transform was computed
-        b_mnc = interpax.interp1d(s, s_half[jlist - 2], b_mnc)
+        b_mnc = interpax.interp1d(s, s_half[jlist - 2], b_mnc, extrap=True)
         # profiles are on half grid, but with an extra 0 at the beginning bc
         # the world is awful.
-        buco = -interpax.interp1d(s, s_half, buco[1:])  # sign flip LH -> RH
-        bvco = interpax.interp1d(s, s_half, bvco[1:])
-        iota = -interpax.interp1d(s, s_half, iota[1:])  # sign flip LH -> RH
+        # sign flip for buco and iota LH -> RH coordinates
+        buco = -interpax.interp1d(s, s_half, buco[1:], extrap=True)
+        bvco = interpax.interp1d(s, s_half, bvco[1:], extrap=True)
+        iota = -interpax.interp1d(s, s_half, iota[1:], extrap=True)
 
         B0 = jnp.abs(b_mnc).max()
         mask = jnp.abs(b_mnc) > cutoff * B0
@@ -432,10 +433,10 @@ class Field(eqx.Module):
         R0 = data["Rvol"]
         a_minor = data["avol"]
 
-        b_mnc = interpax.interp1d(s, s_grid, data["Bmn"])
-        I = interpax.interp1d(s, s_grid, data["I"])
-        G = interpax.interp1d(s, s_grid, data["G"])
-        iota = interpax.interp1d(s, s_grid, data["iota"])
+        b_mnc = interpax.interp1d(s, s_grid, data["Bmn"], extrap=True)
+        I = interpax.interp1d(s, s_grid, data["I"], extrap=True)
+        G = interpax.interp1d(s, s_grid, data["G"], extrap=True)
+        iota = interpax.interp1d(s, s_grid, data["iota"], extrap=True)
 
         xm, xn = np.meshgrid(data["m"], data["n"], indexing="ij")
         xm, xn = xm.flatten(), xn.flatten()

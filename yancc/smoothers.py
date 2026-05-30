@@ -323,9 +323,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
@@ -341,7 +343,13 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
 
         if self.smooth_solver == "banded":
             mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
-            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibriate=True,
+                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+            )
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -355,7 +363,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x
+                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
                 )
             else:
                 size, N, M = self.mats.shape
@@ -483,9 +491,11 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
@@ -531,7 +541,13 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         ).block_diagonal(self.smooth_solver, self.bandwidth)
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibriate=True,
+                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+            )
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -552,7 +568,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x
+                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
                 )
             else:
                 size, N, M = self.mats.shape

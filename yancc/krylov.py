@@ -172,32 +172,35 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
     leaves_x, treedef_x = jax.tree_util.tree_flatten(x)
 
     def prepare_Q_leaf(leaf):
-        leaf_transposed = jnp.moveaxis(leaf, -1, 0)
-        return jnp.reshape(leaf_transposed, (leaf_transposed.shape[0], -1))
+        # keep the column (basis-vector) axis last: [N_leaf, ncols]. This is a
+        # view of the basis, so we never materialize a [ncols, N] transpose.
+        return jnp.reshape(leaf, (-1, leaf.shape[-1]))
 
-    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=-1)
+    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=0)
     x_flat = jnp.concatenate([jnp.reshape(l, (-1,)) for l in leaves_x], axis=-1)
 
-    max_k = Q_mat.shape[0]
+    max_k = Q_mat.shape[1]
     if method in ["cgs", "cgs2"]:
 
         # dynamic mask to handle the dynamic k
         mask = jnp.arange(max_k) < k
 
         # --- PASS 1: Classical Gram-Schmidt ---
-        # .conj() ensures complex numbers are handled correctly
-        h1 = Q_mat.conj() @ x_flat
+        # .conj() ensures complex numbers are handled correctly. Contracting the
+        # N axis (axis 0 of Q_mat) keeps the basis in its natural [N, ncols]
+        # layout -- no transpose materialized.
+        h1 = x_flat @ Q_mat.conj()
         h1 = jnp.where(mask, h1, 0.0)  # Apply mask for dynamic k
-        x1 = x_flat - (h1 @ Q_mat)  # Vectorized subtraction
+        x1 = x_flat - (Q_mat @ h1)  # Vectorized subtraction
 
         if method == "cgs":
             h_final = h1
             x_flat_final = x1
         else:
             # --- PASS 2: Re-orthogonalization ("Twice is Enough") ---
-            h2 = Q_mat.conj() @ x1
+            h2 = x1 @ Q_mat.conj()
             h2 = jnp.where(mask, h2, 0.0)  # Apply mask for dynamic k
-            x_flat_final = x1 - (h2 @ Q_mat)
+            x_flat_final = x1 - (Q_mat @ h2)
 
             h_final = h1 + h2
 
@@ -206,7 +209,7 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
 
         def loop(i, carry):
             h_carry, x_carry = carry
-            q_i = Q_mat[i]
+            q_i = Q_mat[:, i]
             alpha = jnp.vdot(q_i, x_carry)
             h_carry = h_carry.at[i].set(alpha)
             x_carry = x_carry - alpha * q_i

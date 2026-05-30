@@ -110,7 +110,7 @@ def test_lu_factor_banded():
     A = _random_banded(2, 2, 10, rng, False)
     B = yancc.linalg.dense_to_banded(2, 2, A)
     lu1 = scipy.linalg.lu_factor(A)[0]
-    lu2 = yancc.linalg.lu_factor_banded(2, 2, B)
+    lu2, _ = yancc.linalg.lu_factor_banded(2, 2, B)
     np.testing.assert_allclose(lu1, yancc.linalg.banded_to_dense(2, 2, lu2))
 
 
@@ -221,3 +221,35 @@ def test_transposed_linear_operator():
     assert AT.transpose() is Aop
     # unknown attributes are delegated to the wrapped operator
     np.testing.assert_allclose(np.asarray(AT.matrix), A)
+
+
+@pytest.mark.parametrize("p", [1, 2])
+@pytest.mark.parametrize("q", [1, 2])
+@pytest.mark.parametrize("n", [6, 12])
+@pytest.mark.parametrize("periodic", [True, False])
+def test_solve_banded_equilibrate(p, q, n, periodic):
+    """Row equilibration must not change the solution (vs the unscaled path)."""
+    rng = np.random.default_rng(7)
+    A = _random_banded(p, q, n, rng, periodic)
+    # mildly poor row scaling so equilibration actually does something nontrivial
+    A = A * (10.0 ** rng.integers(-2, 3, size=(n, 1)))
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    b = rng.random(n)
+    solver = (
+        yancc.linalg.solve_banded_periodic if periodic else yancc.linalg.solve_banded
+    )
+    x_ref = solver(p, q, a, b)  # known-good path (tested elsewhere)
+    x_eq = solver(p, q, a, b, equilibrate=True)
+    np.testing.assert_allclose(x_eq, x_ref, rtol=1e-6, atol=1e-8)
+
+
+def test_lu_factor_banded_pivot_tol():
+    """Clamping tiny pivots keeps a zero-pivot (but nonsingular) solve finite."""
+    # A[0, 0] = 0 forces the first non-pivoted pivot to zero; det(A) = -2 != 0.
+    A = np.array([[0.0, 1.0, 0.0], [1.0, 2.0, 1.0], [0.0, 1.0, 2.0]])
+    a = yancc.linalg.dense_to_banded(1, 1, A)
+    b = np.array([1.0, 2.0, 3.0])
+    x_plain = yancc.linalg.solve_banded(1, 1, a, b)
+    assert not np.all(np.isfinite(x_plain))  # unpivoted elimination blows up
+    x_clamped = yancc.linalg.solve_banded(1, 1, a, b, pivot_tol=1e-8)
+    assert np.all(np.isfinite(x_clamped))  # static pivoting keeps it finite
