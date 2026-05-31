@@ -75,6 +75,8 @@ class Field(eqx.Module):
     a_minor: Float[Array, ""]
     iota: Float[Array, ""]
     B0: Float[Array, ""]
+    I: Float[Array, ""]
+    G: Float[Array, ""]
     ntheta: int = eqx.field(static=True)
     nzeta: int = eqx.field(static=True)
     NFP: Int[Array, ""]
@@ -128,6 +130,8 @@ class Field(eqx.Module):
         ) / self.sqrtg
         self.Bmag_fsa = self.flux_surface_average(self.Bmag)
         self.B2mag_fsa = self.flux_surface_average(self.Bmag**2)
+        self.I = self.flux_surface_average(self.B_sub_t)
+        self.G = self.flux_surface_average(self.B_sub_z)
         self.Psi = jnp.asarray(Psi)
         self.iota = jnp.asarray(iota)
         self.R_major = jnp.asarray(R_major)
@@ -208,21 +212,22 @@ class Field(eqx.Module):
         )
 
     @classmethod
-    def from_vmec(cls, wout, s: float, ntheta: int, nzeta: int):
+    def from_vmec(cls, wout, rho: float, ntheta: int, nzeta: int):
         """Construct Field from VMEC equilibrium.
 
         Parameters
         ----------
         wout : path-like
             Path to vmec wout file.
-        s : float
-            Normalized surface label.
+        rho : float
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         """
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
+        s = rho**2
         file = Dataset(wout, mode="r")
 
         ns = file.variables["ns"][:].filled()
@@ -249,13 +254,13 @@ class Field(eqx.Module):
         phi = file.variables["phi"][:].filled()[-1]  # total flux
 
         # assuming the field is only over a single flux surface s
-        g_mnc = interpax.interp1d(s, s_half, g_mnc[1:, :])
-        b_mnc = interpax.interp1d(s, s_half, b_mnc[1:, :])
-        bsupu_mnc = interpax.interp1d(s, s_half, bsupu_mnc[1:, :])
-        bsupv_mnc = interpax.interp1d(s, s_half, bsupv_mnc[1:, :])
-        bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :])
-        bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :])
-        iota = interpax.interp1d(s, s_full, iota)
+        g_mnc = interpax.interp1d(s, s_half, g_mnc[1:, :], extrap=True)
+        b_mnc = interpax.interp1d(s, s_half, b_mnc[1:, :], extrap=True)
+        bsupu_mnc = interpax.interp1d(s, s_half, bsupu_mnc[1:, :], extrap=True)
+        bsupv_mnc = interpax.interp1d(s, s_half, bsupv_mnc[1:, :], extrap=True)
+        bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :], extrap=True)
+        bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :], extrap=True)
+        iota = interpax.interp1d(s, s_full, iota, extrap=True)
 
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
@@ -280,7 +285,7 @@ class Field(eqx.Module):
         iota *= sign
 
         data = {}
-        data["sqrtg"] = sqrtg * 2 * jnp.sqrt(s)
+        data["sqrtg"] = sqrtg * 2 * rho
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -294,13 +299,13 @@ class Field(eqx.Module):
         data["R_major"] = R_major
         data["a_minor"] = a_minor
 
-        return cls(rho=jnp.sqrt(s), **data, NFP=nfp)
+        return cls(rho=rho, **data, NFP=nfp)
 
     @classmethod
     def from_booz_xform(
         cls,
         booz: str,
-        s: Float[ArrayLike, ""],
+        rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
         cutoff: Float[ArrayLike, ""] = 0.0,
@@ -311,8 +316,8 @@ class Field(eqx.Module):
         ----------
         booz : path-like
             Path to booz_xform wout file.
-        s : float
-            Normalized surface label.
+        rho : float
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         cutoff : float
@@ -321,6 +326,7 @@ class Field(eqx.Module):
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
+        s = rho**2
         file = Dataset(booz, mode="r")
         assert not bool(
             file.variables["lasym__logical__"][:].filled()
@@ -356,12 +362,13 @@ class Field(eqx.Module):
         a_minor = R0 / aspect
 
         # jlist = 2 + indices of half grid where boozer transform was computed
-        b_mnc = interpax.interp1d(s, s_half[jlist - 2], b_mnc)
+        b_mnc = interpax.interp1d(s, s_half[jlist - 2], b_mnc, extrap=True)
         # profiles are on half grid, but with an extra 0 at the beginning bc
         # the world is awful.
-        buco = -interpax.interp1d(s, s_half, buco[1:])  # sign flip LH -> RH
-        bvco = interpax.interp1d(s, s_half, bvco[1:])
-        iota = -interpax.interp1d(s, s_half, iota[1:])  # sign flip LH -> RH
+        # sign flip for buco and iota LH -> RH coordinates
+        buco = -interpax.interp1d(s, s_half, buco[1:], extrap=True)
+        bvco = interpax.interp1d(s, s_half, bvco[1:], extrap=True)
+        iota = -interpax.interp1d(s, s_half, iota[1:], extrap=True)
 
         B0 = jnp.abs(b_mnc).max()
         mask = jnp.abs(b_mnc) > cutoff * B0
@@ -377,7 +384,7 @@ class Field(eqx.Module):
         bvco *= sign
 
         return cls.from_boozer(
-            rho=jnp.sqrt(s),
+            rho=rho,
             Bmag=Bmag,
             I=buco,
             G=bvco,
@@ -395,7 +402,7 @@ class Field(eqx.Module):
     def from_ipp_bc(
         cls,
         path: str,
-        s: Float[ArrayLike, ""],
+        rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
         cutoff: Float[ArrayLike, ""] = 0.0,
@@ -406,8 +413,8 @@ class Field(eqx.Module):
         ----------
         path : path-like
             Path to input bc file.
-        s : float
-            Normalized surface label.
+        rho : float
+            Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         cutoff : float
@@ -415,6 +422,7 @@ class Field(eqx.Module):
         """
         assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
 
+        s = rho**2
         data = read_bc(path)
         nfp = data["nfp"]
         theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
@@ -425,10 +433,10 @@ class Field(eqx.Module):
         R0 = data["Rvol"]
         a_minor = data["avol"]
 
-        b_mnc = interpax.interp1d(s, s_grid, data["Bmn"])
-        I = interpax.interp1d(s, s_grid, data["I"])
-        G = interpax.interp1d(s, s_grid, data["G"])
-        iota = interpax.interp1d(s, s_grid, data["iota"])
+        b_mnc = interpax.interp1d(s, s_grid, data["Bmn"], extrap=True)
+        I = interpax.interp1d(s, s_grid, data["I"], extrap=True)
+        G = interpax.interp1d(s, s_grid, data["G"], extrap=True)
+        iota = interpax.interp1d(s, s_grid, data["iota"], extrap=True)
 
         xm, xn = np.meshgrid(data["m"], data["n"], indexing="ij")
         xm, xn = xm.flatten(), xn.flatten()
@@ -449,7 +457,7 @@ class Field(eqx.Module):
         G *= sign
 
         return cls.from_boozer(
-            rho=jnp.sqrt(s),
+            rho=rho,
             Bmag=Bmag,
             I=I,
             G=G,
@@ -539,7 +547,7 @@ class Field(eqx.Module):
     def Bxgradrhodotgrad(
         self, f: Float[Array, "ntheta nzeta"]
     ) -> Float[Array, "ntheta nzeta"]:
-        """𝐁 × ∇ ψ ⋅ ∇ f."""
+        """𝐁 × ∇ ρ ⋅ ∇ f."""
         return (
             self.B_sub_z * self._dfdt(f) - self.B_sub_t * self._dfdz(f)
         ) / self.sqrtg

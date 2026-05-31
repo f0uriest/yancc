@@ -33,7 +33,7 @@ def test_permutations_mdke(field, pitchgrid):
     p2 = 2
     erhohat = 1e-4
     nuhat = 1e-4
-    N = field.ntheta * field.nzeta * pitchgrid.nxi
+    N = field.ntheta * field.nzeta * pitchgrid.na
 
     A0f = MDKE(
         field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="atz", gauge=True
@@ -99,13 +99,13 @@ def test_dke_banded_vs_dense_smoother(
 
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_mdke_banded_vs_dense_smoother(pitchgrid, field, axorder):
-    Er = 1e-3
-    nu = 1e-3
+    erhohat = 1e-3
+    nuhat = 1e-5
     s1 = MDKEJacobiSmoother(
-        field, pitchgrid, Er, nu, axorder=axorder, smooth_solver="dense"
+        field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="dense"
     ).as_matrix()
     s2 = MDKEJacobiSmoother(
-        field, pitchgrid, Er, nu, axorder=axorder, smooth_solver="banded"
+        field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="banded"
     ).as_matrix()
     np.testing.assert_allclose(s1, s2)
 
@@ -165,7 +165,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         operator_weights=operator_weights,
     )[0]
     r = (x_true + b) / 2
-    x_smoothed = smooth_op(
+    x_smoothed, _ = smooth_op(
         jnp.zeros_like(x_true), A, r, smoothers, nsteps=v, verbose=True
     )
     L = DKELaplacian(field, pitchgrid, speedgrid, species)
@@ -229,7 +229,7 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
         operator_weights=operator_weights,
     )[0]
     r = (x_true + b) / 2
-    x_smoothed = smooth_op(
+    x_smoothed, _ = smooth_op(
         jnp.zeros_like(x_true), A, r, smoothers, nsteps=v, verbose=True
     )
     L = DKELaplacian(field, pitchgrid, speedgrid, species)

@@ -28,6 +28,10 @@ from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAng
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
 
+# axorder string convention: s=species, x=speed, a=pitch, t=theta, z=zeta
+# Shape annotations like (ns, nx, na, nt, nz) follow the same axis-letter mapping;
+# field.ntheta / field.nzeta are the underlying attribute names for nt / nz.
+
 
 OPTIMAL_SMOOTHING_COEFFS_3D = {
     "1a": {
@@ -139,7 +143,7 @@ def permute_f_3d(
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_3d(
-        field.ntheta, field.nzeta, pitchgrid.nxi, axorder
+        field.ntheta, field.nzeta, pitchgrid.na, axorder
     )
     f = f.reshape(shape)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
@@ -156,10 +160,38 @@ def permute_f_4d(
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_4d(
-        field.ntheta, field.nzeta, pitchgrid.nxi, speedgrid.nx, len(species), axorder
+        field.ntheta, field.nzeta, pitchgrid.na, speedgrid.nx, len(species), axorder
     )
     f = f.reshape(shape)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
+    return f.flatten()
+
+
+def inverse_permute_f_3d(
+    f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
+) -> jax.Array:
+    """Inverse of permute_f_3d: canonical (a,t,z) layout back to axorder layout."""
+    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
+    _, caxorder = _parse_axorder_shape_3d(nt, nz, na, axorder)
+    f = f.reshape((na, nt, nz))
+    f = jnp.moveaxis(f, (0, 1, 2), caxorder)
+    return f.flatten()
+
+
+def inverse_permute_f_4d(
+    f: jax.Array,
+    field: Field,
+    pitchgrid: UniformPitchAngleGrid,
+    speedgrid: AbstractSpeedGrid,
+    species: list[LocalMaxwellian],
+    axorder: str,
+) -> jax.Array:
+    """Inverse of permute_f_4d: canonical (s,x,a,t,z) layout back to axorder layout."""
+    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
+    nx, ns = speedgrid.nx, len(species)
+    _, caxorder = _parse_axorder_shape_4d(nt, nz, na, nx, ns, axorder)
+    f = f.reshape((ns, nx, na, nt, nz))
+    f = jnp.moveaxis(f, (0, 1, 2, 3, 4), caxorder)
     return f.flatten()
 
 
@@ -227,13 +259,15 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         assert smooth_solver in {None, "banded", "dense"}
         if smooth_solver is None:
             sizes = {
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
@@ -249,44 +283,52 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
 
         if self.smooth_solver == "banded":
             mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
-            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibriate=True,
+                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+            )
         else:
             self.mats = jnp.linalg.inv(mats)
 
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = vector
-        permute = lambda f: permute_f_3d(f, self.field, self.pitchgrid, self.axorder)
-        x = jax.linear_transpose(permute, x)(x)[0]
+        with jax.named_scope(f"MDKEJacobiSmoother.mv, axorder={self.axorder}"):
+            x = inverse_permute_f_3d(vector, self.field, self.pitchgrid, self.axorder)
 
-        if self.smooth_solver == "banded":
-            size, N, M = self.mats[0].shape
-            x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
-        else:
-            size, N, M = self.mats.shape
-            x = x.reshape(size, M)
-            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+            if self.smooth_solver == "banded":
+                size, N, M = self.mats[0].shape
+                x = x.reshape(size, M)
+                b = lu_solve_banded_periodic(
+                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                )
+            else:
+                size, N, M = self.mats.shape
+                x = x.reshape(size, M)
+                b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        return self.weight * permute(b.flatten())
+            b = permute_f_3d(b.flatten(), self.field, self.pitchgrid, self.axorder)
+            return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -360,6 +402,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         smooth_solver: Optional[str] = None,
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -385,13 +428,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
@@ -407,13 +452,13 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
             _weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             _weight = _weight * jnp.ones(
-                (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+                (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
             )
         else:
             _weight = weight
@@ -432,37 +477,58 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
         ).block_diagonal(self.smooth_solver, self.bandwidth)
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibriate=True,
+                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+            )
         else:
             self.mats = jnp.linalg.inv(mats)
 
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = vector
-        permute = lambda f: permute_f_4d(
-            f, self.field, self.pitchgrid, self.speedgrid, self.species, self.axorder
-        )
-        x = jax.linear_transpose(permute, x)(x)[0]
+        with jax.named_scope(f"DKEJacobiSmoother.mv, axorder={self.axorder}"):
+            x = inverse_permute_f_4d(
+                vector,
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
 
-        if self.smooth_solver == "banded":
-            size, N, M = self.mats[0].shape
-            x = x.reshape(size, M)
-            b = lu_solve_banded_periodic(self.bandwidth, self.bandwidth, self.mats, x)
-        else:
-            size, N, M = self.mats.shape
-            x = x.reshape(size, M)
-            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+            if self.smooth_solver == "banded":
+                size, N, M = self.mats[0].shape
+                x = x.reshape(size, M)
+                b = lu_solve_banded_periodic(
+                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                )
+            else:
+                size, N, M = self.mats.shape
+                x = x.reshape(size, M)
+                b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        return self.weight * permute(b.flatten())
+            b = permute_f_4d(
+                b.flatten(),
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
+            return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -470,7 +536,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -483,7 +549,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -560,6 +626,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         smooth_solver="dense",
         weight: Optional[jax.Array] = None,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert axorder[-2:] == "sx"
@@ -583,12 +650,12 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
             wght = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
-            weight = wght * jnp.ones((1, 1, pitchgrid.nxi, field.ntheta, field.nzeta))
+            weight = wght * jnp.ones((1, 1, pitchgrid.na, field.ntheta, field.nzeta))
         self.weight = jnp.asarray(weight).flatten()
 
         mats = DKE(
@@ -604,6 +671,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
         ).block_diagonal2()
 
         if self.smooth_solver == "banded":
@@ -614,25 +682,37 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
-        x = vector
-        permute = lambda f: permute_f_4d(
-            f, self.field, self.pitchgrid, self.speedgrid, self.species, self.axorder
-        )
-        x = jax.linear_transpose(permute, x)(x)[0]
+        with jax.named_scope(f"DKEJacobi2Smoother.mv, axorder={self.axorder}"):
+            x = inverse_permute_f_4d(
+                vector,
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
 
-        if self.smooth_solver == "banded":
-            raise NotImplementedError()
-        else:
-            size, N, M = self.mats.shape
-            x = x.reshape(size, M)
-            b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
+            if self.smooth_solver == "banded":
+                raise NotImplementedError()
+            else:
+                size, N, M = self.mats.shape
+                x = x.reshape(size, M)
+                b = jnp.einsum("ijk,ik -> ij", self.mats, x[:, :])
 
-        return self.weight * permute(b.flatten())
+            b = permute_f_4d(
+                b.flatten(),
+                self.field,
+                self.pitchgrid,
+                self.speedgrid,
+                self.species,
+                self.axorder,
+            )
+            return self.weight * b
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -640,7 +720,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -653,7 +733,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -680,7 +760,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.species = species
         if normalize:
-            na = self.pitchgrid.nxi
+            na = self.pitchgrid.na
             nt = self.field.ntheta
             nz = self.field.nzeta
             ha = jnp.pi / na
@@ -706,12 +786,12 @@ class DKELaplacian(lx.AbstractLinearOperator):
         shape = (
             len(self.species),
             self.speedgrid.nx,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.field.ntheta,
             self.field.nzeta,
         )
 
-        na = self.pitchgrid.nxi
+        na = self.pitchgrid.na
         nt = self.field.ntheta
         nz = self.field.nzeta
         ha = jnp.pi / na
@@ -730,8 +810,8 @@ class DKELaplacian(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -739,7 +819,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -752,7 +832,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),

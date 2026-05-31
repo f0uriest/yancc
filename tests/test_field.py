@@ -36,12 +36,11 @@ def test_field_types():
     nt = 17
     nz = 37
     rho = 0.5
-    s = rho**2
 
     field1 = Field.from_desc(eq, rho, nt, nz)
-    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", s, nt, nz)
-    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", s, nt, nz)
-    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", s, nt, nz)
+    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
+    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", rho, nt, nz)
+    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", rho, nt, nz)
 
     np.testing.assert_allclose(
         field1.B_sub_t * field1.B_sup_t + field1.B_sub_z * field1.B_sup_z,

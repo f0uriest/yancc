@@ -17,34 +17,34 @@ mpmath.mp.dps = 100
 
 
 def rosenbluth_ddG_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
-    assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
+    assert f.shape == (speedgrid.nx, pitchgrid.na, 1, 1)
     # convert nodal alpha -> legendre l
     f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
     # convert nodal x -> speed k
     f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
-    Gabxlk = potentials.ddGxlk[a, b, :, : potentials.legendregrid.nxi]
+    Gabxlk = potentials.ddGxlk[a, b, :, : potentials.legendregrid.na]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
 
 
 def rosenbluth_dH_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
-    assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
+    assert f.shape == (speedgrid.nx, pitchgrid.na, 1, 1)
     # convert nodal alpha -> legendre l
     f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
     # convert nodal x -> speed k
     f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
-    Gabxlk = potentials.dHxlk[a, b, :, : potentials.legendregrid.nxi]
+    Gabxlk = potentials.dHxlk[a, b, :, : potentials.legendregrid.na]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
 
 
 def rosenbluth_H_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
-    assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
+    assert f.shape == (speedgrid.nx, pitchgrid.na, 1, 1)
     # convert nodal alpha -> legendre l
     f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
     # convert nodal x -> speed k
     f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
-    Gabxlk = potentials.Hxlk[a, b, :, : potentials.legendregrid.nxi]
+    Gabxlk = potentials.Hxlk[a, b, :, : potentials.legendregrid.na]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
 
@@ -296,18 +296,18 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     dHasympy = _eval_f(Ha.diff(v), v, speedgrid.x * vta, subs)
     ffa = _eval_f(fa, v, speedgrid.x * vta, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, 1, 1))
+    f = np.ones((1, speedgrid.nx, pitchgrid.na, 1, 1))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.na).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
 
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.na - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 
@@ -372,12 +372,12 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
     ffa = _eval_f(fa, v, speedgrid.x * va, subs)
     ffb = _eval_f(fb, v, speedgrid.x * vb, subs)
 
-    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, 1, 1))
+    f = np.ones((2, speedgrid.nx, pitchgrid.na, 1, 1))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.na).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
@@ -385,13 +385,13 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
         ffb[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.na).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
 
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.na - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 

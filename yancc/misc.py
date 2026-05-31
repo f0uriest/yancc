@@ -5,12 +5,11 @@ from typing import Any, Union
 import jax
 import jax.numpy as jnp
 import lineax as lx
-import numpy as np
 from jaxtyping import Float
-from scipy.constants import elementary_charge, proton_mass
+from scipy.constants import elementary_charge
 
 from .field import Field
-from .species import JOULE_PER_EV, LocalMaxwellian
+from .species import LocalMaxwellian
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
@@ -70,12 +69,12 @@ class DKESources(lx.MatrixLinearOperator):
         s1 = (x**2 - 5 / 2) * F
         s2 = (-2 / 3 * x**2 + 1) * F
         # now need to make them broadcast against full distribution function
-        # these have shape (ns, nx, nxi, nt, nz)
+        # these have shape (ns, nx, na, nt, nz)
         s1 = s1[:, :, None, None, None] * jnp.ones(
-            (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+            (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
         )
         s2 = s2[:, :, None, None, None] * jnp.ones(
-            (1, 1, pitchgrid.nxi, field.ntheta, field.nzeta)
+            (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
         )
         # flatten by species
         s1 = s1.reshape((len(species), -1))
@@ -128,9 +127,9 @@ class DKEConstraint(lx.MatrixLinearOperator):
 
         vth = jnp.array([sp.v_thermal for sp in species])[:, None, None]
 
-        # int f d3v, for particle conservation, shape(ns, nx, nxi)
+        # int f d3v, for particle conservation, shape(ns, nx, na)
         d3v = _d3v(speedgrid, pitchgrid, species)
-        # int v^2 f d3v, for energy conservation, shape(ns, nx, nxi)
+        # int v^2 f d3v, for energy conservation, shape(ns, nx, na)
         v2d3v = speedgrid.x[None, :, None] ** 2 * vth**2 * d3v
 
         if normalize:
@@ -169,7 +168,7 @@ def radial_magnetic_drift(
 
     Returns
     -------
-    f : jax.Array, shape(ns, nx, nxi, nt, nz)
+    f : jax.Array, shape(ns, nx, na, nt, nz)
         Radial magnetic drift.
     """
     if not isinstance(species, (list, tuple)):
@@ -228,18 +227,9 @@ def dke_rhs(
 
     rhs = _dke_rhs_3(field, pitchgrid, speedgrid, species)
     if single_rhs:
-        qs = jnp.array([sp.species.charge for sp in species]) / elementary_charge
-        ns = jnp.array([sp.density for sp in species])
-        dns = jnp.array([sp.dndrho for sp in species])
-        Ts = jnp.array([sp.temperature for sp in species])
-        dTs = jnp.array([sp.dTdrho for sp in species])
-
-        Ln = dns / ns
-        LT = dTs / Ts
-        A1 = Ln + qs * (-Erho) / Ts - 3 / 2 * LT
-        A2 = LT
-        A3 = qs / Ts * EparB / field.B2mag_fsa
-        forces = jnp.array([A1, A2, A3])[:, :, None, None, None, None, None]
+        forces = _dke_thermodynamic_forces(species, field, Erho, EparB)[
+            :, :, None, None, None, None, None
+        ]
         rhs = (forces * rhs).sum(axis=(0, 1)).reshape((1, -1))
     else:
         rhs = jnp.swapaxes(rhs, 0, 1)
@@ -248,6 +238,19 @@ def dke_rhs(
     if include_constraints:
         rhs = jnp.pad(rhs, [(0, 0), (0, 2 * len(species))])
     return rhs.squeeze()
+
+
+def _dke_thermodynamic_forces(species, field, Erho, EparB):
+    qs = jnp.array([sp.species.charge for sp in species]) / elementary_charge
+    Ts = jnp.array([sp.temperature for sp in species])
+
+    Ln = jnp.array([-spec.aLn for spec in species])
+    LT = jnp.array([-spec.aLT for spec in species])
+    A1 = Ln + qs * (-Erho) / Ts - 3 / 2 * LT
+    A2 = LT
+    A3 = qs / Ts * EparB / field.B2mag_fsa
+    forces = jnp.array([A1, A2, A3])
+    return forces
 
 
 def _dke_rhs_3(
@@ -267,10 +270,10 @@ def _dke_rhs_3(
     vpar = pitchgrid.xi[None, None, None, :, None, None] * vth * x
     Bvpar = field.Bmag[None, None, None, None, :, :] * vpar
 
-    v1 = -vmadotgradrho * Fs
-    v2 = -(x**2) * vmadotgradrho * Fs
-    v3 = Bvpar * Fs
-    rhs = jnp.array([v1, v2, v3])
+    r1 = -vmadotgradrho * Fs
+    r2 = -(x**2) * vmadotgradrho * Fs
+    r3 = Bvpar * Fs
+    rhs = jnp.array([r1, r2, r3])
     return rhs
 
 
@@ -298,293 +301,3 @@ def mdke_rhs(
     s3 = xi * field.Bmag
     rhs = jnp.array([s1, s2, s3]).reshape((3, -1)).T
     return rhs
-
-
-@jax.jit
-def compute_monoenergetic_coefficients(
-    f: jax.Array,
-    field: Field,
-    pitchgrid: UniformPitchAngleGrid,
-) -> jax.Array:
-    """Compute D_ij coefficients from solution for distribution function f.
-
-    Parameters
-    ----------
-    f : jax.Array, shape(N,3)
-        Solution to monoenergetic drift kinetic equation.
-    field : Field
-        Magnetic field information
-    pitchgrid : UniformPitchAngleGrid
-        Grid of coordinates in pitch angle.
-
-    Returns
-    -------
-    Dij : jax.Array, shape(3, 3)
-        Monoenergetic transport coefficients.
-    """
-    f = f.reshape((-1, 3))
-    nxi, nt, nz = (
-        pitchgrid.nxi,
-        field.ntheta,
-        field.nzeta,
-    )
-    N = nxi * nt * nz
-    # slice out source/constraint terms if present
-    f = f[:N]
-
-    s = mdke_rhs(field, pitchgrid)
-    s = s.reshape((-1, 3))
-
-    # form monoenergetic coefficients
-    sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
-    Dij_itz = sf.reshape((3, 3, nxi, nt, nz))
-    Dij_i = field.flux_surface_average(Dij_itz)
-    Dij = jnp.sum(Dij_i * pitchgrid.wxi, axis=-1)
-    return Dij
-
-
-def normalize_dkes(Dij: jax.Array, field: Field, v: Union[float, Float[Any, ""]] = 1.0):
-    """Normalize monoenergetic coefficients to match DKES/MONKES.
-
-    Parameters
-    ----------
-    Dij : jax.Array, shape(..., 3, 3)
-        Array of monoenergetic coefficients.
-    field : Field
-        Magnetic field information
-    v : float
-        Speed being considered.
-
-    Returns
-    -------
-    Dij : jax.Array, shape(..., 3, 3)
-        Rescaled monoenergetic coefficients
-    """
-    sgn = jnp.sign(field.Psi)
-    a = field.a_minor
-    sa = sgn * a
-    B0 = field.B0
-
-    scale = (
-        jnp.array(
-            [
-                [a**2, sa, sa / B0],
-                [sa, sa, sa / B0],
-                [sa / B0, sa / B0, 1 / B0**2],
-            ]
-        )
-        * v
-    )
-    return Dij * scale
-
-
-def compute_transport_matrix(
-    Dij: jax.Array,
-    speedgrid: AbstractSpeedGrid,
-    species: list[LocalMaxwellian],
-):
-    """Compute the transport matrix for each species from monoenergetic coefficients.
-
-    Parameters
-    ----------
-    Dij : jax.Array, shape(ns, nx, 3, 3)
-        Monoenergetic transport coefficient for each species and each speed.
-    speedgrid : AbstractSpeedGrid
-        Grid of coordinates in speed.
-    species : list[LocalMaxwellian]
-        Species being considered
-
-    Returns
-    -------
-    Lij : jax.Array, shape(ns, 3, 3)
-        Transport matrix for each species.
-    """
-    # TODO: check this, it seems to disagree with the formulas in monkes and Beidler
-    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None]
-    x = speedgrid.x[None, :, None, None]
-    fM = jnp.concatenate([sp(x * sp.v_thermal) for sp in species], axis=0)
-    wx = speedgrid.wx[None, :, None, None]
-
-    wij = jnp.concatenate(
-        [
-            jnp.concatenate([x**0, x**2, x**1], axis=3),
-            jnp.concatenate([x**2, x**4, x**3], axis=3),
-            jnp.concatenate([x**1, x**3, x**2], axis=3),
-        ],
-        axis=2,
-    )
-    vscale = jnp.concatenate(
-        [
-            jnp.concatenate([vth**3, vth**3, vth**4], axis=3),
-            jnp.concatenate([vth**3, vth**3, vth**4], axis=3),
-            jnp.concatenate([vth**4, vth**4, vth**5], axis=3),
-        ],
-        axis=2,
-    )
-    integrand = vscale * x**2 * fM * wij * Dij * wx
-    return integrand.sum(axis=1)
-
-
-def compute_fluxes(
-    f: jax.Array,
-    field: Field,
-    pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
-    species: list[LocalMaxwellian],
-):
-    """Compute output fluxes from solution of DKE.
-
-    Parameters
-    ----------
-    field : Field
-        Magnetic field information
-    pitchgrid : UniformPitchAngleGrid
-        Grid of coordinates in pitch angle.
-    speedgrid : AbstractSpeedGrid
-        Grid of coordinates in speed.
-    species : list[LocalMaxwellian]
-        Species being considered
-
-    Returns
-    -------
-    fluxes: dict of jax.Array
-        Contains:
-        <particle_flux> : jax.Array, shape(ns)
-            Γₐ = FSA particle flux for each species, in particles/(meter² second).
-        <heat_flux> : jax.Array, shape(ns)
-            Qₐ = FSA heat flux for each species, in Joules/(meter² second)
-        V|| : jax.Array, shape(ns, nt, nz)
-            V|| = Parallel velocity for each species, in meters/second
-        <V||B>: jax.Array, shape(ns)
-            <V||B> = Flux surface average field*parallel velocity for each species,
-            in Tesla*meter/second
-        <J||B>: float
-            <J||B> = Bootstrap current, in Tesla*Amps/meter².
-        J_rho : float
-            J_rho = Radial current, in Amps/meter².
-        J|| : jax.Array, shape(nt, nz)
-            J|| = Parallel current density in Amps/meter².
-    """
-    if not isinstance(species, (list, tuple)):
-        species = [species]
-
-    f = f.flatten()
-    shape = (len(species), speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
-    N = np.prod(shape)
-    if f.size == N:
-        f = f.reshape(shape)
-        particle_source = jnp.empty(0)
-        heat_source = jnp.empty(0)
-    elif f.size == N + 2 * len(species):
-        heat_source = f[-len(species) :]
-        particle_source = f[-2 * len(species) : -len(species)]
-        f = f[:N].reshape(shape)
-    else:
-        raise ValueError("got wrong size for f")
-
-    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
-    ms = jnp.array([sp.species.mass for sp in species])[:, None, None, None, None]
-    qs = jnp.array([sp.species.charge for sp in species])[:, None, None, None, None]
-    ns = jnp.array([sp.density for sp in species])[:, None, None, None, None]
-    xi = pitchgrid.xi[None, None, :, None, None]
-    x = speedgrid.x[None, :, None, None, None]
-    vpar = x * vth * xi
-    v = vth * x
-    # int f d3v
-    d3v = _d3v(speedgrid, pitchgrid, species)[..., None, None]
-    # flux surface average operator
-    dr = _dr(field)[None, None, None]
-    dr = dr / dr.sum()
-
-    radial_drift = radial_magnetic_drift(field, speedgrid, pitchgrid, species)
-
-    particle_flux = f * radial_drift * d3v * dr
-    heat_flux = 1 / 2 * f * ms * v**2 * radial_drift * d3v * dr
-    Vpar = 1 / ns * vpar * f * d3v
-    BVpar = field.Bmag[None, None, None, :, :] * Vpar * dr
-    bootstrap_current = ns * qs * BVpar
-    radial_current = particle_flux * qs
-    Jpar = qs * ns * Vpar
-
-    particle_flux = particle_flux.sum(axis=(1, 2, 3, 4))
-    heat_flux = heat_flux.sum(axis=(1, 2, 3, 4))
-    Vpar = Vpar.sum(axis=(1, 2))
-    BVpar = BVpar.sum(axis=(1, 2, 3, 4))
-    bootstrap_current = bootstrap_current.sum(axis=(0, 1, 2, 3, 4))
-    radial_current = radial_current.sum(axis=(0, 1, 2, 3, 4))
-    Jpar = Jpar.sum(axis=(0, 1, 2))
-
-    fluxes = {
-        "<particle_flux>": particle_flux,
-        "<heat_flux>": heat_flux,
-        "V||": Vpar,
-        "<V||B>": BVpar,
-        "<J||B>": bootstrap_current,
-        "J_rho": radial_current,
-        "J||": Jpar,
-        "heat_source": heat_source,
-        "particle_source": particle_source,
-    }
-
-    return fluxes
-
-
-def normalize_fluxes_sfincs(
-    fluxes: dict[str, jax.Array],
-    field: Field,
-    pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
-    species: list[LocalMaxwellian],
-    Bbar: Union[float, Float[Any, ""]] = 1,
-    Rbar: Union[float, Float[Any, ""]] = 1,
-    nbar: Union[float, Float[Any, ""]] = 1e20,
-    mbar: Union[float, Float[Any, ""]] = 1,
-    Tbar: Union[float, Float[Any, ""]] = 1e3,
-):
-    """Normalize fluxes to match SFINCS.
-
-    Parameters
-    ----------
-    fluxes : dict of array
-        Fluxes, as output from ``compute_fluxes``.
-    pitchgrid : UniformPitchAngleGrid
-        Grid of coordinates in pitch angle.
-    speedgrid : AbstractSpeedGrid
-        Grid of coordinates in speed.
-    species : list[LocalMaxwellian]
-        Species being considered
-    Bbar : float
-        Reference magnetic field, in Tesla.
-    Rbar : float
-        Reference length scale, in meters.
-    nbar : float
-        Reference density, in 1/meter^3
-    mbar : float
-        Reference mass, in proton masses.
-    Tbar : float
-        Reference temperature, in eV.
-
-    Returns
-    -------
-    fluxes : dict of array
-        Fluxes, in SFINCS normalized units.
-    """
-    mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
-    vbar = jnp.sqrt(2 * Tbar / mbar)
-    density = jnp.array([sp.density for sp in species])
-    sfincs_fluxes = {}
-    sfincs_fluxes["particleFlux_vm_rN"] = (
-        fluxes["<particle_flux>"] * Rbar / (nbar * vbar)
-    )
-    sfincs_fluxes["heatFlux_vm_rN"] = (
-        fluxes["<heat_flux>"] * Rbar / (nbar * vbar**3 * mbar)
-    )
-    sfincs_fluxes["flow"] = fluxes["V||"] * density[:, None, None] / (nbar * vbar)
-    sfincs_fluxes["FSABFlow"] = fluxes["<V||B>"] / (vbar * Bbar) * density / nbar
-    sfincs_fluxes["FSABjHat"] = fluxes["<J||B>"] / (
-        elementary_charge * nbar * vbar * Bbar
-    )
-    sfincs_fluxes["j_rN"] = fluxes["J_rho"] * Rbar / (elementary_charge * nbar * vbar)
-    sfincs_fluxes["jHat"] = fluxes["J||"] / (elementary_charge * nbar * vbar)
-    return sfincs_fluxes

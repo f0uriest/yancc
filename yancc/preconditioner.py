@@ -20,6 +20,8 @@ from .multigrid import (
     get_grid_resolutions,
     get_mdke_jacobi_smoothers,
     get_mdke_operators,
+    get_prolongations,
+    get_restrictions,
 )
 from .species import LocalMaxwellian, collisionality
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
@@ -70,7 +72,7 @@ class MDKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
         gauge = options.pop("gauge", True)
-        ress = options.pop("ress", None)
+        resolutions = options.pop("resolutions", None)
         max_grids = options.pop("max_grids", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         coarse_N = options.pop("coarse_N", 8000)
@@ -90,11 +92,11 @@ class MDKEPreconditioner(MultigridOperator):
             options
         )
 
-        if ress is None:
-            ress = get_grid_resolutions(
+        if resolutions is None:
+            resolutions = get_grid_resolutions(
                 ns=1,
                 nx=1,
-                na=pitchgrid.nxi,
+                na=pitchgrid.na,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -106,7 +108,7 @@ class MDKEPreconditioner(MultigridOperator):
             )
 
         if verbose:
-            for i, res in enumerate(ress):
+            for i, res in enumerate(resolutions):
                 ns, nx, na, nt, nz = res
                 jax.debug.print(
                     f"Grid {i}: na={na:4d}, "
@@ -118,7 +120,7 @@ class MDKEPreconditioner(MultigridOperator):
         fields, grids = get_fields_grids(
             field=field,
             pitchgrid=pitchgrid,
-            ress=ress,
+            resolutions=resolutions,
         )
 
         operators = get_mdke_operators(
@@ -141,15 +143,22 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_solver=smooth_solver,
             weight=smooth_weights,
         )
+        prolongations = get_prolongations(
+            fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
+        )
+        restrictions = get_restrictions(
+            fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
+        )
 
         super().__init__(
             operators=operators,
             smoothers=smoothers,
+            prolongations=prolongations,
+            restrictions=restrictions,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
             v2=v2,
-            interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_method=coarse_method,
@@ -165,7 +174,23 @@ def _(operator):
 
 
 class DKEPreconditioner(MultigridOperator):
-    """Preconditioner for the DKE."""
+    """Preconditioner for the DKE.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : AbstractSpeedGrid
+        Speed grid data.
+    species : list of LocalMaxwellian
+        Plasma species.
+    Erho : float
+        Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
+    background : list of LocalMaxwellian, optional
+        Background species for inter-species collisions.
+    """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -201,7 +226,7 @@ class DKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", "2d")
         self.p2 = options.pop("p2", 2)
         gauge = options.pop("gauge", True)
-        ress = options.pop("ress", None)
+        resolutions = options.pop("resolutions", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         max_grids = options.pop("max_grids", None)
         coarse_N = options.pop("coarse_N", 8000)
@@ -219,14 +244,15 @@ class DKEPreconditioner(MultigridOperator):
         cycle_index = options.pop("cycle_index", 1)
         operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
         smoother_weights = options.pop("smoother_weights", operator_weights)
+        coulomb_log = options.pop("coulomb_log", None)
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
 
-        if ress is None:
-            ress = get_grid_resolutions(
+        if resolutions is None:
+            resolutions = get_grid_resolutions(
                 ns=len(species),
                 nx=speedgrid.nx,
-                na=pitchgrid.nxi,
+                na=pitchgrid.na,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -237,7 +263,9 @@ class DKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
 
-        fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
+        fields, grids = get_fields_grids(
+            field=field, pitchgrid=pitchgrid, resolutions=resolutions
+        )
         operators = get_dke_operators(
             fields=fields,
             pitchgrids=grids,
@@ -250,7 +278,7 @@ class DKEPreconditioner(MultigridOperator):
             p2=self.p2,
             gauge=gauge,
             operator_weights=operator_weights,
-            **options,
+            coulomb_log=coulomb_log,
         )
         if smooth_type == 1:
             smoothers = get_dke_jacobi_smoothers(
@@ -267,7 +295,7 @@ class DKEPreconditioner(MultigridOperator):
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
-                **options,
+                coulomb_log=coulomb_log,
             )
         else:
             smoothers = get_dke_jacobi2_smoothers(
@@ -284,18 +312,33 @@ class DKEPreconditioner(MultigridOperator):
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
+                coulomb_log=coulomb_log,
                 **options,
             )
         coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        prefix_size = len(species) * speedgrid.nx
+        prolongations = get_prolongations(
+            fields=fields,
+            pitchgrids=grids,
+            prefix_size=prefix_size,
+            method=interp_method,
+        )
+        restrictions = get_restrictions(
+            fields=fields,
+            pitchgrids=grids,
+            prefix_size=prefix_size,
+            method=interp_method,
+        )
 
         super().__init__(
             operators=operators,
             smoothers=smoothers,
+            prolongations=prolongations,
+            restrictions=restrictions,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
             v2=v2,
-            interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
@@ -311,7 +354,23 @@ def _(operator):
 
 
 class DKEMPreconditioner(lx.AbstractLinearOperator):
-    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+    """Preconditioner for the DKE using block diagonal MDKE preconditioners.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : AbstractSpeedGrid
+        Speed grid data.
+    species : list of LocalMaxwellian
+        Plasma species.
+    Erho : float
+        Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
+    background : list of LocalMaxwellian, optional
+        Background species for inter-species collisions.
+    """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -342,37 +401,41 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         background = background
         self.Erho = jnp.asarray(Erho)
 
-        Ers = []
-        nus = []
+        erhohats = []
+        nuhats = []
         vs = []
         for i, spec in enumerate(species):
-            temp_nu = []
-            temp_Er = []
+            temp_nuhat = []
+            temp_erhohat = []
             temp_vs = []
             others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
                 nu = collisionality(spec, v, *others)
-                Erhat = Erho / v
+                erhohat = Erho / v
                 nuhat = nu / v
-                temp_Er.append(Erhat)
-                temp_nu.append(nuhat)
+                temp_erhohat.append(erhohat)
+                temp_nuhat.append(nuhat)
                 temp_vs.append(v)
 
-            Ers.append(temp_Er)
-            nus.append(temp_nu)
+            erhohats.append(temp_erhohat)
+            nuhats.append(temp_nuhat)
             vs.append(temp_vs)
 
-        Ers = jnp.array(Ers)
-        nus = jnp.array(nus)
+        erhohats = jnp.array(erhohats)
+        nuhats = jnp.array(nuhats)
         self.vs = jnp.array(vs)
 
-        def get_mdke_precond(nu, Er):
+        def get_mdke_precond(nuhat, erhohat):
             return MDKEPreconditioner(
-                field=field, pitchgrid=pitchgrid, erhohat=Er, nuhat=nu, **options
+                field=field,
+                pitchgrid=pitchgrid,
+                erhohat=erhohat,
+                nuhat=nuhat,
+                **options,
             )
 
-        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nus, Ers)
+        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nuhats, erhohats)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -397,7 +460,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -410,7 +473,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),

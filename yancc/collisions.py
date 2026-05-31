@@ -8,6 +8,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 import orthax
 import quadax
 from jaxtyping import Array, ArrayLike, Bool, Float
@@ -62,6 +63,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
     axorder: str = eqx.field(static=True)
+    _D: Float[Array, "na na"]
+    _scale: Float[Array, ""]
 
     def __init__(
         self,
@@ -73,8 +76,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert pitchgrid.nxi > fd_coeffs[1][p1].size // 2
-        assert pitchgrid.nxi > fd_coeffs[2][p2].size // 2
+        assert pitchgrid.na > fd_coeffs[1][p1].size // 2
+        assert pitchgrid.na > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.nuhat = jnp.array(nuhat)
@@ -82,33 +85,38 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
+        h = jnp.pi / pitchgrid.na
+        f1 = jnp.ones(pitchgrid.na)
+        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
+        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
+        sina = jnp.sqrt(1 - pitchgrid.xi**2)
+        cosa = -pitchgrid.xi
+        w1 = -(self.nuhat / 2 * cosa / sina)
+        w2 = -self.nuhat / 2
+        # w1, w2 only depend on pitch (na), not state size, so fold into a
+        # single (na, na) operator.
+        self._D = w1[:, None] * D1 + w2 * D2
+        self._scale = self.nuhat / h**2
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2))
-        h = jnp.pi / self.pitchgrid.nxi
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
+        f1 = jnp.moveaxis(f, 0, -1)  # (nt, nz, na) - convolved axis last
+        df = jnp.moveaxis(f1 @ self._D.T, -1, 0)
 
-        f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None]
-        f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=0)
-        f2 *= -self.nuhat / 2
-        df = f1 + f2
-
-        idx = self.pitchgrid.nxi // 2
-        scale = self.nuhat / h**2
+        idx = self.pitchgrid.na // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
-                scale * f[idx, 0, 0],
+                self._scale * f[idx, 0, 0],
                 unique_indices=True,
             ),
             df,
@@ -117,41 +125,26 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        _, caxorder = _parse_axorder_shape_3d(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
         )
-        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
+        df = jnp.diag(self._D)[:, None, None]
+        df = jnp.broadcast_to(df, df.shape[:1] + (self.field.ntheta, self.field.nzeta))
 
-        h = jnp.pi / self.pitchgrid.nxi
-
-        f1 = jnp.diag(
-            jax.jacfwd(fdfwd)(
-                f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
-            )
-        )[:, None, None]
-        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None]
-        f2 = jnp.diag(
-            jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)
-        )[:, None, None]
-        f2 *= -self.nuhat / 2
-        df = f1 + f2
-        df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta))
-
-        idx = self.pitchgrid.nxi // 2
-        scale = self.nuhat / h**2
+        idx = self.pitchgrid.na // 2
         df = jnp.where(
             self.gauge,
-            df.at[idx, 0, 0].set(scale, unique_indices=True),
+            df.at[idx, 0, 0].set(self._scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "z":
@@ -159,38 +152,25 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         if self.axorder[-1] == "t":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
-        shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nxi, self.axorder
+        _, caxorder = _parse_axorder_shape_3d(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
         )
-        f = jnp.ones((self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta))
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
+        df = self._D[:, None, None, :]
+        df = jnp.broadcast_to(
+            df, df.shape[:1] + (self.field.ntheta, self.field.nzeta) + df.shape[3:]
+        )
 
-        h = jnp.pi / self.pitchgrid.nxi
-
-        f1 = jax.jacfwd(fdfwd)(
-            f[:, 0, 0], str(self.p2) + "z", h=h, bc="symmetric", axis=0
-        )[:, None, None, :]
-        f1 *= -(self.nuhat / 2 * cosa / sina)[:, None, None, None]
-        f2 = jax.jacfwd(fd2)(f[:, 0, 0], self.p2, h=h, bc="symmetric", axis=0)[
-            :, None, None, :
-        ]
-        f2 *= -self.nuhat / 2
-        df = f1 + f2
-        df = jnp.tile(df, (1, self.field.ntheta, self.field.nzeta, 1))
-
-        idx = self.pitchgrid.nxi // 2
-        scale = self.nuhat / h**2
+        idx = self.pitchgrid.na // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
             .set(0, unique_indices=True)
             .at[idx, 0, 0, idx]
-            .set(scale, unique_indices=True),
+            .set(self._scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+        df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
         return df
 
     def as_matrix(self):
@@ -201,14 +181,14 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nxi,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -588,6 +568,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     nus: jax.Array
+    _D: Float[Array, "na na"]
+    _scale: Float[Array, "ns nidx"]
 
     def __init__(
         self,
@@ -599,6 +581,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -616,11 +599,23 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         for spa in species:
             nu = 0.0
             for spb in species + background:
-                nu += nuD_ab(spa, spb, x * spa.v_thermal)
+                nu += nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
+        h = jnp.pi / pitchgrid.na
+        f1 = jnp.ones(pitchgrid.na)
+        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
+        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
+        sina = jnp.sqrt(1 - pitchgrid.xi**2)
+        cosa = -pitchgrid.xi
+        # cos/sin only depends on pitchgrid; fold into a single (na, na) op.
+        # The species/x-dependent prefactor (-nus/2) is applied in mv.
+        self._D = (cosa / sina)[:, None] * D1 + D2
+        idxx = self.speedgrid.gauge_idx
+        self._scale = self.nus[:, idxx] / h**2
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -628,30 +623,23 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
-
-        h = jnp.pi / self.pitchgrid.nxi
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-
-        f1 = fdfwd(f, str(self.p2) + "z", h=h, bc="symmetric", axis=2)
-        f1 *= (cosa / sina)[:, None, None]
-        f2 = fd2(f, self.p2, h=h, bc="symmetric", axis=2)
-        df = f1 + f2
+        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
+        f1 = jnp.moveaxis(f, 2, -1)  # (ns, nx, nt, nz, na) - convolved axis last
+        df = jnp.moveaxis(f1 @ self._D.T, -1, 2)
         df *= -self.nus[:, :, None, None, None] / 2
-        idxa = self.pitchgrid.nxi // 2
+
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
-        scale = self.nus[:, idxx] / h**2
         df = jnp.where(
             self.gauge,
             df.at[:, idxx, idxa, 0, 0].set(
-                scale * f[:, idxx, idxa, 0, 0],
+                self._scale * f[:, idxx, idxa, 0, 0],
                 unique_indices=True,
             ),
             df,
@@ -660,45 +648,34 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape_4d(
+        _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
 
-        h = jnp.pi / self.pitchgrid.nxi
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-        f = jnp.ones(self.pitchgrid.nxi)
-        f1 = jnp.diag(
-            jax.jacfwd(fdfwd)(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        )[None, None, :, None, None]
-        f1 *= (cosa / sina)[None, None, :, None, None]
-        f2 = jnp.diag(jax.jacfwd(fd2)(f, self.p2, h=h, bc="symmetric", axis=0))[
-            None, None, :, None, None
-        ]
-        df = f1 + f2
-        df = jnp.tile(df, (1, 1, 1, self.field.ntheta, self.field.nzeta))
+        df = jnp.diag(self._D)[None, None, :, None, None]
+        df = jnp.broadcast_to(df, df.shape[:3] + (self.field.ntheta, self.field.nzeta))
+        df = -self.nus[:, :, None, None, None] / 2 * df
 
-        df *= -self.nus[:, :, None, None, None] / 2
-
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
-        scale = self.nus[:, idxx] / h**2
         df = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(scale, unique_indices=True),
+            df.at[:, idxx, idxa, 0, 0].set(self._scale, unique_indices=True),
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -710,7 +687,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -727,33 +704,27 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
 
-        f = jnp.ones(self.pitchgrid.nxi)
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-        h = jnp.pi / self.pitchgrid.nxi
-        f1 = jax.jacfwd(fdfwd)(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= (cosa / sina)[:, None]
-        f2 = jax.jacfwd(fd2)(f, self.p2, h=h, bc="symmetric", axis=0)
-        df = f1 + f2
-        df = dense_to_banded(bw, bw, df)[None, None, :, None, None, :]
-        df *= -self.nus[:, :, None, None, None, None] / 2
-        df = jnp.tile(df, (1, 1, 1, self.field.ntheta, self.field.nzeta, 1))
+        df = dense_to_banded(bw, bw, self._D)[None, None, :, None, None, :]
+        df = -self.nus[:, :, None, None, None, None] / 2 * df
+        df = jnp.broadcast_to(
+            df, df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[5:]
+        )
 
-        idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = self.nus[:, idxx] / h**2
+        scale = self._scale
 
         bandwidth = 2 * bw + 1
         # 1. Band indices cover the entire bandwidth
         bands = jnp.arange(bandwidth)
         # 2. Compute the wrapped column indices (shape: M, bandwidth)
-        cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nxi
+        cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
         # 3. Create the batched replacement block (shape: ns, M, bandwidth)
         vals = jnp.zeros((len(self.species), idxx.size, bandwidth))
         # Drop the (ns, M) scales precisely onto the main diagonal across the batch
@@ -768,12 +739,13 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nxi))
+        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
         if fmt == "dense":
             df = banded_to_dense(bw, bw, df)
         return df
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -785,34 +757,25 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
 
-        h = jnp.pi / self.pitchgrid.nxi
-        sina = jnp.sqrt(1 - self.pitchgrid.xi**2)
-        cosa = -self.pitchgrid.xi
-        f = jnp.ones(self.pitchgrid.nxi)
-        f1 = jax.jacfwd(fdfwd)(f, str(self.p2) + "z", h=h, bc="symmetric", axis=0)
-        f1 *= (cosa / sina)[:, None]
-        f2 = jax.jacfwd(fd2)(f, self.p2, h=h, bc="symmetric", axis=0)
-        df = f1 + f2
         nus = -jnp.diag(self.nus.flatten()) / 2
-        df = jnp.kron(df, nus)
+        df = jnp.kron(self._D, nus)
         df = jnp.repeat(df[None], self.field.ntheta * self.field.nzeta, axis=0)
 
-        df = df.reshape(
-            *shape, self.pitchgrid.nxi, len(self.species), self.speedgrid.nx
-        )
+        df = df.reshape(*shape, self.pitchgrid.na, len(self.species), self.speedgrid.nx)
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
         idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
 
+        h = jnp.pi / self.pitchgrid.na
         scale = self.nus[idxs, idxx] / h**2
         df = jnp.where(
             self.gauge,
@@ -824,7 +787,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         N = self.in_size()
-        M = self.pitchgrid.nxi * len(self.species) * self.speedgrid.nx
+        M = self.pitchgrid.na * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
     def as_matrix(self):
@@ -838,7 +801,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -851,7 +814,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -902,6 +865,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         background: Optional[list[LocalMaxwellian]] = None,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -925,9 +889,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
             term1 = 0.0
             term2 = 0.0
             for spb in species + background:
-                nupar = nupar_ab(spa, spb, v)
-                nuD = nuD_ab(spa, spb, v)
-                gamma = gamma_ab(spa, spb)
+                nupar = nupar_ab(spa, spb, v, lnlambda=coulomb_log)
+                nuD = nuD_ab(spa, spb, v, lnlambda=coulomb_log)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 ma, mb = spa.species.mass, spb.species.mass
                 vtb = spb.v_thermal
                 term0 += 4 * jnp.pi * gamma * ma / mb * spb(v)
@@ -941,6 +905,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self.coeff2 = jnp.asarray(coeff2)
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -948,7 +913,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -965,7 +930,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + self.coeff1[:, :, None, None, None] * df
             + self.coeff0[:, :, None, None, None] * f
         )
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(self.speedgrid.wx) ** 2)
@@ -984,12 +949,13 @@ class EnergyScattering(lx.AbstractLinearOperator):
         return -out.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.diagonal")
     def diagonal(self):
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1003,10 +969,11 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + self.coeff1[:, :, None, None, None] * df
             + self.coeff0[:, :, None, None, None] * f
         )
-        out = jnp.tile(
-            out, (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta)
+        out = jnp.broadcast_to(
+            out,
+            out.shape[:2] + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
         )
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(self.speedgrid.wx) ** 2)
@@ -1022,6 +989,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         return -out.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1033,7 +1001,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1053,7 +1021,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1067,10 +1035,13 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + self.coeff1[:, :, None, None, None, None] * df
             + self.coeff0[:, :, None, None, None, None] * f
         )
-        out = jnp.tile(
-            out, (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1)
+        out = jnp.broadcast_to(
+            out,
+            out.shape[:2]
+            + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+            + out.shape[5:],
         )
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(self.speedgrid.wx) ** 2)
@@ -1092,13 +1063,12 @@ class EnergyScattering(lx.AbstractLinearOperator):
         return -out
 
     @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nxi
-            )
+            return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
         if self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
         if self.axorder[2] == "z":
@@ -1117,7 +1087,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1130,7 +1100,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1180,6 +1150,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1204,7 +1175,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             v = x * va
             Fa = spa(v)
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 vb = spb.v_thermal
                 mb = spb.species.mass
                 # need to evaluate fb on the speed grid for fa
@@ -1223,6 +1194,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         self.C = jnp.asarray(C)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f = vector
@@ -1230,7 +1202,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1238,7 +1210,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
         df = jnp.einsum("psyx,sxatz->pyatz", self.C, f)
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
@@ -1254,22 +1226,23 @@ class FieldPartCD(lx.AbstractLinearOperator):
         return -df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
         diag = jnp.einsum("iijj->ij", self.C)
-        df = jnp.tile(
+        df = jnp.broadcast_to(
             diag[:, :, None, None, None],
-            (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta),
+            diag.shape + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
         )
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
@@ -1282,6 +1255,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         return -df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1293,7 +1267,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1304,7 +1278,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 op = lambda x: jnp.pad(x[:, None, :], [(0, 0), (bw, bw), (0, 0)])
             return op(df)
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxs_mesh = idxs[:, None]
@@ -1321,15 +1295,17 @@ class FieldPartCD(lx.AbstractLinearOperator):
             shape, caxorder = _parse_axorder_shape_4d(
                 self.field.ntheta,
                 self.field.nzeta,
-                self.pitchgrid.nxi,
+                self.pitchgrid.na,
                 self.speedgrid.nx,
                 len(self.species),
                 self.axorder,
             )
             diag = jnp.einsum("ikjj->ijk", self.C)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 diag[:, :, None, None, None, :],
-                (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1),
+                diag.shape[:2]
+                + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+                + diag.shape[2:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1358,15 +1334,17 @@ class FieldPartCD(lx.AbstractLinearOperator):
             shape, caxorder = _parse_axorder_shape_4d(
                 self.field.ntheta,
                 self.field.nzeta,
-                self.pitchgrid.nxi,
+                self.pitchgrid.na,
                 self.speedgrid.nx,
                 len(self.species),
                 self.axorder,
             )
             diag = jnp.einsum("iijk->ijk", self.C)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 diag[:, :, None, None, None, :],
-                (1, 1, self.pitchgrid.nxi, self.field.ntheta, self.field.nzeta, 1),
+                diag.shape[:2]
+                + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+                + diag.shape[2:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1393,6 +1371,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             raise NotImplementedError()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1401,7 +1380,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = df.reshape((k, k))
         df = jnp.repeat(df[None], self.in_size() // k, axis=0)
         df = df.reshape(
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.field.ntheta,
             self.field.nzeta,
             len(self.species),
@@ -1414,13 +1393,13 @@ class FieldPartCD(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1440,7 +1419,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = -df.reshape(N // M, M, M)
 
         if self.axorder[2] == "a":
-            return _refold(df, self.pitchgrid.nxi)
+            return _refold(df, self.pitchgrid.na)
         if self.axorder[2] == "t":
             return _refold(df, self.field.ntheta)
         if self.axorder[2] == "z":
@@ -1450,8 +1429,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -1459,7 +1438,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1472,7 +1451,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1522,6 +1501,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1544,17 +1524,18 @@ class FieldPartCG(lx.AbstractLinearOperator):
             Fa = spa(v)
             pb = []
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 pb.append(gamma * Fa * 2 * v**2 / va**4)
             prefactor.append(pb)
 
         self.prefactor = jnp.array(prefactor)
         self.Txi = orthax.orthvander(
-            pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+            pitchgrid.xi, potentials.legendregrid.na - 1, potentials.legendregrid.xirec
         )
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f0 = vector
@@ -1562,7 +1543,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1582,7 +1563,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # transform back to real space in pitch angle
         df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
@@ -1599,12 +1580,13 @@ class FieldPartCG(lx.AbstractLinearOperator):
         return -df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1618,11 +1600,12 @@ class FieldPartCG(lx.AbstractLinearOperator):
         )
         Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
         G = jnp.einsum("aaxix->axi", Gabxiy)
-        df = jnp.tile(
-            G[:, :, :, None, None], (1, 1, 1, self.field.ntheta, self.field.nzeta)
+        df = jnp.broadcast_to(
+            G[:, :, :, None, None],
+            G.shape + (self.field.ntheta, self.field.nzeta),
         )
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
@@ -1636,6 +1619,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         return -df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -1647,7 +1631,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1661,7 +1645,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1671,7 +1655,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         )
 
         idxs = jnp.arange(len(self.species))
-        idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
 
@@ -1687,9 +1671,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
             G = jnp.einsum("abxix->axib", Gabxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 G[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                G.shape[:3] + (self.field.ntheta, self.field.nzeta) + G.shape[3:],
             )
             idxs_mesh = idxs[:, None]
             idxx_mesh = idxx[None, :]
@@ -1723,9 +1707,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
             G = jnp.einsum("aaxiy->axiy", Gabxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 G[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                G.shape[:3] + (self.field.ntheta, self.field.nzeta) + G.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1745,7 +1729,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # if desired.
         if self.axorder[-1] == "a":
             if bw is None:
-                bw = self.pitchgrid.nxi // 2  # full matrix
+                bw = self.pitchgrid.na // 2  # full matrix
             Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
             Gsxl = jnp.einsum("aaxlx->axl", Gabxly)
             Gsxlj = jax.vmap(jax.vmap(jnp.diag))(Gsxl)
@@ -1754,15 +1738,15 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 bandwidth = 2 * bw + 1
                 # 1. Band indices cover the entire bandwidth
                 bands = jnp.arange(bandwidth)
                 # 2. Compute the wrapped column indices for row 'idxa' across the batch
-                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nxi
+                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
                 # 3. Create the replacement values: zeros with 'scale' on the diagonal
                 vals = jnp.zeros((len(self.species), idxx.size, bandwidth))
                 vals = vals.at[:, :, bw].set(scale)
@@ -1778,13 +1762,13 @@ class FieldPartCG(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nxi))
+                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
                 return -df
             else:
                 idxa = idxa[0]
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 df = jnp.where(
                     self.gauge,
@@ -1795,11 +1779,12 @@ class FieldPartCG(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+                df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
                 return -df
         raise NotImplementedError()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -1807,7 +1792,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1816,7 +1801,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
         )
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1828,9 +1813,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
             Gabxylj = jax.vmap(jax.vmap(jax.vmap(jax.vmap(jnp.diag))))(Gabxyl)
             Gabxiy = jnp.einsum("il,abxylj->abxyij", self.Txi, Gabxylj)
             Gaxihby = jnp.einsum("jh,abxyij->axihby", self.Txi_inv, Gabxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Gaxihby[:, :, :, None, None, :, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1, 1),
+                Gaxihby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Gaxihby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1842,7 +1829,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
             N = self.in_size()
-            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.nxi
+            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.na
             df = -df.reshape(N // M, M, M)
             return df
         else:
@@ -1852,9 +1839,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             Gabxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Gabxliy)
             Gaxiby = jnp.moveaxis(Gabxiy, (0, 2, 3, 1, 4), (0, 1, 2, 3, 4))
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Gaxiby[:, :, :, None, None, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1),
+                Gaxiby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Gaxiby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -1877,8 +1866,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -1886,7 +1875,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1899,7 +1888,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1952,6 +1941,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1977,7 +1967,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             temp_prefactor_H = []
             temp_prefactor_dH = []
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 mb = spb.species.mass
                 temp_prefactor_H.append(-2 / va**2 * gamma * Fa)
                 temp_prefactor_dH.append(-2 * v / va**2 * (1 - ma / mb) * gamma * Fa)
@@ -1987,11 +1977,12 @@ class FieldPartCH(lx.AbstractLinearOperator):
         self.prefactor_H = jnp.array(prefactor_H)
         self.prefactor_dH = jnp.array(prefactor_dH)
         self.Txi = orthax.orthvander(
-            pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+            pitchgrid.xi, potentials.legendregrid.na - 1, potentials.legendregrid.xirec
         )
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.mv")
     def mv(self, vector):
         """Matrix vector product."""
         f0 = vector
@@ -1999,7 +1990,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2022,7 +2013,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # transform back to real space in pitch angle
         df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Habxlk + dHabxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
@@ -2039,12 +2030,13 @@ class FieldPartCH(lx.AbstractLinearOperator):
         return -df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2058,10 +2050,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
         )
         Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
         H = jnp.einsum("aaxix->axi", Habxiy)
-        df = jnp.tile(
-            H[:, :, :, None, None], (1, 1, 1, self.field.ntheta, self.field.nzeta)
+        df = jnp.broadcast_to(
+            H[:, :, :, None, None],
+            H.shape + (self.field.ntheta, self.field.nzeta),
         )
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
@@ -2075,6 +2068,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         return -df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
@@ -2086,7 +2080,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nxi,
+                "a": self.pitchgrid.na,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -2100,7 +2094,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2110,7 +2104,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
 
         idxs = jnp.arange(len(self.species))
-        idxa = jnp.atleast_1d(self.pitchgrid.nxi // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
 
@@ -2126,9 +2120,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
             H = jnp.einsum("abxix->axib", Habxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 H[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                H.shape[:3] + (self.field.ntheta, self.field.nzeta) + H.shape[3:],
             )
             idxs_mesh = idxs[:, None]
             idxx_mesh = idxx[None, :]
@@ -2162,9 +2156,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
             H = jnp.einsum("aaxiy->axiy", Habxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 H[:, :, :, None, None, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                H.shape[:3] + (self.field.ntheta, self.field.nzeta) + H.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -2184,7 +2178,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # if desired.
         if self.axorder[-1] == "a":
             if bw is None:
-                bw = self.pitchgrid.nxi // 2
+                bw = self.pitchgrid.na // 2
             Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
             Hsxl = jnp.einsum("aaxlx->axl", Habxly)
             Hsxlj = jax.vmap(jax.vmap(jnp.diag))(Hsxl)
@@ -2192,15 +2186,15 @@ class FieldPartCH(lx.AbstractLinearOperator):
             df = jnp.einsum("ja,sxij->sxia", self.Txi_inv, Hsxij)
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 bandwidth = 2 * bw + 1
                 # 1. Band indices cover the entire bandwidth
                 bands = jnp.arange(bandwidth)
                 # 2. Compute the wrapped column indices for row 'idxa' across the batch
-                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nxi
+                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
                 # 3. Create the replacement values: zeros with 'scale' on the diagonal
                 vals = jnp.zeros((len(self.species), idxx.size, bandwidth))
                 vals = vals.at[:, :, bw].set(scale)
@@ -2216,12 +2210,12 @@ class FieldPartCH(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nxi))
+                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
                 return -df
             else:
-                df = jnp.tile(
+                df = jnp.broadcast_to(
                     df[:, :, :, None, None, :],
-                    (1, 1, 1, self.field.ntheta, self.field.nzeta, 1),
+                    df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[3:],
                 )
                 df = jnp.where(
                     self.gauge,
@@ -2232,11 +2226,12 @@ class FieldPartCH(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, self.pitchgrid.nxi, self.pitchgrid.nxi))
+                df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
                 return -df
         raise NotImplementedError()
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.block_diagonal2")
     def block_diagonal2(self):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
@@ -2244,7 +2239,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nxi,
+            self.pitchgrid.na,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2253,7 +2248,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
         ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
 
-        idxa = self.pitchgrid.nxi // 2
+        idxa = self.pitchgrid.na // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -2265,9 +2260,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
             Habxylj = jax.vmap(jax.vmap(jax.vmap(jax.vmap(jnp.diag))))(Habxyl)
             Habxiy = jnp.einsum("il,abxylj->abxyij", self.Txi, Habxylj)
             Haxihby = jnp.einsum("jh,abxyij->axihby", self.Txi_inv, Habxiy)
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Haxihby[:, :, :, None, None, :, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1, 1),
+                Haxihby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Haxihby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -2279,7 +2276,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
             N = self.in_size()
-            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.nxi
+            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.na
             df = -df.reshape(N // M, M, M)
             return df
         else:
@@ -2289,9 +2286,11 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             Habxiy = jnp.einsum("il,abxliy->abxiy", self.Txi, Habxliy)
             Haxiby = jnp.moveaxis(Habxiy, (0, 2, 3, 1, 4), (0, 1, 2, 3, 4))
-            df = jnp.tile(
+            df = jnp.broadcast_to(
                 Haxiby[:, :, :, None, None, :, :],
-                (1, 1, 1, self.field.ntheta, self.field.nzeta, 1, 1),
+                Haxiby.shape[:3]
+                + (self.field.ntheta, self.field.nzeta)
+                + Haxiby.shape[3:],
             )
             df = jnp.where(
                 self.gauge,
@@ -2314,8 +2313,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -2323,7 +2322,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2336,7 +2335,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2388,6 +2387,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2406,6 +2406,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
         self.CH = FieldPartCH(
             field,
@@ -2415,6 +2416,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
         self.CD = FieldPartCD(
             field,
@@ -2424,9 +2426,11 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.mv")
     def mv(self, vector):
         """Matrix vector product."""
         out1 = self.CD.mv(vector)
@@ -2435,33 +2439,75 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         return out1 + out2 + out3
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d1 = self.CD.diagonal()
-        d2 = self.CG.diagonal()
-        d3 = self.CH.diagonal()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n1 = np.prod(list(sizes.values()))
+        x = jnp.zeros(n1)
+        intermediates = [
+            lambda x: x + self.CD.diagonal(),
+            lambda x: x + self.CG.diagonal(),
+            lambda x: x + self.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CD.block_diagonal(fmt, bw)
-        d2 = self.CG.block_diagonal(fmt, bw)
-        d3 = self.CH.block_diagonal(fmt, bw)
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        if fmt == "dense":
+            x = jnp.zeros((n1, n2, n2))
+        else:
+            assert isinstance(bw, int)
+            x = jnp.zeros((n1, 2 * bw + 1, n2))
+        intermediates = [
+            lambda x: x + self.CD.block_diagonal(fmt, bw),
+            lambda x: x + self.CG.block_diagonal(fmt, bw),
+            lambda x: x + self.CH.block_diagonal(fmt, bw),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CD.block_diagonal2()
-        d2 = self.CG.block_diagonal2()
-        d3 = self.CH.block_diagonal2()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.CD.block_diagonal2(),
+            lambda x: x + self.CG.block_diagonal2(),
+            lambda x: x + self.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -2469,7 +2515,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2482,7 +2528,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2544,6 +2590,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: Optional[jax.Array] = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2564,16 +2611,39 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.operator_weights = jnp.asarray(operator_weights)
 
         self.CL = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species, background, p2, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            background,
+            p2,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
         self.CE = EnergyScattering(
-            field, pitchgrid, speedgrid, species, background, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            background,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
         self.CF = FieldParticleScattering(
-            field, pitchgrid, speedgrid, species, potentials, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            potentials,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.mv")
     def mv(self, vector):
         """Matrix vector product."""
         out1 = self.CL.mv(vector)
@@ -2586,45 +2656,81 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         )
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d1 = self.CL.diagonal()
-        d2 = self.CE.diagonal()
-        d3 = self.CF.diagonal()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n1 = np.prod(list(sizes.values()))
+        x = jnp.zeros(n1)
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.diagonal(),
+            lambda x: x + self.operator_weights[1] * self.CE.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CL.block_diagonal(fmt, bw)
-        d2 = self.CE.block_diagonal(fmt, bw)
-        d3 = self.CF.block_diagonal(fmt, bw)
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        if fmt == "dense":
+            x = jnp.zeros((n1, n2, n2))
+        else:
+            assert isinstance(bw, int)
+            x = jnp.zeros((n1, 2 * bw + 1, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[1] * self.CE.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.block_diagonal(fmt, bw),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CL.block_diagonal2()
-        d2 = self.CE.block_diagonal2()
-        d3 = self.CF.block_diagonal2()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.block_diagonal2(),
+            lambda x: x + self.operator_weights[1] * self.CE.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.zeros(self.in_size())
-        return jax.jacfwd(self.mv)(x)
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
 
     def in_structure(self):
         """Pytree structure of expected input."""
@@ -2632,7 +2738,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2645,7 +2751,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.na
                 * self.speedgrid.nx
                 * len(self.species),
             ),
