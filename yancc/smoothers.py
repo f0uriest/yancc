@@ -262,9 +262,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
@@ -280,7 +282,13 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
 
         if self.smooth_solver == "banded":
             mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
-            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibriate=True,
+                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+            )
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -294,7 +302,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x
+                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
                 )
             else:
                 size, N, M = self.mats.shape
@@ -393,6 +401,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         smooth_solver: str | None = None,
         weight: jax.Array | None = None,
         operator_weights: jax.Array | None = None,
+        coulomb_log=None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
         self.field = field
@@ -422,15 +431,19 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver if its more efficient. This size is a heuristic that
-            # could probably be improved
-            if sizes[self.axorder[-1]] > 50:
+            # use banded solver once it actually saves memory: dense stores N*n
+            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
+            # when the convolved axis is longer than the storage crossover. For
+            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
                 smooth_solver = "banded"
             else:
                 smooth_solver = "dense"
         if operator_weights is None:
+            # defaults, zero out krook diffusion term
             operator_weights = jnp.ones(8).at[-1].set(0)
             if smooth_solver == "banded":
+                # also zero out field scattering to keep bandwidth small
                 operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
@@ -440,7 +453,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
@@ -465,10 +478,17 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
         ).block_diagonal(self.smooth_solver, self.bandwidth)
 
         if self.smooth_solver == "banded":
-            self.mats = lu_factor_banded_periodic(self.bandwidth, self.bandwidth, mats)
+            self.mats = lu_factor_banded_periodic(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibriate=True,
+                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+            )
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -489,7 +509,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x
+                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
                 )
             else:
                 size, N, M = self.mats.shape
@@ -607,6 +627,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         smooth_solver="dense",
         weight: jax.Array | None = None,
         operator_weights: jax.Array | None = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert axorder[-2:] == "sx"
@@ -620,7 +641,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        assert smooth_solver in {"banded", "dense"}
+        assert smooth_solver in {None, "banded", "dense"}
+        if smooth_solver is None:
+            smooth_solver = "dense"
         self.smooth_solver = smooth_solver
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
@@ -630,7 +653,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
@@ -651,6 +674,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             axorder=axorder,
             gauge=gauge,
             operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
         ).block_diagonal2()
 
         if self.smooth_solver == "banded":
@@ -671,7 +695,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
                 self.axorder,
             )
 
-            if self.smooth_solver == "banded":
+            # unreachable: __init__ rejects smooth_solver="banded" for this smoother.
+            if self.smooth_solver == "banded":  # pragma: no cover
                 raise NotImplementedError()
             else:
                 size, N, M = self.mats.shape

@@ -7,6 +7,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 import orthax
 import quadax
 from jaxtyping import Array, ArrayLike, Bool, Float
@@ -579,6 +580,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -596,7 +598,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         for spa in species:
             nu = 0.0
             for spb in species + background:
-                nu += nuD_ab(spa, spb, x * spa.v_thermal)
+                nu += nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
         h = jnp.pi / pitchgrid.na
@@ -862,6 +864,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         background: list[LocalMaxwellian] | None = None,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -885,9 +888,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
             term1 = 0.0
             term2 = 0.0
             for spb in species + background:
-                nupar = nupar_ab(spa, spb, v)
-                nuD = nuD_ab(spa, spb, v)
-                gamma = gamma_ab(spa, spb)
+                nupar = nupar_ab(spa, spb, v, lnlambda=coulomb_log)
+                nuD = nuD_ab(spa, spb, v, lnlambda=coulomb_log)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 ma, mb = spa.species.mass, spb.species.mass
                 vtb = spb.v_thermal
                 term0 += 4 * jnp.pi * gamma * ma / mb * spb(v)
@@ -1065,12 +1068,13 @@ class EnergyScattering(lx.AbstractLinearOperator):
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
             return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
-        if self.axorder[2] == "t":
+        elif self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        if self.axorder[2] == "z":
+        elif self.axorder[2] == "z":
             return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
         else:
-            raise ValueError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1146,6 +1150,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1170,7 +1175,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             v = x * va
             Fa = spa(v)
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 vb = spb.v_thermal
                 mb = spb.species.mass
                 # need to evaluate fb on the speed grid for fa
@@ -1323,7 +1328,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
             return -df
-        if self.axorder[-1] == "x":
+        elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
             shape, caxorder = _parse_axorder_shape_4d(
@@ -1363,7 +1368,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 df = dense_to_banded(bw, bw, df)
             return -df
         else:
-            raise NotImplementedError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCD.block_diagonal2")
@@ -1415,12 +1421,13 @@ class FieldPartCD(lx.AbstractLinearOperator):
 
         if self.axorder[2] == "a":
             return _refold(df, self.pitchgrid.na)
-        if self.axorder[2] == "t":
+        elif self.axorder[2] == "t":
             return _refold(df, self.field.ntheta)
-        if self.axorder[2] == "z":
+        elif self.axorder[2] == "z":
             return _refold(df, self.field.nzeta)
         else:
-            raise ValueError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1496,6 +1503,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1518,7 +1526,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             Fa = spa(v)
             pb = []
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 pb.append(gamma * Fa * 2 * v**2 / va**4)
             prefactor.append(pb)
 
@@ -1692,7 +1700,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
             return -df
-        if self.axorder[-1] == "x":
+        elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
             Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
@@ -1721,7 +1729,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # need trick here to avoid big matrices if banded format is desired.
         # note that it isn't actually banded in a, but we can still truncate it
         # if desired.
-        if self.axorder[-1] == "a":
+        elif self.axorder[-1] == "a":
             if bw is None:
                 bw = self.pitchgrid.na // 2  # full matrix
             Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
@@ -1775,7 +1783,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
                 df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
                 return -df
-        raise NotImplementedError()
+        else:
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCG.block_diagonal2")
@@ -1853,10 +1863,11 @@ class FieldPartCG(lx.AbstractLinearOperator):
             df = -df.reshape(N // M, M, M)
             if self.axorder[2] == "t":
                 return _refold(df, self.field.ntheta)
-            if self.axorder[2] == "z":
+            elif self.axorder[2] == "z":
                 return _refold(df, self.field.nzeta)
             else:
-                raise ValueError()
+                # unreachable, just kept to appease type checker
+                raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -1935,6 +1946,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -1960,7 +1972,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             temp_prefactor_H = []
             temp_prefactor_dH = []
             for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb)
+                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
                 mb = spb.species.mass
                 temp_prefactor_H.append(-2 / va**2 * gamma * Fa)
                 temp_prefactor_dH.append(-2 * v / va**2 * (1 - ma / mb) * gamma * Fa)
@@ -2140,7 +2152,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             if fmt == "banded":
                 df = dense_to_banded(bw, bw, df)
             return -df
-        if self.axorder[-1] == "x":
+        elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
             Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
@@ -2169,7 +2181,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # need trick here to avoid big matrices if banded format is desired.
         # note that it isn't actually banded in a, but we can still truncate it
         # if desired.
-        if self.axorder[-1] == "a":
+        elif self.axorder[-1] == "a":
             if bw is None:
                 bw = self.pitchgrid.na // 2
             Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
@@ -2221,7 +2233,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
                 df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
                 return -df
-        raise NotImplementedError()
+        else:
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCH.block_diagonal2")
@@ -2302,7 +2316,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
             if self.axorder[2] == "z":
                 return _refold(df, self.field.nzeta)
             else:
-                raise ValueError()
+                # unreachable, just kept to appease type checker
+                raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -2380,6 +2395,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         potentials: RosenbluthPotentials,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2398,6 +2414,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
         self.CH = FieldPartCH(
             field,
@@ -2407,6 +2424,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
         self.CD = FieldPartCD(
             field,
@@ -2416,6 +2434,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             potentials,
             axorder,
             gauge,
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit
@@ -2431,28 +2450,67 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
     @jax.named_scope("FieldParticleScattering.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d1 = self.CD.diagonal()
-        d2 = self.CG.diagonal()
-        d3 = self.CH.diagonal()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n1 = np.prod(list(sizes.values()))
+        x = jnp.zeros(n1)
+        intermediates = [
+            lambda x: x + self.CD.diagonal(),
+            lambda x: x + self.CG.diagonal(),
+            lambda x: x + self.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     @jax.named_scope("FieldParticleScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CD.block_diagonal(fmt, bw)
-        d2 = self.CG.block_diagonal(fmt, bw)
-        d3 = self.CH.block_diagonal(fmt, bw)
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        if fmt == "dense":
+            x = jnp.zeros((n1, n2, n2))
+        else:
+            assert isinstance(bw, int)
+            x = jnp.zeros((n1, 2 * bw + 1, n2))
+        intermediates = [
+            lambda x: x + self.CD.block_diagonal(fmt, bw),
+            lambda x: x + self.CG.block_diagonal(fmt, bw),
+            lambda x: x + self.CH.block_diagonal(fmt, bw),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     @jax.named_scope("FieldParticleScattering.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CD.block_diagonal2()
-        d2 = self.CG.block_diagonal2()
-        d3 = self.CH.block_diagonal2()
-        return d1 + d2 + d3
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.CD.block_diagonal2(),
+            lambda x: x + self.CG.block_diagonal2(),
+            lambda x: x + self.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -2540,6 +2598,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: jax.Array | None = None,
+        coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
@@ -2560,13 +2619,35 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         self.operator_weights = jnp.asarray(operator_weights)
 
         self.CL = PitchAngleScattering(
-            field, pitchgrid, speedgrid, species, background, p2, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            background,
+            p2,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
         self.CE = EnergyScattering(
-            field, pitchgrid, speedgrid, species, background, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            background,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
         self.CF = FieldParticleScattering(
-            field, pitchgrid, speedgrid, species, potentials, axorder, gauge
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            potentials,
+            axorder,
+            gauge,
+            coulomb_log=coulomb_log,
         )
 
     @eqx.filter_jit
@@ -2586,40 +2667,73 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     @jax.named_scope("FokkerPlanckLandau.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        d1 = self.CL.diagonal()
-        d2 = self.CE.diagonal()
-        d3 = self.CF.diagonal()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n1 = np.prod(list(sizes.values()))
+        x = jnp.zeros(n1)
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.diagonal(),
+            lambda x: x + self.operator_weights[1] * self.CE.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.diagonal(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CL.block_diagonal(fmt, bw)
-        d2 = self.CE.block_diagonal(fmt, bw)
-        d3 = self.CF.block_diagonal(fmt, bw)
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]]
+        n1 = np.prod(list(sizes.values())) // n2
+        if fmt == "dense":
+            x = jnp.zeros((n1, n2, n2))
+        else:
+            assert isinstance(bw, int)
+            x = jnp.zeros((n1, 2 * bw + 1, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[1] * self.CE.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.block_diagonal(fmt, bw),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.block_diagonal(fmt, bw),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.block_diagonal2")
     def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d1 = self.CL.block_diagonal2()
-        d2 = self.CE.block_diagonal2()
-        d3 = self.CF.block_diagonal2()
-        return (
-            self.operator_weights[0] * d1
-            + self.operator_weights[1] * d2
-            + self.operator_weights[2] * d3
-        )
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.na,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
+        n1 = np.prod(list(sizes.values())) // n2
+        x = jnp.zeros((n1, n2, n2))
+        intermediates = [
+            lambda x: x + self.operator_weights[0] * self.CL.block_diagonal2(),
+            lambda x: x + self.operator_weights[1] * self.CE.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CD.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CG.block_diagonal2(),
+            lambda x: x + self.operator_weights[2] * self.CF.CH.block_diagonal2(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

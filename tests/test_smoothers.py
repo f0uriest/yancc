@@ -103,7 +103,7 @@ def test_dke_banded_vs_dense_smoother(
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_mdke_banded_vs_dense_smoother(pitchgrid, field, axorder):
     erhohat = 1e-3
-    nuhat = 1e-3
+    nuhat = 1e-5
     s1 = MDKEJacobiSmoother(
         field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="dense"
     ).as_matrix()
@@ -280,6 +280,25 @@ def test_smoother_protocol_dke_jacobi(
         smooth_solver="dense",
         operator_weights=jnp.ones(8).at[-2:].set(0),
     )
+    _check_protocol(op)
+
+
+def test_dke_jacobi_banded_default_operator_weights(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """A banded smoother with default (None) operator_weights also zeros slot -2."""
+    op = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        axorder="atzsx",
+        smooth_solver="banded",
+        operator_weights=None,
+    )
+    assert op.smooth_solver == "banded"
     _check_protocol(op)
 
 

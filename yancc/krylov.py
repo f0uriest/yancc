@@ -170,31 +170,34 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
     leaves_x, treedef_x = jax.tree_util.tree_flatten(x)
 
     def prepare_Q_leaf(leaf):
-        leaf_transposed = jnp.moveaxis(leaf, -1, 0)
-        return jnp.reshape(leaf_transposed, (leaf_transposed.shape[0], -1))
+        # keep the column (basis-vector) axis last: [N_leaf, ncols]. This is a
+        # view of the basis, so we never materialize a [ncols, N] transpose.
+        return jnp.reshape(leaf, (-1, leaf.shape[-1]))
 
-    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=-1)
+    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=0)
     x_flat = jnp.concatenate([jnp.reshape(l, (-1,)) for l in leaves_x], axis=-1)
 
-    max_k = Q_mat.shape[0]
+    max_k = Q_mat.shape[1]
     if method in ["cgs", "cgs2"]:
         # dynamic mask to handle the dynamic k
         mask = jnp.arange(max_k) < k
 
         # --- PASS 1: Classical Gram-Schmidt ---
-        # .conj() ensures complex numbers are handled correctly
-        h1 = Q_mat.conj() @ x_flat
+        # .conj() ensures complex numbers are handled correctly. Contracting the
+        # N axis (axis 0 of Q_mat) keeps the basis in its natural [N, ncols]
+        # layout -- no transpose materialized.
+        h1 = x_flat @ Q_mat.conj()
         h1 = jnp.where(mask, h1, 0.0)  # Apply mask for dynamic k
-        x1 = x_flat - (h1 @ Q_mat)  # Vectorized subtraction
+        x1 = x_flat - (Q_mat @ h1)  # Vectorized subtraction
 
         if method == "cgs":
             h_final = h1
             x_flat_final = x1
         else:
             # --- PASS 2: Re-orthogonalization ("Twice is Enough") ---
-            h2 = Q_mat.conj() @ x1
+            h2 = x1 @ Q_mat.conj()
             h2 = jnp.where(mask, h2, 0.0)  # Apply mask for dynamic k
-            x_flat_final = x1 - (h2 @ Q_mat)
+            x_flat_final = x1 - (Q_mat @ h2)
 
             h_final = h1 + h2
 
@@ -203,7 +206,7 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
 
         def loop(i, carry):
             h_carry, x_carry = carry
-            q_i = Q_mat[i]
+            q_i = Q_mat[:, i]
             alpha = jnp.vdot(q_i, x_carry)
             h_carry = h_carry.at[i].set(alpha)
             x_carry = x_carry - alpha * q_i
@@ -469,6 +472,7 @@ def gcrotmk(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
+    throw: bool = False,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -510,11 +514,23 @@ def gcrotmk(
         orthogonalized as described in [3]_. ``U`` should have the same tree structure
         as ``x`` but with a trailing dimension, and ``C`` should have the same
         structure as ``b`` but with a trailing dimension.
+    verbose : bool, optional
+        If True, print convergence information at each iteration.
+        Default: False.
+    print_every : int, optional
+        Print convergence info every this many outer iterations. Default: 1.
+    print_every_inner : int, optional
+        Print convergence info every this many inner (FGMRES) iterations. Default: 1.
+    refine : bool, optional
+        If True (default), ensure a strict decrease even if inner FGMRES breaks down
+        by performing line search along supplied direction.
     flexible : bool, optional
         If True (default), use flexible GMRES inside, which permits ``MR`` to be
         nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
         ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
         cutting inner-iteration storage roughly in half.
+    throw : bool, optional
+        If True, raise an error if the solver does not converge. Default: False.
 
     Returns
     -------
@@ -558,7 +574,7 @@ def gcrotmk(
         k = m
 
     def _solve(A, b):
-        return _gcrotmk_solve(
+        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
             A,
             b,
             x,
@@ -577,9 +593,12 @@ def gcrotmk(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "GCROT forward solve did not converge")
+        return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     def _transpose_solve(At, b):
-        return _gcrotmk_solve(
+        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
             At,
             b,
             x,
@@ -598,6 +617,9 @@ def gcrotmk(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "GCROT tangent solve did not converge")
+        return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
@@ -835,6 +857,7 @@ def lgmres(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
+    throw: bool = False,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -883,11 +906,23 @@ def lgmres(
          ``outer_v`` should have the same tree structure as ``x`` but with a trailing
         dimension, and ``outer_Av`` should have the same structure as ``b`` but with
         a trailing dimension.
+    verbose : bool, optional
+        If True, print convergence information at each iteration.
+        Default: False.
+    print_every : int, optional
+        Print convergence info every this many outer iterations. Default: 1.
+    print_every_inner : int, optional
+        Print convergence info every this many inner (FGMRES) iterations. Default: 1.
+    refine : bool, optional
+        If True (default), ensure a strict decrease even if inner FGMRES breaks down
+        by performing line search along supplied direction.
     flexible : bool, optional
         If True (default), use flexible GMRES inside, which permits ``MR`` to be
         nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
         ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
         cutting inner-iteration storage roughly in half.
+    throw : bool, optional
+        If True, raise an error if the solver does not converge. Default: False.
 
     Returns
     -------
@@ -942,7 +977,7 @@ def lgmres(
         x = x0
 
     def _solve(A, b):
-        return _lgmres_solve(
+        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
             A,
             b,
             x,
@@ -961,9 +996,12 @@ def lgmres(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "LGMRES forward solve did not converge")
+        return xsol, (j, nmv, beta, success, ov, oAv)
 
     def _transpose_solve(At, b):
-        return _lgmres_solve(
+        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
             At,
             b,
             x,
@@ -982,6 +1020,9 @@ def lgmres(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "LGMRES tangent solve did not converge")
+        return xsol, (j, nmv, beta, success, ov, oAv)
 
     x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True

@@ -48,6 +48,7 @@ def get_dke_operators(
     p1,
     p2,
     gauge,
+    coulomb_log=None,
     **options,
 ):
     """Get multigrid operators for each field, pitchgrid."""
@@ -64,6 +65,7 @@ def get_dke_operators(
             p1=p1,
             p2=p2,
             gauge=gauge,
+            coulomb_log=coulomb_log,
             **options,
         )
         operators.append(op)
@@ -122,6 +124,7 @@ def get_dke_jacobi_smoothers(
     gauge,
     smooth_solver,
     weight,
+    coulomb_log=None,
     **options,
 ):
     """Get multigrid smoothers for each field, pitchgrid."""
@@ -142,6 +145,7 @@ def get_dke_jacobi_smoothers(
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=weight,
+                coulomb_log=coulomb_log,
                 **options,
             )
             for order in ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"]
@@ -165,6 +169,7 @@ def get_dke_jacobi2_smoothers(
     gauge,
     smooth_solver,
     weight,
+    coulomb_log=None,
     **options,
 ):
     """Get multigrid smoothers for each field, pitchgrid."""
@@ -185,6 +190,7 @@ def get_dke_jacobi2_smoothers(
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=weight,
+                coulomb_log=coulomb_log,
                 **options,
             )
             for order in ["atzsx", "tzasx", "zatsx"]

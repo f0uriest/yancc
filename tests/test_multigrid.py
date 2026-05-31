@@ -85,6 +85,12 @@ def test_prolongation_restriction(field, nx):
     P = Prolongation(field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx)
     R = Restriction(field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx)
 
+    # prolongation maps coarse -> fine; restriction maps fine -> coarse.
+    assert P.in_structure().shape == (N_c,)
+    assert P.out_structure().shape == (N_f,)
+    assert R.in_structure().shape == (N_f,)
+    assert R.out_structure().shape == (N_c,)
+
     Pmat = P.as_matrix()
     Rmat = R.as_matrix()
 
