@@ -159,10 +159,10 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
 
 
 class MaxwellSpeedGrid(AbstractSpeedGrid):
-    """Grid for speed variable x=v/vth.
+    r"""Grid for speed variable :math:`x = v/v_{th}`.
 
-    Uses Maxwell Polynomials, which are orthogonal on (0, xmax) with the weight
-    function x^k exp(-x^2)
+    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, x_{max}]` with the
+    weight function :math:`x^k \exp(-x^2)`
 
     Parameters
     ----------
@@ -259,7 +259,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
 
 
 class LegendrePitchAngleGrid(eqx.Module):
-    """Grid for pitch angle variable xi=v||/v.
+    r"""Grid for pitch angle variable :math:`\xi = v_{||} / v`.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
     function 1.
@@ -308,7 +308,7 @@ class LegendrePitchAngleGrid(eqx.Module):
 class UniformPitchAngleGrid(eqx.Module):
     r"""Grid for pitch angle variable :math:`α = -\arccos(v_{||} / v)`.
 
-    Uniform grid not including endpoints.
+    Uniform grid on :math:`[0, \pi]`, not including endpoints.
 
     Parameters
     ----------
