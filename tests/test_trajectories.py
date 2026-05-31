@@ -317,6 +317,10 @@ def test_diagonals_dke_CF(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    bw = sizes[axorder[-1]] // 2
+    D = f.block_diagonal("banded", bw)
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -346,6 +350,10 @@ def test_diagonals_dke_FokkerPlanck(
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    bw = sizes[axorder[-1]] // 2
+    D = f.block_diagonal("banded", bw)
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -405,6 +413,10 @@ def test_diagonals_dke_full(
     bw = min(4, sizes[axorder[-1]] // 2)
     D = f.block_diagonal("banded", bw)
     D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
+    D = f.block_diagonal("banded")  # auto-compute bw from FD stencil
+    bw_auto = D.shape[1] // 2
+    D = banded_to_dense(bw_auto, bw_auto, D)
     np.testing.assert_allclose(B, D, err_msg=axorder)
 
 

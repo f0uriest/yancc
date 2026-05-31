@@ -2067,8 +2067,12 @@ class DKE(lx.AbstractLinearOperator):
             x = jnp.broadcast_to(jnp.identity(n2), (n1, n2, n2))
         else:
             if bw is None:
-                bw = max(
-                    fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+                bw = min(
+                    max(
+                        fd_coeffs[1][self.p1].size // 2,
+                        fd_coeffs[2][self.p2].size // 2,
+                    ),
+                    n2 // 2,
                 )
             x = jnp.zeros((n1, 2 * bw + 1, n2)).at[:, bw, :].set(1)
         x = self.operator_weights[-1] * x
