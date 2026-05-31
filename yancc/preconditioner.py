@@ -106,7 +106,7 @@ class MDKEPreconditioner(MultigridOperator):
             resolutions = get_grid_resolutions(
                 ns=1,
                 nx=1,
-                na=pitchgrid.na,
+                na=pitchgrid.nalpha,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -172,10 +172,10 @@ class MDKEPreconditioner(MultigridOperator):
             # AbstractLinearOperator type to MDKE for pyright.
             op = cast(MDKE, op)
             jax.debug.print(
-                f"Grid {i}: na={op.pitchgrid.na:4d}, "
-                f"nt={op.field.ntheta:4d}, "
-                f"nz={op.field.nzeta:4d}, "
-                f"N={op.pitchgrid.na * op.field.ntheta * op.field.nzeta:,d}",
+                f"Grid {i}: nα={op.pitchgrid.nalpha:4d}, "
+                f"nθ={op.field.ntheta:4d}, "
+                f"nζ={op.field.nzeta:4d}, "
+                f"N={op.pitchgrid.nalpha * op.field.ntheta * op.field.nzeta:,d}",
                 ordered=True,
             )
 
@@ -274,7 +274,7 @@ class DKEPreconditioner(MultigridOperator):
             resolutions = get_grid_resolutions(
                 ns=len(species),
                 nx=speedgrid.nx,
-                na=pitchgrid.na,
+                na=pitchgrid.nalpha,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -375,14 +375,14 @@ class DKEPreconditioner(MultigridOperator):
             # cast is a no-op at runtime; just narrows the declared
             # AbstractLinearOperator type to DKE for pyright.
             op = cast(DKE, op)
-            na = op.pitchgrid.na
+            na = op.pitchgrid.nalpha
             nt = op.field.ntheta
             nz = op.field.nzeta
             jax.debug.print(
                 f"Grid {i}: nx={nx:4d}, "
-                f"na={na:4d}, "
-                f"nt={nt:4d}, "
-                f"nz={nz:4d}, "
+                f"nα={na:4d}, "
+                f"nθ={nt:4d}, "
+                f"nζ={nz:4d}, "
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )
@@ -505,7 +505,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -518,7 +518,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -555,14 +555,14 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             # cast is a no-op at runtime; just narrows the declared
             # AbstractLinearOperator type to MDKE for pyright.
             op = cast(MDKE, op)
-            na = op.pitchgrid.na
+            na = op.pitchgrid.nalpha
             nt = op.field.ntheta
             nz = op.field.nzeta
             jax.debug.print(
                 f"Grid {i}: nx={nx:4d}, "
-                f"na={na:4d}, "
-                f"nt={nt:4d}, "
-                f"nz={nz:4d}, "
+                f"nα={na:4d}, "
+                f"nθ={nt:4d}, "
+                f"nζ={nz:4d}, "
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )

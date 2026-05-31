@@ -46,7 +46,7 @@ def test_diagonals_dke_speed(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -74,7 +74,7 @@ def test_diagonals_dke_theta(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -109,7 +109,7 @@ def test_diagonals_dke_zeta(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -144,7 +144,7 @@ def test_diagonals_dke_pitch(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -179,7 +179,7 @@ def test_diagonals_dke_pitch_angle_scattering(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -205,7 +205,7 @@ def test_diagonals_dke_energy_scattering(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -231,7 +231,7 @@ def test_diagonals_dke_CD(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -256,7 +256,7 @@ def test_diagonals_dke_CG(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -281,7 +281,7 @@ def test_diagonals_dke_CH(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -306,7 +306,7 @@ def test_diagonals_dke_CF(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -331,7 +331,7 @@ def test_diagonals_dke_FokkerPlanck(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -364,7 +364,7 @@ def test_diagonals_dke_full(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -425,7 +425,7 @@ def test_diagonals_dke_full(
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid, p1):
     sizes = {
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -450,7 +450,7 @@ def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid, p1):
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid, p1):
     sizes = {
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -475,7 +475,7 @@ def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid, p1):
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid, p1):
     sizes = {
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -500,7 +500,7 @@ def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid, p1):
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid, p2):
     sizes = {
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -519,7 +519,7 @@ def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid,
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
 def test_diagonals_mdke_full(gauge, axorder, field, pitchgrid):
     sizes = {
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -550,7 +550,7 @@ def test_diagonals2_dke_speed(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -573,7 +573,7 @@ def test_diagonals2_dke_theta(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -603,7 +603,7 @@ def test_diagonals2_dke_zeta(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -633,7 +633,7 @@ def test_diagonals2_dke_pitch(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -663,7 +663,7 @@ def test_diagonals2_dke_pitch_angle_scattering(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -684,7 +684,7 @@ def test_diagonals2_dke_energy_scattering(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -705,7 +705,7 @@ def test_diagonals2_dke_CD(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -725,7 +725,7 @@ def test_diagonals2_dke_CG(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -745,7 +745,7 @@ def test_diagonals2_dke_CH(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -765,7 +765,7 @@ def test_diagonals2_dke_CF(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -785,7 +785,7 @@ def test_diagonals2_dke_FokkerPlanck(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }
@@ -813,7 +813,7 @@ def test_diagonals2_dke_full(
     sizes = {
         "s": len(species2),
         "x": speedgrid.nx,
-        "a": pitchgrid.na,
+        "a": pitchgrid.nalpha,
         "t": field.ntheta,
         "z": field.nzeta,
     }

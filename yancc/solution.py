@@ -142,6 +142,11 @@ class DKESolution(eqx.Module):
     background : list[LocalMaxwellian]
         Additional background species to include in the collision operator without
         solving for df.
+    f : jax.Array, shape (ns, nx, na, nt, nz)
+        Full distribution function ``F0 + f1``. Computed on access.
+    f1_krylov : jax.Array
+        Distribution function including source terms, as seen by the Krylov solver.
+        Computed on access.
     """
 
     F0: jax.Array
@@ -171,7 +176,7 @@ class DKESolution(eqx.Module):
         background: list[LocalMaxwellian],
     ):
         ns = len(species)
-        shape = (ns, speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
+        shape = (ns, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
         N = np.prod(shape)
         f1 = f1.flatten()
         if f1.size == N:
@@ -290,8 +295,8 @@ class MDKESolution(eqx.Module):
         nuhat: jax.Array,
         erhohat: jax.Array,
     ):
-        self.f = f.reshape(3, pitchgrid.na, field.ntheta, field.nzeta)
-        self.rhs = rhs.reshape(3, pitchgrid.na, field.ntheta, field.nzeta)
+        self.f = f.reshape(3, pitchgrid.nalpha, field.ntheta, field.nzeta)
+        self.rhs = rhs.reshape(3, pitchgrid.nalpha, field.ntheta, field.nzeta)
         self.field = field
         self.pitchgrid = pitchgrid
         self.nuhat = nuhat
@@ -335,7 +340,7 @@ def _mdke_Dij(sol, normalization=None, **kwargs):
     f = sol.f.reshape((-1, 3))
     s = sol.rhs.reshape((-1, 3))
     na, nt, nz = (
-        sol.pitchgrid.na,
+        sol.pitchgrid.nalpha,
         sol.field.ntheta,
         sol.field.nzeta,
     )
@@ -459,7 +464,7 @@ def _dke_VparB(sol, **kwargs):
     name="<J||B>",
     label="J_{||}B = \\sum_s q_s/n_s \\langle B \\int d^3v v_{||} f_s \\rangle",
     units="A \\cdot T \\cdot m^{-3}",
-    description="Parallel flow on surface for each species.",
+    description="Bootstrap current",
     dim=(),
 )
 def _dke_bootstrap_current(sol, **kwargs):

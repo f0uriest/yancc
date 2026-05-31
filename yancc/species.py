@@ -178,17 +178,17 @@ class GlobalMaxwellian(eqx.Module):
     density: Callable[[jax.Array], jax.Array]  # in units of particles/m^3
 
     def v_thermal(self, r: ArrayLike) -> jax.Array:
-        """float: Thermal speed, in m/s at a given normalized radius r."""
+        """float: Thermal speed, in m/s at a given radius ρ."""
         r = jnp.asarray(r)
         T = self.temperature(r) * JOULE_PER_EV
         v_thermal = jnp.sqrt(2 * T / self.species.mass)
         return v_thermal
 
-    def localize(self, r: ArrayLike) -> LocalMaxwellian:
-        """The global distribution function evaluated at a particular radius r."""
-        r = jnp.asarray(r)
-        n, dndrho = jax.value_and_grad(self.density)(r)
-        T, dTdrho = jax.value_and_grad(self.temperature)(r)
+    def localize(self, rho: ArrayLike) -> LocalMaxwellian:
+        """The global distribution function evaluated at a particular radius ρ."""
+        rho = jnp.asarray(rho)
+        n, dndrho = jax.value_and_grad(self.density)(rho)
+        T, dTdrho = jax.value_and_grad(self.temperature)(rho)
         return LocalMaxwellian(self.species, T, n, dTdrho, dndrho)
 
     def __call__(self, rho: ArrayLike, v: ArrayLike) -> jax.Array:

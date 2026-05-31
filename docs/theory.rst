@@ -53,11 +53,11 @@ Velocity space is parameterized by the speed coordinate
 
     x_s = v / v_{th,s}, \qquad v_{th,s} = \sqrt{2 T_s / m_s},
 
-and the pitch-angle :math:`a`:
+and the pitch-angle :math:`\alpha`:
 
 .. math::
 
-    a = -\arccos{v_\parallel / v}
+    \alpha = -\arccos{v_\parallel / v}
 
 (Other codes use the cosine of the pitch angle :math:`\xi = v_\parallel / v`, we choose
 the angle itself because it simplifies the boundary conditions.)
@@ -70,7 +70,7 @@ With these conventions the local Maxwellian for species :math:`s` is
                         e^{-x_s^2}.
 
 The pitch-angle grid (:class:`~yancc.velocity_grids.UniformPitchAngleGrid`)
-has ``na`` uniformly spaced points on :math:`a \in [0, \pi]`. The speed
+has ``nalpha`` uniformly spaced points on :math:`\alpha \in [0, \pi]`. The speed
 grid (:class:`~yancc.velocity_grids.MaxwellSpeedGrid`) has ``nx`` collocation
 nodes chosen as the roots of polynomials orthogonal under the Maxwellian
 weight :math:`e^{-x^2}` on :math:`[0, \infty)`; this is what makes a small
@@ -108,7 +108,7 @@ In terms of our chosen coordinates and field components this takes the form
     :label: dke_full
 
     \dot{x}_s \frac{\partial f_{1,s}}{\partial x_s}
-    + \dot{a} \frac{\partial f_{1,s}}{\partial a}
+    + \dot{\alpha} \frac{\partial f_{1,s}}{\partial \alpha}
     + \dot{\theta} \frac{\partial f_{1,s}}{\partial \theta}
     + \dot{\zeta} \frac{\partial f_{1,s}}{\partial \zeta}
     + C_L[f_{1,s}, f_{1,s'}] + C_E[f_{1,s}, f_{1,s'}] + C_F[f_{1,s}, f_{1,s'}]
@@ -120,13 +120,13 @@ Where the particle trajectories are given by:
     :label: sfincs_trajectories
 
     \begin{align}
-    \dot{\theta} &= -\frac{v_{th,s} x_s \cos{(a)} B^\theta}{B} + \frac{B_\zeta}{B^2\sqrt{g}}E_\rho \\
-    \dot{\zeta} &= -\frac{v_{th,s} x_s \cos{(a)} B^\zeta}{B} - \frac{B_\theta}{B^2\sqrt{g}}E_\rho \\
-    \dot{a} &= - \frac{\sin{(a)}}{2 B^2} v_{th,s} x_s \Bigg( B^\theta \frac{\partial B}{\partial \theta}
+    \dot{\theta} &= -\frac{v_{th,s} x_s \cos{(\alpha)} B^\theta}{B} + \frac{B_\zeta}{B^2\sqrt{g}}E_\rho \\
+    \dot{\zeta} &= -\frac{v_{th,s} x_s \cos{(\alpha)} B^\zeta}{B} - \frac{B_\theta}{B^2\sqrt{g}}E_\rho \\
+    \dot{\alpha} &= - \frac{\sin{(\alpha)}}{2 B^2} v_{th,s} x_s \Bigg( B^\theta \frac{\partial B}{\partial \theta}
     + B^\zeta \frac{\partial B}{\partial \zeta} \Bigg)
-    + \cos{(a)} \sin{(a)} \frac{1}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta}
+    + \cos{(\alpha)} \sin{(\alpha)} \frac{1}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta}
     - B_\theta \frac{\partial B}{\partial \zeta} \Bigg) \\
-    \dot{x}_s &= (1 + \cos^2{a}) \frac{x_s}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta} - B_\theta \frac{\partial B}{\partial \zeta} \Bigg)
+    \dot{x}_s &= (1 + \cos^2{\alpha}) \frac{x_s}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta} - B_\theta \frac{\partial B}{\partial \zeta} \Bigg)
     \end{align}
 
 And the collision operator terms are:
@@ -135,7 +135,7 @@ And the collision operator terms are:
     :label: fp_collision_operator
 
     \begin{align}
-    C_{L,ss'} &= \frac{\nu_{D,ss'}}{2 \sin a} \frac{\partial}{\partial a} \Bigg[\sin{a} \frac{\partial f_{1,s}}{\partial a}\Bigg] \\
+    C_{L,ss'} &= \frac{\nu_{D,ss'}}{2 \sin \alpha} \frac{\partial}{\partial \alpha} \Bigg[\sin{\alpha} \frac{\partial f_{1,s}}{\partial \alpha}\Bigg] \\
     C_{E,ss'} &= \nu_{||,ss'}\Big[ \frac{v^2}{2} \frac{\partial^2 f_{1,s}}{\partial v^2} - \frac{v^2}{v_{th,s'}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) v \frac{\partial f_{1,s}}{\partial v}\Big] + \nu_{D,ss'} v \frac{\partial f_{1,s}}{\partial v} + 4\pi \Gamma_{ss'}\frac{m_s}{m_s'} F_{M,s'} f_{1,s} \\
     C_{F,ss'} &= \Gamma_{ss'} F_{M,s} \Big[\frac{2v^2}{v_{th,s}^4} \frac{\partial^2 G_{s'}}{\partial v^2} - \frac{2v}{v_{th,s}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) \frac{\partial H_{s'}}{\partial v} - \frac{2}{v_{th,s}^2} H_{s'} + 4\pi \frac{m_s}{m_{s'}} f_{1,s'} \Big] \\
     \nabla^2_v H_{s'} &= -4 \pi f_{s'} \\
@@ -220,9 +220,9 @@ by DKES [4]_ and used by MONKES [5]_:
    :label: mdke
 
     \big( v\, \xi\, \mathbf{b} + \mathbf{v}_E \big) \cdot \nabla f_1
-    \;-\; \frac{\nu}{2 \sin a}
-          \frac{\partial}{\partial a}
-          \left[ \sin a \frac{\partial f_1}{\partial a} \right]
+    \;-\; \frac{\nu}{2 \sin \alpha}
+          \frac{\partial}{\partial \alpha}
+          \left[ \sin \alpha \frac{\partial f_1}{\partial \alpha} \right]
     \;=\; S.
 
 After dividing through by :math:`v`, only two scalar parameters remain:

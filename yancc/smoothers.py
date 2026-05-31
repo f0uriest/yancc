@@ -142,7 +142,7 @@ def permute_f_3d(
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_3d(
-        field.ntheta, field.nzeta, pitchgrid.na, axorder
+        field.ntheta, field.nzeta, pitchgrid.nalpha, axorder
     )
     f = f.reshape(shape)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2))
@@ -159,7 +159,7 @@ def permute_f_4d(
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_4d(
-        field.ntheta, field.nzeta, pitchgrid.na, speedgrid.nx, len(species), axorder
+        field.ntheta, field.nzeta, pitchgrid.nalpha, speedgrid.nx, len(species), axorder
     )
     f = f.reshape(shape)
     f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
@@ -170,7 +170,7 @@ def inverse_permute_f_3d(
     f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
 ) -> jax.Array:
     """Inverse of permute_f_3d: canonical (a,t,z) layout back to axorder layout."""
-    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
+    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.nalpha
     _, caxorder = _parse_axorder_shape_3d(nt, nz, na, axorder)
     f = f.reshape((na, nt, nz))
     f = jnp.moveaxis(f, (0, 1, 2), caxorder)
@@ -186,7 +186,7 @@ def inverse_permute_f_4d(
     axorder: str,
 ) -> jax.Array:
     """Inverse of permute_f_4d: canonical (s,x,a,t,z) layout back to axorder layout."""
-    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.na
+    nt, nz, na = field.ntheta, field.nzeta, pitchgrid.nalpha
     nx, ns = speedgrid.nx, len(species)
     _, caxorder = _parse_axorder_shape_4d(nt, nz, na, nx, ns, axorder)
     f = f.reshape((ns, nx, na, nt, nz))
@@ -258,7 +258,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         assert smooth_solver in {None, "banded", "dense"}
         if smooth_solver is None:
             sizes = {
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -320,14 +320,14 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -427,7 +427,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -459,7 +459,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
             _weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             _weight = _weight * jnp.ones(
-                (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
+                (1, 1, pitchgrid.nalpha, field.ntheta, field.nzeta)
             )
         else:
             _weight = weight
@@ -537,7 +537,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -550,7 +550,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -658,7 +658,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
             wght = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
-            weight = wght * jnp.ones((1, 1, pitchgrid.na, field.ntheta, field.nzeta))
+            weight = wght * jnp.ones(
+                (1, 1, pitchgrid.nalpha, field.ntheta, field.nzeta)
+            )
         self.weight = jnp.asarray(weight).flatten()
 
         mats = DKE(
@@ -724,7 +726,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -737,7 +739,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -764,7 +766,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
         self.speedgrid = speedgrid
         self.species = species
         if normalize:
-            na = self.pitchgrid.na
+            na = self.pitchgrid.nalpha
             nt = self.field.ntheta
             nz = self.field.nzeta
             ha = jnp.pi / na
@@ -790,12 +792,12 @@ class DKELaplacian(lx.AbstractLinearOperator):
         shape = (
             len(self.species),
             self.speedgrid.nx,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.field.ntheta,
             self.field.nzeta,
         )
 
-        na = self.pitchgrid.na
+        na = self.pitchgrid.nalpha
         nt = self.field.ntheta
         nz = self.field.nzeta
         ha = jnp.pi / na
@@ -823,7 +825,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -836,7 +838,7 @@ class DKELaplacian(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),

@@ -45,7 +45,7 @@ def dfdtheta(
     fd = scipy.sparse.csr_array(jax.jacfwd(fdfwd)(f, p, h=h, bc="periodic"))
     bd = scipy.sparse.csr_array(jax.jacfwd(fdbwd)(f, p, h=h, bc="periodic"))
     Iz = scipy.sparse.eye_array(field.nzeta)
-    Ix = scipy.sparse.eye_array(pitchgrid.na)
+    Ix = scipy.sparse.eye_array(pitchgrid.nalpha)
 
     Af = scipy.sparse.kron(scipy.sparse.kron(Ix, fd), Iz)
     Ab = scipy.sparse.kron(scipy.sparse.kron(Ix, bd), Iz)
@@ -53,8 +53,8 @@ def dfdtheta(
 
     if gauge:
         idx = np.ravel_multi_index(
-            (pitchgrid.na // 2, 0, 0),
-            (pitchgrid.na, field.ntheta, field.nzeta),
+            (pitchgrid.nalpha // 2, 0, 0),
+            (pitchgrid.nalpha, field.ntheta, field.nzeta),
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
@@ -101,7 +101,7 @@ def dfdzeta(
     fd = scipy.sparse.csr_array(jax.jacfwd(fdfwd)(f, p, h=h, bc="periodic"))
     bd = scipy.sparse.csr_array(jax.jacfwd(fdbwd)(f, p, h=h, bc="periodic"))
     It = scipy.sparse.eye_array(field.ntheta)
-    Ix = scipy.sparse.eye_array(pitchgrid.na)
+    Ix = scipy.sparse.eye_array(pitchgrid.nalpha)
 
     Af = scipy.sparse.kron(scipy.sparse.kron(Ix, It), fd)
     Ab = scipy.sparse.kron(scipy.sparse.kron(Ix, It), bd)
@@ -109,8 +109,8 @@ def dfdzeta(
 
     if gauge:
         idx = np.ravel_multi_index(
-            (pitchgrid.na // 2, 0, 0),
-            (pitchgrid.na, field.ntheta, field.nzeta),
+            (pitchgrid.nalpha // 2, 0, 0),
+            (pitchgrid.nalpha, field.ntheta, field.nzeta),
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
@@ -149,11 +149,11 @@ def dfdxi(
     -------
     df : scipy sparse array
     """
-    assert pitchgrid.na > fd_coeffs[1][p].size // 2
+    assert pitchgrid.nalpha > fd_coeffs[1][p].size // 2
     w = np.array(dkes_w_pitch(field, pitchgrid).flatten())[:, None]
-    h = np.pi / pitchgrid.na
+    h = np.pi / pitchgrid.nalpha
 
-    f = np.ones(pitchgrid.na)
+    f = np.ones(pitchgrid.nalpha)
     fd = scipy.sparse.csr_array(jax.jacfwd(fdfwd)(f, p, h=h, bc="symmetric"))
     bd = scipy.sparse.csr_array(jax.jacfwd(fdbwd)(f, p, h=h, bc="symmetric"))
     It = scipy.sparse.eye_array(field.ntheta)
@@ -165,8 +165,8 @@ def dfdxi(
 
     if gauge:
         idx = np.ravel_multi_index(
-            (pitchgrid.na // 2, 0, 0),
-            (pitchgrid.na, field.ntheta, field.nzeta),
+            (pitchgrid.nalpha // 2, 0, 0),
+            (pitchgrid.nalpha, field.ntheta, field.nzeta),
             mode="clip",
         )
         mask = np.zeros(df.shape[0])
@@ -203,10 +203,10 @@ def dfdpitch(
     -------
     df : scipy sparse array
     """
-    assert pitchgrid.na > p
-    h = np.pi / pitchgrid.na
+    assert pitchgrid.nalpha > p
+    h = np.pi / pitchgrid.nalpha
 
-    f = np.ones(pitchgrid.na)
+    f = np.ones(pitchgrid.nalpha)
     sina = np.sqrt(1 - pitchgrid.xi**2)
     cosa = -pitchgrid.xi
 
@@ -221,8 +221,8 @@ def dfdpitch(
 
     if gauge:
         idx = np.ravel_multi_index(
-            (pitchgrid.na // 2, 0, 0),
-            (pitchgrid.na, field.ntheta, field.nzeta),
+            (pitchgrid.nalpha // 2, 0, 0),
+            (pitchgrid.nalpha, field.ntheta, field.nzeta),
             mode="clip",
         )
         mask = np.zeros(df.shape[0])

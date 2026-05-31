@@ -75,8 +75,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert pitchgrid.na > fd_coeffs[1][p1].size // 2
-        assert pitchgrid.na > fd_coeffs[2][p2].size // 2
+        assert pitchgrid.nalpha > fd_coeffs[1][p1].size // 2
+        assert pitchgrid.nalpha > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.nuhat = jnp.array(nuhat)
@@ -84,8 +84,8 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
-        h = jnp.pi / pitchgrid.na
-        f1 = jnp.ones(pitchgrid.na)
+        h = jnp.pi / pitchgrid.nalpha
+        f1 = jnp.ones(pitchgrid.nalpha)
         D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
         D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
         sina = jnp.sqrt(1 - pitchgrid.xi**2)
@@ -104,14 +104,14 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
         f1 = jnp.moveaxis(f, 0, -1)  # (nt, nz, na) - convolved axis last
         df = jnp.moveaxis(f1 @ self._D.T, -1, 0)
 
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -128,12 +128,12 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         df = jnp.diag(self._D)[:, None, None]
         df = jnp.broadcast_to(df, df.shape[:1] + (self.field.ntheta, self.field.nzeta))
 
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(self._scale, unique_indices=True),
@@ -152,14 +152,14 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         df = self._D[:, None, None, :]
         df = jnp.broadcast_to(
             df, df.shape[:1] + (self.field.ntheta, self.field.nzeta) + df.shape[3:]
         )
 
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
@@ -169,7 +169,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
+        df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
         return df
 
     def as_matrix(self):
@@ -180,14 +180,14 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -601,8 +601,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
                 nu += nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
             nus.append(nu)
         self.nus = jnp.asarray(nus)
-        h = jnp.pi / pitchgrid.na
-        f1 = jnp.ones(pitchgrid.na)
+        h = jnp.pi / pitchgrid.nalpha
+        f1 = jnp.ones(pitchgrid.nalpha)
         D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
         D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
         sina = jnp.sqrt(1 - pitchgrid.xi**2)
@@ -622,7 +622,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -633,7 +633,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.moveaxis(f1 @ self._D.T, -1, 2)
         df *= -self.nus[:, :, None, None, None] / 2
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -653,7 +653,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -663,7 +663,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.broadcast_to(df, df.shape[:3] + (self.field.ntheta, self.field.nzeta))
         df = -self.nus[:, :, None, None, None] / 2 * df
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -686,7 +686,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -703,7 +703,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -715,7 +715,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             df, df.shape[:3] + (self.field.ntheta, self.field.nzeta) + df.shape[5:]
         )
 
-        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
         scale = self._scale
 
@@ -723,7 +723,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         # 1. Band indices cover the entire bandwidth
         bands = jnp.arange(bandwidth)
         # 2. Compute the wrapped column indices (shape: M, bandwidth)
-        cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
+        cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nalpha
         # 3. Create the batched replacement block (shape: ns, M, bandwidth)
         vals = jnp.zeros((len(self.species), idxx.size, bandwidth))
         # Drop the (ns, M) scales precisely onto the main diagonal across the batch
@@ -738,7 +738,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
+        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
         if fmt == "dense":
             df = banded_to_dense(bw, bw, df)
         return df
@@ -756,7 +756,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -766,15 +766,17 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.kron(self._D, nus)
         df = jnp.repeat(df[None], self.field.ntheta * self.field.nzeta, axis=0)
 
-        df = df.reshape(*shape, self.pitchgrid.na, len(self.species), self.speedgrid.nx)
+        df = df.reshape(
+            *shape, self.pitchgrid.nalpha, len(self.species), self.speedgrid.nx
+        )
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
         idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
 
-        h = jnp.pi / self.pitchgrid.na
+        h = jnp.pi / self.pitchgrid.nalpha
         scale = self.nus[idxs, idxx] / h**2
         df = jnp.where(
             self.gauge,
@@ -786,7 +788,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         N = self.in_size()
-        M = self.pitchgrid.na * len(self.species) * self.speedgrid.nx
+        M = self.pitchgrid.nalpha * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
     def as_matrix(self):
@@ -800,7 +802,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -813,7 +815,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -912,7 +914,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -929,7 +931,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             + self.coeff1[:, :, None, None, None] * df
             + self.coeff0[:, :, None, None, None] * f
         )
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(self.speedgrid.wx) ** 2)
@@ -954,7 +956,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -970,9 +972,10 @@ class EnergyScattering(lx.AbstractLinearOperator):
         )
         out = jnp.broadcast_to(
             out,
-            out.shape[:2] + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
+            out.shape[:2]
+            + (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta),
         )
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(self.speedgrid.wx) ** 2)
@@ -1000,7 +1003,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1020,7 +1023,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1037,10 +1040,10 @@ class EnergyScattering(lx.AbstractLinearOperator):
         out = jnp.broadcast_to(
             out,
             out.shape[:2]
-            + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+            + (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
             + out.shape[5:],
         )
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(self.speedgrid.wx) ** 2)
@@ -1067,7 +1070,9 @@ class EnergyScattering(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
-            return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
+            )
         elif self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
         elif self.axorder[2] == "z":
@@ -1087,7 +1092,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1100,7 +1105,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1202,7 +1207,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1210,7 +1215,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
         df = jnp.einsum("psyx,sxatz->pyatz", self.C, f)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
@@ -1232,7 +1237,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1240,9 +1245,9 @@ class FieldPartCD(lx.AbstractLinearOperator):
         diag = jnp.einsum("iijj->ij", self.C)
         df = jnp.broadcast_to(
             diag[:, :, None, None, None],
-            diag.shape + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta),
+            diag.shape + (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta),
         )
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
@@ -1267,7 +1272,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1278,7 +1283,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 op = lambda x: jnp.pad(x[:, None, :], [(0, 0), (bw, bw), (0, 0)])
             return op(df)
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxs_mesh = idxs[:, None]
@@ -1295,7 +1300,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             shape, caxorder = _parse_axorder_shape_4d(
                 self.field.ntheta,
                 self.field.nzeta,
-                self.pitchgrid.na,
+                self.pitchgrid.nalpha,
                 self.speedgrid.nx,
                 len(self.species),
                 self.axorder,
@@ -1304,7 +1309,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             df = jnp.broadcast_to(
                 diag[:, :, None, None, None, :],
                 diag.shape[:2]
-                + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+                + (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
                 + diag.shape[2:],
             )
             df = jnp.where(
@@ -1334,7 +1339,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             shape, caxorder = _parse_axorder_shape_4d(
                 self.field.ntheta,
                 self.field.nzeta,
-                self.pitchgrid.na,
+                self.pitchgrid.nalpha,
                 self.speedgrid.nx,
                 len(self.species),
                 self.axorder,
@@ -1343,7 +1348,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             df = jnp.broadcast_to(
                 diag[:, :, None, None, None, :],
                 diag.shape[:2]
-                + (self.pitchgrid.na, self.field.ntheta, self.field.nzeta)
+                + (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
                 + diag.shape[2:],
             )
             df = jnp.where(
@@ -1381,7 +1386,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = df.reshape((k, k))
         df = jnp.repeat(df[None], self.in_size() // k, axis=0)
         df = df.reshape(
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.field.ntheta,
             self.field.nzeta,
             len(self.species),
@@ -1394,13 +1399,13 @@ class FieldPartCD(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
         )
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1420,7 +1425,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = -df.reshape(N // M, M, M)
 
         if self.axorder[2] == "a":
-            return _refold(df, self.pitchgrid.na)
+            return _refold(df, self.pitchgrid.nalpha)
         elif self.axorder[2] == "t":
             return _refold(df, self.field.ntheta)
         elif self.axorder[2] == "z":
@@ -1440,7 +1445,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1453,7 +1458,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1532,7 +1537,9 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
         self.prefactor = jnp.array(prefactor)
         self.Txi = orthax.orthvander(
-            pitchgrid.xi, potentials.legendregrid.na - 1, potentials.legendregrid.xirec
+            pitchgrid.xi,
+            potentials.legendregrid.nalpha - 1,
+            potentials.legendregrid.xirec,
         )
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
@@ -1545,7 +1552,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1565,7 +1572,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # transform back to real space in pitch angle
         df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
@@ -1588,7 +1595,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1607,7 +1614,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             G.shape + (self.field.ntheta, self.field.nzeta),
         )
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
@@ -1633,7 +1640,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1647,7 +1654,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1657,7 +1664,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         )
 
         idxs = jnp.arange(len(self.species))
-        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
 
@@ -1731,7 +1738,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # if desired.
         elif self.axorder[-1] == "a":
             if bw is None:
-                bw = self.pitchgrid.na // 2  # full matrix
+                bw = self.pitchgrid.nalpha // 2  # full matrix
             Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
             Gsxl = jnp.einsum("aaxlx->axl", Gabxly)
             Gsxlj = jax.vmap(jax.vmap(jnp.diag))(Gsxl)
@@ -1748,7 +1755,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 # 1. Band indices cover the entire bandwidth
                 bands = jnp.arange(bandwidth)
                 # 2. Compute the wrapped column indices for row 'idxa' across the batch
-                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
+                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nalpha
                 # 3. Create the replacement values: zeros with 'scale' on the diagonal
                 vals = jnp.zeros((len(self.species), idxx.size, bandwidth))
                 vals = vals.at[:, :, bw].set(scale)
@@ -1764,7 +1771,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
+                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
                 return -df
             else:
                 idxa = idxa[0]
@@ -1781,7 +1788,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
+                df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
                 return -df
         else:
             # unreachable, just kept to appease type checker
@@ -1796,7 +1803,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1805,7 +1812,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
         )
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1833,7 +1840,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
             N = self.in_size()
-            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.na
+            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.nalpha
             df = -df.reshape(N // M, M, M)
             return df
         else:
@@ -1880,7 +1887,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1893,7 +1900,7 @@ class FieldPartCG(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1982,7 +1989,9 @@ class FieldPartCH(lx.AbstractLinearOperator):
         self.prefactor_H = jnp.array(prefactor_H)
         self.prefactor_dH = jnp.array(prefactor_dH)
         self.Txi = orthax.orthvander(
-            pitchgrid.xi, potentials.legendregrid.na - 1, potentials.legendregrid.xirec
+            pitchgrid.xi,
+            potentials.legendregrid.nalpha - 1,
+            potentials.legendregrid.xirec,
         )
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
@@ -1995,7 +2004,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2018,7 +2027,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # transform back to real space in pitch angle
         df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Habxlk + dHabxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
@@ -2041,7 +2050,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2059,7 +2068,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             H[:, :, :, None, None],
             H.shape + (self.field.ntheta, self.field.nzeta),
         )
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
@@ -2085,7 +2094,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -2099,7 +2108,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2109,7 +2118,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
 
         idxs = jnp.arange(len(self.species))
-        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
 
@@ -2183,7 +2192,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # if desired.
         elif self.axorder[-1] == "a":
             if bw is None:
-                bw = self.pitchgrid.na // 2
+                bw = self.pitchgrid.nalpha // 2
             Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
             Hsxl = jnp.einsum("aaxlx->axl", Habxly)
             Hsxlj = jax.vmap(jax.vmap(jnp.diag))(Hsxl)
@@ -2199,7 +2208,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 # 1. Band indices cover the entire bandwidth
                 bands = jnp.arange(bandwidth)
                 # 2. Compute the wrapped column indices for row 'idxa' across the batch
-                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
+                cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nalpha
                 # 3. Create the replacement values: zeros with 'scale' on the diagonal
                 vals = jnp.zeros((len(self.species), idxx.size, bandwidth))
                 vals = vals.at[:, :, bw].set(scale)
@@ -2215,7 +2224,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
+                df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
                 return -df
             else:
                 df = jnp.broadcast_to(
@@ -2231,7 +2240,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
                     df,
                 )
                 df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-                df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
+                df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
                 return -df
         else:
             # unreachable, just kept to appease type checker
@@ -2246,7 +2255,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -2255,7 +2264,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
         ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
 
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -2283,7 +2292,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
             N = self.in_size()
-            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.na
+            M = len(self.species) * self.speedgrid.nx * self.pitchgrid.nalpha
             df = -df.reshape(N // M, M, M)
             return df
         else:
@@ -2330,7 +2339,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2343,7 +2352,7 @@ class FieldPartCH(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2453,7 +2462,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2473,7 +2482,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2498,7 +2507,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2523,7 +2532,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2536,7 +2545,7 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2670,7 +2679,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2692,7 +2701,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2719,7 +2728,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2746,7 +2755,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2759,7 +2768,7 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
