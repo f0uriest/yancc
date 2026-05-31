@@ -129,7 +129,6 @@ def _lGammaincc_large_x(s, x, kmax=20):
 
 @jax.custom_jvp
 def _lGammaincc(s, x):
-
     def spos():
         # using Gamma(s,x) = Gamma(s) - gamma(s,x) = Gamma(s)(1 - x^s gammastar(s,x))
         # lGamma(s,x) = lGamma(s) + log(1 - x^s gammastar(s,x))

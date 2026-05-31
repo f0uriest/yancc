@@ -1,6 +1,6 @@
 """Constraints, sources, RHS, etc."""
 
-from typing import Any, Union
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -188,8 +188,8 @@ def dke_rhs(
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
-    Erho: Union[float, Float[Any, ""]],
-    EparB: Union[float, Float[Any, ""]] = 0.0,
+    Erho: float | Float[Any, ""],
+    EparB: float | Float[Any, ""] = 0.0,
     include_constraints: bool = True,
     single_rhs: bool = True,
 ) -> jax.Array:

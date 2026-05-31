@@ -1,7 +1,7 @@
 """Main interface for solving drift kinetic equations in yancc."""
 
 import copy
-from typing import Any, Optional, Union
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -44,10 +44,10 @@ def _preconditioner_is_linear(M) -> bool:
 def solve_mdke(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    erhohat: Union[float, Float[Any, ""]],
-    nuhat: Union[float, Float[Any, ""]],
-    verbose: Union[bool, int] = False,
-    multigrid_options: Optional[dict] = None,
+    erhohat: float | Float[Any, ""],
+    nuhat: float | Float[Any, ""],
+    verbose: bool | int = False,
+    multigrid_options: dict | None = None,
     throw: bool = False,
     **options,
 ) -> tuple[MDKESolution, dict[str, jax.Array]]:
@@ -221,11 +221,11 @@ def solve_dke(  # noqa: C901
     pitchgrid: UniformPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
-    Erho: Union[float, Float[Any, ""]],
-    EparB: Union[float, Float[Any, ""]] = 0.0,
-    background: Optional[list[LocalMaxwellian]] = None,
-    verbose: Union[bool, int] = False,
-    multigrid_options: Optional[dict] = None,
+    Erho: float | Float[Any, ""],
+    EparB: float | Float[Any, ""] = 0.0,
+    background: list[LocalMaxwellian] | None = None,
+    verbose: bool | int = False,
+    multigrid_options: dict | None = None,
     throw: bool = False,
     **options,
 ) -> tuple[DKESolution, dict[str, jax.Array]]:

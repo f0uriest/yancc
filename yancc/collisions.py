@@ -2,7 +2,6 @@
 
 import functools
 import itertools
-from typing import Optional
 
 import equinox as eqx
 import jax
@@ -577,7 +576,7 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        background: Optional[list[LocalMaxwellian]] = None,
+        background: list[LocalMaxwellian] | None = None,
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
@@ -862,7 +861,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
-        background: Optional[list[LocalMaxwellian]] = None,
+        background: list[LocalMaxwellian] | None = None,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
         coulomb_log=None,
@@ -1313,15 +1312,15 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 # Step A: Zero out the rows at all 'idxx' locations
                 # We use idxx directly here; it broadcasts to update all
                 # rows at those locations
-                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                df.at[:, idxx, idxa, 0, 0, :]
+                .set(0, unique_indices=True)
                 # Step B: Set the diagonals
                 # We update specific (row, col) pairs at specific x locations.
                 # Dimensions: (row=idxs, x=idxx, col=idxs)
                 # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
                 # diagonal elements.
-                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh].set(
-                    scale, unique_indices=True
-                ),
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1352,15 +1351,15 @@ class FieldPartCD(lx.AbstractLinearOperator):
                 # Step A: Zero out the rows at all 'idxx' locations
                 # We use idxx directly here; it broadcasts to update all
                 # rows at those locations
-                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                df.at[:, idxx, idxa, 0, 0, :]
+                .set(0, unique_indices=True)
                 # Step B: Set the diagonals
                 # We update specific (row, col) pairs at specific x locations.
                 # Dimensions: (row=idxs, x=idxx, col=idxx)
                 # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
                 # diagonal elements.
-                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxx_mesh].set(
-                    scale, unique_indices=True
-                ),
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxx_mesh]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1685,15 +1684,15 @@ class FieldPartCG(lx.AbstractLinearOperator):
                 # Step A: Zero out the rows at all 'idxx' locations
                 # We use idxx directly here; it broadcasts to update all
                 # rows at those locations
-                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                df.at[:, idxx, idxa, 0, 0, :]
+                .set(0, unique_indices=True)
                 # Step B: Set the diagonals
                 # We update specific (row, col) pairs at specific x locations.
                 # Dimensions: (row=idxs, x=idxx, col=idxs)
                 # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
                 # diagonal elements.
-                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh].set(
-                    scale, unique_indices=True
-                ),
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2137,15 +2136,15 @@ class FieldPartCH(lx.AbstractLinearOperator):
                 # Step A: Zero out the rows at all 'idxx' locations
                 # We use idxx directly here; it broadcasts to update all
                 # rows at those locations
-                df.at[:, idxx, idxa, 0, 0, :].set(0, unique_indices=True)
+                df.at[:, idxx, idxa, 0, 0, :]
+                .set(0, unique_indices=True)
                 # Step B: Set the diagonals
                 # We update specific (row, col) pairs at specific x locations.
                 # Dimensions: (row=idxs, x=idxx, col=idxs)
                 # By broadcasting (ns, 1) against (1, N), we target the (ns, N)
                 # diagonal elements.
-                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh].set(
-                    scale, unique_indices=True
-                ),
+                .at[idxs_mesh, idxx_mesh, idxa, 0, 0, idxs_mesh]
+                .set(scale, unique_indices=True),
                 df,
             )
             df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -2593,12 +2592,12 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
         pitchgrid: UniformPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
-        background: Optional[list[LocalMaxwellian]] = None,
-        potentials: Optional[RosenbluthPotentials] = None,
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
         p2: int = 4,
         axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
-        operator_weights: Optional[jax.Array] = None,
+        operator_weights: jax.Array | None = None,
         coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
