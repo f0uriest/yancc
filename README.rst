@@ -1,3 +1,8 @@
+.. image:: https://raw.githubusercontent.com/f0uriest/yancc/master/docs/_static/images/logo.png
+   :width: 400
+   :align: center
+   :alt: yancc
+
 Yet Another NeoClassical Code.
 ==============================
 |License|
