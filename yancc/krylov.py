@@ -475,6 +475,7 @@ def gcrotmk(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
+    throw: bool = False,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -564,7 +565,7 @@ def gcrotmk(
         k = m
 
     def _solve(A, b):
-        return _gcrotmk_solve(
+        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
             A,
             b,
             x,
@@ -583,9 +584,12 @@ def gcrotmk(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "GCROT forward solve did not converge")
+        return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     def _transpose_solve(At, b):
-        return _gcrotmk_solve(
+        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
             At,
             b,
             x,
@@ -604,6 +608,9 @@ def gcrotmk(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "GCROT tangent solve did not converge")
+        return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
@@ -841,6 +848,7 @@ def lgmres(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
+    throw: bool = False,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -948,7 +956,7 @@ def lgmres(
         x = x0
 
     def _solve(A, b):
-        return _lgmres_solve(
+        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
             A,
             b,
             x,
@@ -967,9 +975,12 @@ def lgmres(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "LGMRES forward solve did not converge")
+        return xsol, (j, nmv, beta, success, ov, oAv)
 
     def _transpose_solve(At, b):
-        return _lgmres_solve(
+        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
             At,
             b,
             x,
@@ -988,6 +999,9 @@ def lgmres(
             refine,
             flexible,
         )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, "LGMRES tangent solve did not converge")
+        return xsol, (j, nmv, beta, success, ov, oAv)
 
     x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True

@@ -47,6 +47,7 @@ def solve_mdke(
     nuhat: Union[float, Float[Any, ""]],
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
+    throw: bool = False,
     **options,
 ) -> tuple[MDKESolution, dict[str, jax.Array]]:
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
@@ -75,6 +76,9 @@ def solve_mdke(
         calculated at each step.
     multigrid_options : dict, optional
         Optional parameters to control behavior of multigrid preconditioner.
+    throw : bool, optional
+        If True, raise a runtime error if the Krylov solver fails to converge
+        (forward solve or tangent solve). Default False.
 
     Returns
     -------
@@ -150,6 +154,7 @@ def solve_mdke(
         print_every_inner=jnp.asarray(print_every),
         U=U1,
         flexible=flexible,
+        throw=throw,
     )
     if f2 is None:
         f2 = jnp.zeros_like(rhs[:, 0])
@@ -167,6 +172,7 @@ def solve_mdke(
         print_every_inner=jnp.asarray(print_every),
         U=U2,
         flexible=flexible,
+        throw=throw,
     )
     info = {
         "j1": j1,
@@ -217,6 +223,7 @@ def solve_dke(  # noqa: C901
     background: Optional[list[LocalMaxwellian]] = None,
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
+    throw: bool = False,
     **options,
 ) -> tuple[DKESolution, dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
@@ -252,6 +259,9 @@ def solve_dke(  # noqa: C901
         calculated at each step.
     multigrid_options : dict, optional
         Optional parameters to control behavior of multigrid preconditioner.
+    throw : bool, optional
+        If True, raise a runtime error if the Krylov solver fails to converge
+        (forward solve or tangent solve). Default False.
 
     Returns
     -------
@@ -376,6 +386,7 @@ def solve_dke(  # noqa: C901
         print_every_inner=jnp.asarray(print_every),
         U=U,
         flexible=flexible,
+        throw=throw,
     )
     info = {
         "niter": j1,
