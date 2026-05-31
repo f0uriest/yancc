@@ -11,7 +11,7 @@ def test_dke_rhs_single_rhs_in_span_of_unit_drives(field, species2):
     pitchgrid = UniformPitchAngleGrid(5)
     speedgrid = MaxwellSpeedGrid(3)
     ns = len(species2)
-    N = ns * speedgrid.nx * pitchgrid.na * field.ntheta * field.nzeta
+    N = ns * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
 
     unit = dke_rhs(
         field,

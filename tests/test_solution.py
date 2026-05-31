@@ -27,7 +27,7 @@ def test_dkesolution_wrong_f1_size(dummy_field, species1):
     pitchgrid = UniformPitchAngleGrid(5)
     speedgrid = MaxwellSpeedGrid(3)
     ns = len(species1)
-    N = ns * speedgrid.nx * pitchgrid.na * dummy_field.ntheta * dummy_field.nzeta
+    N = ns * speedgrid.nx * pitchgrid.nalpha * dummy_field.ntheta * dummy_field.nzeta
 
     with pytest.raises(ValueError, match="wrong size for f1"):
         DKESolution(
@@ -48,7 +48,7 @@ def _make_dke_solution(dummy_field, species, f1):
     pitchgrid = UniformPitchAngleGrid(5)
     speedgrid = MaxwellSpeedGrid(3)
     ns = len(species)
-    N = ns * speedgrid.nx * pitchgrid.na * dummy_field.ntheta * dummy_field.nzeta
+    N = ns * speedgrid.nx * pitchgrid.nalpha * dummy_field.ntheta * dummy_field.nzeta
     return (
         DKESolution(
             F0=jnp.zeros((ns, speedgrid.nx)),
@@ -81,7 +81,7 @@ def test_dkesolution_f1_with_sources_roundtrips(dummy_field, species1):
     pitchgrid = UniformPitchAngleGrid(5)
     speedgrid = MaxwellSpeedGrid(3)
     ns = len(species1)
-    N = ns * speedgrid.nx * pitchgrid.na * dummy_field.ntheta * dummy_field.nzeta
+    N = ns * speedgrid.nx * pitchgrid.nalpha * dummy_field.ntheta * dummy_field.nzeta
     particle = jnp.arange(ns, dtype=float) + 1.0
     heat = jnp.arange(ns, dtype=float) + 10.0
     f1 = jnp.concatenate([jnp.zeros(N), particle, heat])
@@ -108,7 +108,7 @@ def test_dkesolution_qtys_list(dummy_field, species1):
 def test_mdkesolution_qtys_list(dummy_field):
     """MDKESolution.qtys_list returns the registered MDKE output quantities."""
     pitchgrid = UniformPitchAngleGrid(5)
-    n = 3 * pitchgrid.na * dummy_field.ntheta * dummy_field.nzeta
+    n = 3 * pitchgrid.nalpha * dummy_field.ntheta * dummy_field.nzeta
     sol = MDKESolution(
         f=jnp.zeros(n),
         rhs=jnp.zeros(n),

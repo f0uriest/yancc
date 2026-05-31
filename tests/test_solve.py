@@ -515,7 +515,7 @@ def test_solve_dke_multispecies_warm_start(field, species2):
         rtol=1e-12,
         verbose=2,
     )
-    size = len(species2) * speedgrid.nx * pitchgrid.na * field.ntheta * field.nzeta
+    size = len(species2) * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
     f1 = np.asarray(sol.f1).reshape(-1)
     assert f1.size == size
     U = info["U"]

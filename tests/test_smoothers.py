@@ -36,7 +36,7 @@ def test_permutations_mdke(field, pitchgrid):
     p2 = 2
     erhohat = 1e-4
     nuhat = 1e-4
-    N = field.ntheta * field.nzeta * pitchgrid.na
+    N = field.ntheta * field.nzeta * pitchgrid.nalpha
 
     A0f = MDKE(
         field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="atz", gauge=True

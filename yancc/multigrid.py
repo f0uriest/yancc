@@ -677,7 +677,7 @@ def _build_interp_matrix(x_src, x_query, method, period):
 class Prolongation(lx.AbstractLinearOperator):
     """Coarse-to-fine grid prolongation as a linear operator.
 
-    Interpolates a flattened ``(prefix_size, na, ntheta, nzeta)`` array from a
+    Interpolates a flattened ``(prefix_size, nalpha, ntheta, nzeta)`` array from a
     coarse ``(field, pitchgrid)`` up to a fine one via 1-D interpolation along
     each coordinate axis. ``prefix_size`` absorbs any leading dimensions that
     don't change between levels (e.g. species, speed).
@@ -739,7 +739,7 @@ class Prolongation(lx.AbstractLinearOperator):
         """Matrix-vector product (coarse -> fine)."""
         nt_c = self.field_coarse.ntheta
         nz_c = self.field_coarse.nzeta
-        na_c = self.pitchgrid_coarse.na
+        na_c = self.pitchgrid_coarse.nalpha
         f = vector.reshape((self.prefix_size, na_c, nt_c, nz_c))
         # axes after reshape: (0:prefix, 1:na, 2:nt, 3:nz)
         # Each tensordot brings its axis to 0 and leaves it there; we restore
@@ -762,7 +762,7 @@ class Prolongation(lx.AbstractLinearOperator):
         """Pytree structure of expected input."""
         n = (
             self.prefix_size
-            * self.pitchgrid_coarse.na
+            * self.pitchgrid_coarse.nalpha
             * self.field_coarse.ntheta
             * self.field_coarse.nzeta
         )
@@ -772,7 +772,7 @@ class Prolongation(lx.AbstractLinearOperator):
         """Pytree structure of expected output."""
         n = (
             self.prefix_size
-            * self.pitchgrid_fine.na
+            * self.pitchgrid_fine.nalpha
             * self.field_fine.ntheta
             * self.field_fine.nzeta
         )
@@ -844,7 +844,7 @@ class Restriction(lx.AbstractLinearOperator):
             period=2 * jnp.pi / field_coarse.NFP,
         )
         self.volume_scale = jnp.asarray(
-            (pitchgrid_coarse.na / pitchgrid_fine.na)
+            (pitchgrid_coarse.nalpha / pitchgrid_fine.nalpha)
             * (field_coarse.ntheta / field_fine.ntheta)
             * (field_coarse.nzeta / field_fine.nzeta)
         )
@@ -855,7 +855,7 @@ class Restriction(lx.AbstractLinearOperator):
         """Matrix-vector product (fine -> coarse)."""
         nt_f = self.field_fine.ntheta
         nz_f = self.field_fine.nzeta
-        na_f = self.pitchgrid_fine.na
+        na_f = self.pitchgrid_fine.nalpha
         f = vector.reshape((self.prefix_size, na_f, nt_f, nz_f))
         # Apply the volume-weighted transpose of each per-axis prolongation.
         f = jnp.moveaxis(f, 1, 0)
@@ -877,7 +877,7 @@ class Restriction(lx.AbstractLinearOperator):
         """Pytree structure of expected input."""
         n = (
             self.prefix_size
-            * self.pitchgrid_fine.na
+            * self.pitchgrid_fine.nalpha
             * self.field_fine.ntheta
             * self.field_fine.nzeta
         )
@@ -887,7 +887,7 @@ class Restriction(lx.AbstractLinearOperator):
         """Pytree structure of expected output."""
         n = (
             self.prefix_size
-            * self.pitchgrid_coarse.na
+            * self.pitchgrid_coarse.nalpha
             * self.field_coarse.ntheta
             * self.field_coarse.nzeta
         )
