@@ -202,7 +202,10 @@ class GlobalMaxwellian(eqx.Module):
 
 
 def collisionality(
-    maxwellian_a: LocalMaxwellian, v: ArrayLike, *others: LocalMaxwellian
+    maxwellian_a: LocalMaxwellian,
+    v: ArrayLike,
+    *others: LocalMaxwellian,
+    lnlambda=None,
 ) -> jax.Array:
     """Collisionality between species a and others.
 
@@ -214,6 +217,8 @@ def collisionality(
         Speed being considered.
     *others : LocalMaxwellian
         Distribution functions for background species colliding with primary.
+    lnlambda : float, optional
+        Coulomb logarithm override. If None, computed from the Maxwellians.
 
     Returns
     -------
@@ -223,7 +228,7 @@ def collisionality(
     v = jnp.asarray(v)
     nu = jnp.array(0.0)
     for ma in others + (maxwellian_a,):
-        nu += nuD_ab(maxwellian_a, ma, v)
+        nu += nuD_ab(maxwellian_a, ma, v, lnlambda)
     return nu
 
 
@@ -364,9 +369,9 @@ def debye_length(*maxwellians: LocalMaxwellian) -> jax.Array:
 def chandrasekhar(x: ArrayLike) -> jax.Array:
     """Chandrasekhar function."""
     x = jnp.asarray(x)
-    return (
-        jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
-    ) / (2 * x**2)
+    return (jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))) / (
+        2 * x**2
+    )
 
 
 def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
@@ -409,7 +414,11 @@ def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike 
 
 
 def nustar(
-    species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0, *others: LocalMaxwellian
+    species: LocalMaxwellian,
+    field: Field,
+    x: ArrayLike = 1.0,
+    *others: LocalMaxwellian,
+    lnlambda=None,
 ):
     """Normalized collisionality ν* = ν R₀ /(v ι).
 
@@ -421,9 +430,11 @@ def nustar(
         Magnetic field information.
     x : float
         Normalized speed being considered. x=v/vth
+    lnlambda : float, optional
+        Coulomb logarithm override. If None, computed from the Maxwellians.
     """
     x = jnp.asarray(x)
     v = x * species.v_thermal
-    nu = collisionality(species, v, *others)
+    nu = collisionality(species, v, *others, lnlambda=lnlambda)
     nustar = field.R_major * nu / v / jnp.abs(field.iota)
     return nustar

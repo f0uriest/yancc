@@ -2,8 +2,9 @@
 
 import os
 
-import versioneer
 from setuptools import find_packages, setup
+
+import versioneer
 
 here = os.path.abspath(os.path.dirname(__file__))
 

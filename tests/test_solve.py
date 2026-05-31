@@ -211,13 +211,115 @@ def test_solve_mdke_nonuniform_pitch(field, nuhat):
 
 
 @pytest.mark.parametrize("idx", [0, 10, 20])
-def test_solve_dke_ncsx(idx):
+def test_solve_dke_ncsx_2species(idx):
+    """Test solving 2-species (electron + hydrogen) DKE vs sfincs."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    rho = 0.5
+    # electron (species 1) and hydrogen (species 2), both with:
+    # n = 1.5e20 / m^3     # noqa E800
+    # T = 0.8 keV
+    # dn/dr = -0.4e20 / m^4
+    # dT/dr = -2.0 keV/m
+    # full Fokker-Planck collision operator with full trajectories.
+    # The collisionality was set using ln(Lambda) = 17.
+    nt = 15
+    nz = 31
+    na = 61
+    nx = 6
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
+    pitchgrid = UniformPitchAngleGrid(na)
+    speedgrid = MaxwellSpeedGrid(nx)
+    species = [
+        LocalMaxwellian(
+            yancc.species.Electron,
+            0.8e3,
+            1.5e20,
+            -2e3 * field.a_minor,
+            -0.4e20 * field.a_minor,
+        ),
+        LocalMaxwellian(
+            yancc.species.Hydrogen,
+            0.8e3,
+            1.5e20,
+            -2e3 * field.a_minor,
+            -0.4e20 * field.a_minor,
+        ),
+    ]
+
+    path = "tests/data/20260528-01_sfincs_yancc_benchmark_NCSX_2species_Er_scan.txt"
+    sfincs_raw = np.loadtxt(path, skiprows=1)
+    sfincs_data = {
+        "Er": sfincs_raw[:, 0],
+        "FSABFlow_electron": sfincs_raw[:, 1],
+        "FSABFlow_H": sfincs_raw[:, 2],
+        "particleFlux_electron": sfincs_raw[:, 3] / field.a_minor,
+        "particleFlux_H": sfincs_raw[:, 4] / field.a_minor,
+        "heatFlux_electron": sfincs_raw[:, 5] / field.a_minor,
+        "heatFlux_H": sfincs_raw[:, 6] / field.a_minor,
+    }
+
+    Er = sfincs_data["Er"][idx]
+    print("Er:", Er)
+
+    t0 = time.perf_counter()
+    sol, info = solve_dke(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        Erho=Er * field.a_minor * 1000,  # Er in kV/m
+        coulomb_log=17,
+        verbose=3,
+        rtol=1e-5,
+        multigrid_options={"max_grids": 3, "coarse_N": 2000},
+    )
+    t1 = time.perf_counter()
+    print("TIME:", t1 - t0)
+
+    # tolerances could be tighter with higher resolution, but this isn't meant to be
+    # a real benchmark, just a quick check for dumb mistakes. These qtys pass though
+    # zero so we use an atol set to the average magnitude, so roughly rtol=5%
+    np.testing.assert_allclose(
+        sol.get("FSABFlow_sfincs")[0],
+        sfincs_data["FSABFlow_electron"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["FSABFlow_electron"]))),
+    )
+    np.testing.assert_allclose(
+        sol.get("FSABFlow_sfincs")[1],
+        sfincs_data["FSABFlow_H"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["FSABFlow_H"]))),
+    )
+    np.testing.assert_allclose(
+        sol.get("particleFlux_vm_rN_sfincs")[0],
+        sfincs_data["particleFlux_electron"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_electron"]))),
+    )
+    np.testing.assert_allclose(
+        sol.get("particleFlux_vm_rN_sfincs")[1],
+        sfincs_data["particleFlux_H"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["particleFlux_H"]))),
+    )
+    np.testing.assert_allclose(
+        sol.get("heatFlux_vm_rN_sfincs")[0],
+        sfincs_data["heatFlux_electron"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_electron"]))),
+    )
+    np.testing.assert_allclose(
+        sol.get("heatFlux_vm_rN_sfincs")[1],
+        sfincs_data["heatFlux_H"][idx],
+        atol=5e-2 * float(np.mean(np.abs(sfincs_data["heatFlux_H"]))),
+    )
+
+
+@pytest.mark.parametrize("idx", [0, 10, 20])
+def test_solve_dke_ncsx_1species(idx):
     """Test solving DKE vs sfincs."""
     if os.environ.get("CI"):
         jax.clear_caches()
     rho = 0.5
     # hydrogen ion charge and mass (no electrons)
-    # n = 1.5e20 / m^3     # noqa E800
+    # n = 1.5e20 / m^3     # noqa: ERA001
     # T = 0.8 keV
     # dn/dr = -0.4e20 / m^4
     # dT/dr = -2.0 keV/m
@@ -320,7 +422,7 @@ def test_solve_dke_ncsx(idx):
         rtol=1e-10,
     )
 
-    # j_rN_sfincs = J_rho * Rbar / (e * nbar * vbar)  # noqa: E800
+    # j_rN_sfincs = J_rho * Rbar / (e * nbar * vbar)  # noqa: ERA001
     np.testing.assert_allclose(
         sol.get("j_rN_sfincs") * (elementary_charge * nbar * vbar) / Rbar,
         sol.get("J_rho"),

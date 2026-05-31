@@ -2,7 +2,6 @@
 
 import itertools
 import warnings
-from typing import Optional
 
 import equinox as eqx
 import interpax
@@ -305,8 +304,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         p2: int = 2,
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver: Optional[str] = None,
-        weight: Optional[jax.Array] = None,
+        smooth_solver: str | None = None,
+        weight: jax.Array | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -453,15 +452,15 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
-        potentials: Optional[RosenbluthPotentials] = None,
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
         p1="2d",
         p2=2,
         axorder="sxatz",
         gauge: Bool[ArrayLike, ""] = True,
-        smooth_solver: Optional[str] = None,
-        weight: Optional[jax.Array] = None,
-        operator_weights: Optional[jax.Array] = None,
+        smooth_solver: str | None = None,
+        weight: jax.Array | None = None,
+        operator_weights: jax.Array | None = None,
         coulomb_log=None,
     ):
         assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
@@ -514,7 +513,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
@@ -679,15 +678,15 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
-        potentials: Optional[RosenbluthPotentials] = None,
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
         p1="2d",
         p2=2,
         axorder="atzsx",
         gauge: Bool[ArrayLike, ""] = True,
         smooth_solver="dense",
-        weight: Optional[jax.Array] = None,
-        operator_weights: Optional[jax.Array] = None,
+        weight: jax.Array | None = None,
+        operator_weights: jax.Array | None = None,
         coulomb_log=None,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
@@ -714,7 +713,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             nus = []
             for i, spa in enumerate(species):
                 others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others)
+                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
                 nus.append(nu)
             nus = jnp.asarray(nus)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
