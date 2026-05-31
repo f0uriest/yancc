@@ -360,7 +360,7 @@ def solve_dke(  # noqa: C901
     flexible = not _preconditioner_is_linear(M)
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
-    shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
+    shape = (len(species), speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
     size = np.prod(shape)
     if f1 is None:
         f1 = jnp.zeros(size + 2 * len(species))

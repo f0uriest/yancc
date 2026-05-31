@@ -15,7 +15,7 @@ A yancc solve has four resolution parameters:
 - ``nx`` — collocation nodes in the speed coordinate :math:`x = v / v_{th}`.
   Set on :class:`~yancc.velocity_grids.MaxwellSpeedGrid`. Used by the full
   DKE only; the MDKE is monoenergetic and has no speed grid.
-- ``na`` — points along the pitch-angle :math:`a \in [0, \pi]`. Set on the
+- ``nalpha`` — points along the pitch-angle :math:`\alpha \in [0, \pi]`. Set on the
   pitch-angle grid (:class:`~yancc.velocity_grids.UniformPitchAngleGrid` or a
   non-uniform variant — see :ref:`choosing-a-pitch-angle-grid` below).
 - ``ntheta`` — points along the poloidal angle :math:`\theta \in [0, 2\pi]`
@@ -32,11 +32,11 @@ What each grid actually resolves
   with larger values needed for low collisionality.
 
 
-``na``
+``nalpha``
   Pitch-angle resolution. This is almost always the most demanding axis at
   low collisionality, because trapped/passing boundary layers narrow as
   :math:`\nu^* \to 0`. The number of points usually scales like :math:`1/\sqrt{\nu^*}`,
-  with the usual range of ``na = 65-257``. At high collisionality this can be usually
+  with the usual range of ``nalpha = 65-257``. At high collisionality this can be usually
   be reduced slightly.
 
 
@@ -105,7 +105,7 @@ about (e.g. ``<particle_flux>`` or ``Dij[1,1]``):
 
 Double the resolution until the moment of interest changes by less than
 your acceptable tolerance, then back off one step. Sweep one axis at a time:
-``na`` first (usually the binding one), then ``ntheta``/``nzeta``, then
+``nalpha`` first (usually the binding one), then ``ntheta``/``nzeta``, then
 ``nx``.
 
 How cost scales
@@ -115,7 +115,7 @@ The DKE is solved on a grid of total size
 
 .. math::
 
-    N \;=\; n_s \cdot n_x \cdot n_a \cdot n_\theta \cdot n_\zeta,
+    N \;=\; n_s \cdot n_x \cdot n_\alpha \cdot n_\theta \cdot n_\zeta,
 
 (where :math:`n_s` is the number of kinetic species). Memory and per-iteration
 cost are roughly linear in :math:`N`. The MDKE has the same structure with
@@ -134,7 +134,7 @@ Several less obvious scalings are worth knowing:
 - **Low collisionality.** Iteration counts grow as :math:`\nu^* \to 0`. If
   you are scanning down in collisionality, expect the lowest collisionality in the
   scan to dominate the total time — and to be the run most sensitive to
-  ``na``.
+  ``nalpha``.
 - **Tolerance.** The default ``rtol=1e-5`` is conservative for transport
   moments. Loosening to ``1e-4`` or ``1e-3`` often reduces the iteration count without
   visibly affecting fluxes; tighten only if you need it.
@@ -214,7 +214,7 @@ yancc inherits its hardware support from JAX. In broad terms:
 - **GPU** wins for the full DKE at production resolution, large species
   counts, or large vmapped scans. Memory is usually the binding constraint:
   the dense distribution function alone is
-  :math:`8 n_s n_x n_a n_\theta n_\zeta` bytes, and the multigrid
+  :math:`8 n_s n_x n_\alpha n_\theta n_\zeta` bytes, and the multigrid
   preconditioner adds several copies.
 
 If you hit out-of-memory errors on GPU, the cheapest fix is usually to

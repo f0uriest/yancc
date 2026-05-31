@@ -71,10 +71,10 @@ class DKESources(lx.MatrixLinearOperator):
         # now need to make them broadcast against full distribution function
         # these have shape (ns, nx, na, nt, nz)
         s1 = s1[:, :, None, None, None] * jnp.ones(
-            (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
+            (1, 1, pitchgrid.nalpha, field.ntheta, field.nzeta)
         )
         s2 = s2[:, :, None, None, None] * jnp.ones(
-            (1, 1, pitchgrid.na, field.ntheta, field.nzeta)
+            (1, 1, pitchgrid.nalpha, field.ntheta, field.nzeta)
         )
         # flatten by species
         s1 = s1.reshape((len(species), -1))

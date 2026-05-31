@@ -155,7 +155,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
@@ -164,7 +164,7 @@ class MDKETheta(lx.AbstractLinearOperator):
         bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 1)
         w = self._w
         df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -182,13 +182,13 @@ class MDKETheta(lx.AbstractLinearOperator):
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         fd = jnp.diag(self._fd)[None, :, None]
         bd = jnp.diag(self._bd)[None, :, None]
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -204,18 +204,20 @@ class MDKETheta(lx.AbstractLinearOperator):
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "a":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.na)))
+            return jax.vmap(jnp.diag)(
+                self.diagonal().reshape((-1, self.pitchgrid.nalpha))
+            )
         if self.axorder[-1] == "z":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         fd = self._fd[None, :, None, :]
         bd = self._bd[None, :, None, :]
         w = self._w[:, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
@@ -236,14 +238,14 @@ class MDKETheta(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -298,8 +300,6 @@ class MDKEZeta(lx.AbstractLinearOperator):
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert field.nzeta > fd_coeffs[1][p1].size // 2
-        assert field.nzeta > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.array(erhohat)
@@ -308,9 +308,14 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        self._fd, self._bd = _advection_matrices(
-            field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
-        )
+        if field.nzeta > 1:
+            assert field.nzeta > fd_coeffs[1][p1].size // 2
+            assert field.nzeta > fd_coeffs[2][p2].size // 2
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
+        else:  # axisymmetric (tokamak): d/dzeta == 0
+            self._fd = self._bd = jnp.zeros((1, 1))
         self._w = dkes_w_zeta(field, pitchgrid, self.erhohat)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
@@ -321,7 +326,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
@@ -330,7 +335,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
         bd_f = f @ self._bd.T
         w = self._w
         df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -348,13 +353,13 @@ class MDKEZeta(lx.AbstractLinearOperator):
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         fd = jnp.diag(self._fd)[None, None, :]
         bd = jnp.diag(self._bd)[None, None, :]
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -370,18 +375,20 @@ class MDKEZeta(lx.AbstractLinearOperator):
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if self.axorder[-1] == "a":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.pitchgrid.na)))
+            return jax.vmap(jnp.diag)(
+                self.diagonal().reshape((-1, self.pitchgrid.nalpha))
+            )
         if self.axorder[-1] == "t":
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         fd = self._fd[None, None, :, :]
         bd = self._bd[None, None, :, :]
         w = self._w[:, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
@@ -402,14 +409,14 @@ class MDKEZeta(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -464,8 +471,8 @@ class MDKEPitch(lx.AbstractLinearOperator):
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert pitchgrid.na > fd_coeffs[1][p1].size // 2
-        assert pitchgrid.na > fd_coeffs[2][p2].size // 2
+        assert pitchgrid.nalpha > fd_coeffs[1][p1].size // 2
+        assert pitchgrid.nalpha > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.array(erhohat)
@@ -473,9 +480,9 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
-        h = np.pi / pitchgrid.na
+        h = np.pi / pitchgrid.nalpha
         self._fd, self._bd = _advection_matrices(
-            pitchgrid.a, p1, bc_type="symmetric", domain=(0, np.pi)
+            pitchgrid.alpha, p1, bc_type="symmetric", domain=(0, np.pi)
         )
         self._w = dkes_w_pitch(field, pitchgrid)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
@@ -487,7 +494,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         f = vector
         shp = f.shape
         shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
@@ -496,7 +503,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
         bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 0)
         w = self._w
         df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -514,13 +521,13 @@ class MDKEPitch(lx.AbstractLinearOperator):
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         fd = jnp.diag(self._fd)[:, None, None]
         bd = jnp.diag(self._bd)[:, None, None]
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0].set(
@@ -541,13 +548,13 @@ class MDKEPitch(lx.AbstractLinearOperator):
             return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.na, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
         fd = self._fd[:, None, None, :]
         bd = self._bd[:, None, None, :]
         w = self._w[:, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idx = self.pitchgrid.na // 2
+        idx = self.pitchgrid.nalpha // 2
         df = jnp.where(
             self.gauge,
             df.at[idx, 0, 0, :]
@@ -557,7 +564,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
             df,
         )
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.pitchgrid.na, self.pitchgrid.na))
+        df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
         return df
 
     def as_matrix(self):
@@ -568,14 +575,14 @@ class MDKEPitch(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -688,14 +695,14 @@ class MDKE(lx.AbstractLinearOperator):
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
     def out_structure(self):
         """Pytree structure of expected output."""
         return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.na,),
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
 
@@ -875,7 +882,7 @@ class DKETheta(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -887,7 +894,7 @@ class DKETheta(lx.AbstractLinearOperator):
         bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 3)
         w = self._w
         df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -908,7 +915,7 @@ class DKETheta(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -917,7 +924,7 @@ class DKETheta(lx.AbstractLinearOperator):
         bd = jnp.diag(self._bd)[None, None, None, :, None]
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -942,7 +949,7 @@ class DKETheta(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -959,7 +966,7 @@ class DKETheta(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -974,7 +981,7 @@ class DKETheta(lx.AbstractLinearOperator):
         dfb, _, _ = banded_mm(0, 0, bw, bw, wb, bd)
         df = dff + dfb
 
-        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
 
         bandwidth = 2 * bw + 1
@@ -1006,14 +1013,16 @@ class DKETheta(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
-            return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
+            )
         if self.axorder[2] == "z":
             return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
 
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1031,7 +1040,7 @@ class DKETheta(lx.AbstractLinearOperator):
         df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
         df = df.reshape(*shape, self.field.ntheta, len(self.species), self.speedgrid.nx)
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1061,7 +1070,7 @@ class DKETheta(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1074,7 +1083,7 @@ class DKETheta(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1140,8 +1149,6 @@ class DKEZeta(lx.AbstractLinearOperator):
         gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
-        assert field.nzeta > fd_coeffs[1][p1].size // 2
-        assert field.nzeta > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1152,9 +1159,14 @@ class DKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        self._fd, self._bd = _advection_matrices(
-            field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
-        )
+        if field.nzeta > 1:
+            assert field.nzeta > fd_coeffs[1][p1].size // 2
+            assert field.nzeta > fd_coeffs[2][p2].size // 2
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
+        else:  # axisymmetric (tokamak): d/dzeta == 0
+            self._fd = self._bd = jnp.zeros((1, 1))
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_zeta(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
@@ -1172,7 +1184,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1184,7 +1196,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         bd_f = f @ self._bd.T
         w = self._w
         df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -1205,7 +1217,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1214,7 +1226,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         bd = jnp.diag(self._bd)[None, None, None, None, :]
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -1232,14 +1244,15 @@ class DKEZeta(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "z":  # its just diagonal
+        # off-axis, or axisymmetric (nzeta=1) with no zeta coupling: just diagonal
+        if self.axorder[-1] != "z" or self.field.nzeta == 1:
             if bw is None:
                 bw = 0
             df = self.diagonal()
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1256,7 +1269,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1271,7 +1284,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         dfb, _, _ = banded_mm(0, 0, bw, bw, wb, bd)
         df = dff + dfb
 
-        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
         bandwidth = 2 * bw + 1
         bands = jnp.arange(bandwidth)
@@ -1301,14 +1314,16 @@ class DKEZeta(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
-            return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
+            )
         if self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
 
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1326,7 +1341,7 @@ class DKEZeta(lx.AbstractLinearOperator):
         df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
         df = df.reshape(*shape, self.field.nzeta, len(self.species), self.speedgrid.nx)
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1356,7 +1371,7 @@ class DKEZeta(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1369,7 +1384,7 @@ class DKEZeta(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1435,8 +1450,8 @@ class DKEPitch(lx.AbstractLinearOperator):
         gauge: Bool[ArrayLike, ""] = False,
     ):
         assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
-        assert pitchgrid.na > fd_coeffs[1][p1].size // 2
-        assert pitchgrid.na > fd_coeffs[2][p2].size // 2
+        assert pitchgrid.nalpha > fd_coeffs[1][p1].size // 2
+        assert pitchgrid.nalpha > fd_coeffs[2][p2].size // 2
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1446,9 +1461,9 @@ class DKEPitch(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
-        h = np.pi / pitchgrid.na
+        h = np.pi / pitchgrid.nalpha
         self._fd, self._bd = _advection_matrices(
-            pitchgrid.a, p1, bc_type="symmetric", domain=(0, np.pi)
+            pitchgrid.alpha, p1, bc_type="symmetric", domain=(0, np.pi)
         )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_pitch(
@@ -1467,7 +1482,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1479,7 +1494,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 2)
         w = self._w
         df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -1500,7 +1515,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1509,7 +1524,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         bd = jnp.diag(self._bd)[None, None, :, None, None]
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         df = jnp.where(
             self.gauge,
@@ -1534,7 +1549,7 @@ class DKEPitch(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1551,7 +1566,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1566,12 +1581,12 @@ class DKEPitch(lx.AbstractLinearOperator):
         dfb, _, _ = banded_mm(0, 0, bw, bw, wb, bd)
         df = dff + dfb
 
-        idxa = jnp.atleast_1d(self.pitchgrid.na // 2)
+        idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
 
         bandwidth = 2 * bw + 1
         bands = jnp.arange(bandwidth)
-        cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.na
+        cols = (idxa[:, None] + bw - bands[None, :]) % self.pitchgrid.nalpha
         basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
         vals = self._scale[:, :, None] * basis[None, None, :]
         idxx_mesh = idxx[:, None]
@@ -1583,7 +1598,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         )
         df = jnp.moveaxis(df, 4, 2)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.na))
+        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
         if fmt == "dense":
             df = banded_to_dense(bw, bw, df)
         return df
@@ -1601,7 +1616,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1617,9 +1632,11 @@ class DKEPitch(lx.AbstractLinearOperator):
         w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
         w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
         df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(*shape, self.pitchgrid.na, len(self.species), self.speedgrid.nx)
+        df = df.reshape(
+            *shape, self.pitchgrid.nalpha, len(self.species), self.speedgrid.nx
+        )
         df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         idxs = jnp.arange(len(self.species))
         idxsx = idxs[:, None] * self.speedgrid.nx + idxx
@@ -1635,7 +1652,7 @@ class DKEPitch(lx.AbstractLinearOperator):
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         N = self.in_size()
-        M = self.pitchgrid.na * len(self.species) * self.speedgrid.nx
+        M = self.pitchgrid.nalpha * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
     def as_matrix(self):
@@ -1649,7 +1666,7 @@ class DKEPitch(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1662,7 +1679,7 @@ class DKEPitch(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1729,7 +1746,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1744,7 +1761,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         )
         df = jnp.einsum("yx,sxatz->syatz", self.speedgrid.Dx_pseudospectral, f)
         df = w * df
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
             self.speedgrid.wx
@@ -1768,7 +1785,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1781,7 +1798,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         )
         df = jnp.diag(self.speedgrid.Dx_pseudospectral)[None, :, None, None, None]
         df = w * df
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
             self.speedgrid.wx
@@ -1809,7 +1826,7 @@ class DKESpeed(lx.AbstractLinearOperator):
             sizes = {
                 "s": len(self.species),
                 "x": self.speedgrid.nx,
-                "a": self.pitchgrid.na,
+                "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
@@ -1829,7 +1846,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.na,
+            self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
             self.axorder,
@@ -1843,7 +1860,7 @@ class DKESpeed(lx.AbstractLinearOperator):
         df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
         w1 = w[:, :, :, :, :, None]
         df = w1 * df
-        idxa = self.pitchgrid.na // 2
+        idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
             self.speedgrid.wx
@@ -1868,7 +1885,9 @@ class DKESpeed(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
-            return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
+            return _refold(
+                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
+            )
         elif self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
         elif self.axorder[2] == "z":
@@ -1888,7 +1907,7 @@ class DKESpeed(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -1901,7 +1920,7 @@ class DKESpeed(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2047,7 +2066,7 @@ class DKE(lx.AbstractLinearOperator):
         size = (
             len(self.species)
             * self.speedgrid.nx
-            * self.pitchgrid.na
+            * self.pitchgrid.nalpha
             * self.field.ntheta
             * self.field.nzeta
         )
@@ -2073,7 +2092,7 @@ class DKE(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2119,7 +2138,7 @@ class DKE(lx.AbstractLinearOperator):
         sizes = {
             "s": len(self.species),
             "x": self.speedgrid.nx,
-            "a": self.pitchgrid.na,
+            "a": self.pitchgrid.nalpha,
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
@@ -2151,7 +2170,7 @@ class DKE(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -2164,7 +2183,7 @@ class DKE(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),

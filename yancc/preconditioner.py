@@ -10,7 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
-from .finite_diff import DEFAULT_P1M, DEFAULT_P2M
+from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
 from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
@@ -77,9 +77,18 @@ class MDKEPreconditioner(MultigridOperator):
         max_grids = options.pop("max_grids", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         coarse_N = options.pop("coarse_N", 8000)
-        min_nt = options.pop("min_nt", 5)
-        min_nz = options.pop("min_nz", 5)
-        min_na = options.pop("min_na", 5)
+        # The coarsest grid must still fit the FD stencils: every axis needs
+        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+        # hold the stencil should error (via the operator asserts), so we floor
+        # theta/a at min_n rather than capping at the given size. The exception
+        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+        min_n = (
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        )
+        min_nt = options.pop("min_nt", min_n)
+        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
@@ -97,7 +106,7 @@ class MDKEPreconditioner(MultigridOperator):
             resolutions = get_grid_resolutions(
                 ns=1,
                 nx=1,
-                na=pitchgrid.na,
+                na=pitchgrid.nalpha,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -163,10 +172,10 @@ class MDKEPreconditioner(MultigridOperator):
             # AbstractLinearOperator type to MDKE for pyright.
             op = cast(MDKE, op)
             jax.debug.print(
-                f"Grid {i}: na={op.pitchgrid.na:4d}, "
-                f"nt={op.field.ntheta:4d}, "
-                f"nz={op.field.nzeta:4d}, "
-                f"N={op.pitchgrid.na * op.field.ntheta * op.field.nzeta:,d}",
+                f"Grid {i}: nα={op.pitchgrid.nalpha:4d}, "
+                f"nθ={op.field.ntheta:4d}, "
+                f"nζ={op.field.nzeta:4d}, "
+                f"N={op.pitchgrid.nalpha * op.field.ntheta * op.field.nzeta:,d}",
                 ordered=True,
             )
 
@@ -234,9 +243,18 @@ class DKEPreconditioner(MultigridOperator):
         coarsening_factor = options.pop("coarsening_factor", None)
         max_grids = options.pop("max_grids", None)
         coarse_N = options.pop("coarse_N", 8000)
-        min_nt = options.pop("min_nt", 5)
-        min_nz = options.pop("min_nz", 5)
-        min_na = options.pop("min_na", 5)
+        # The coarsest grid must still fit the FD stencils: every axis needs
+        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+        # hold the stencil should error (via the operator asserts), so we floor
+        # theta/a at min_n rather than capping at the given size. The exception
+        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+        min_n = (
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        )
+        min_nt = options.pop("min_nt", min_n)
+        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
@@ -256,7 +274,7 @@ class DKEPreconditioner(MultigridOperator):
             resolutions = get_grid_resolutions(
                 ns=len(species),
                 nx=speedgrid.nx,
-                na=pitchgrid.na,
+                na=pitchgrid.nalpha,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -357,14 +375,14 @@ class DKEPreconditioner(MultigridOperator):
             # cast is a no-op at runtime; just narrows the declared
             # AbstractLinearOperator type to DKE for pyright.
             op = cast(DKE, op)
-            na = op.pitchgrid.na
+            na = op.pitchgrid.nalpha
             nt = op.field.ntheta
             nz = op.field.nzeta
             jax.debug.print(
                 f"Grid {i}: nx={nx:4d}, "
-                f"na={na:4d}, "
-                f"nt={nt:4d}, "
-                f"nz={nz:4d}, "
+                f"nα={na:4d}, "
+                f"nθ={nt:4d}, "
+                f"nζ={nz:4d}, "
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )
@@ -487,7 +505,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -500,7 +518,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.na
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -537,14 +555,14 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             # cast is a no-op at runtime; just narrows the declared
             # AbstractLinearOperator type to MDKE for pyright.
             op = cast(MDKE, op)
-            na = op.pitchgrid.na
+            na = op.pitchgrid.nalpha
             nt = op.field.ntheta
             nz = op.field.nzeta
             jax.debug.print(
                 f"Grid {i}: nx={nx:4d}, "
-                f"na={na:4d}, "
-                f"nt={nt:4d}, "
-                f"nz={nz:4d}, "
+                f"nα={na:4d}, "
+                f"nθ={nt:4d}, "
+                f"nζ={nz:4d}, "
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )

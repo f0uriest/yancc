@@ -1,7 +1,14 @@
-yancc
-=====
+.. image:: https://raw.githubusercontent.com/f0uriest/yancc/master/docs/_static/images/logo.png
+   :width: 400
+   :align: center
+   :alt: yancc
 
 Yet Another NeoClassical Code.
+==============================
+|License|
+
+|Docs| |UnitTests| |Codecov|
+
 
 ``yancc`` solves the drift kinetic equation to compute neoclassical flows and transport
 fluxes in toroidal geometry (both tokamaks and stellarators).
@@ -80,3 +87,21 @@ A minimal end-to-end DKE solve for a single hydrogen species:
 See the `documentation <https://yancc.readthedocs.io/>`_ for the monoenergetic
 solver, multi-species runs, the full list of output variables, and the API
 reference.
+
+
+.. |License| image:: https://img.shields.io/github/license/f0uriest/yancc?color=blue&logo=open-source-initiative&logoColor=white
+    :target: https://github.com/f0uriest/yancc/blob/master/LICENSE
+    :alt: License
+
+
+.. |Docs| image:: https://img.shields.io/readthedocs/yancc?logo=Read-the-Docs
+    :target: https://yancc.readthedocs.io/en/latest/?badge=latest
+    :alt: Documentation
+
+.. |UnitTests| image:: https://github.com/f0uriest/yancc/actions/workflows/unittest.yml/badge.svg
+    :target: https://github.com/f0uriest/yancc/actions/workflows/unittest.yml
+    :alt: UnitTests
+
+.. |Codecov| image:: https://codecov.io/gh/f0uriest/yancc/branch/master/graph/badge.svg?token=4WTFZ0ZLLB
+    :target: https://codecov.io/gh/f0uriest/yancc
+    :alt: Coverage

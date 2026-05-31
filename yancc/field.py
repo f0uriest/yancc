@@ -211,7 +211,7 @@ class Field(eqx.Module):
         )
 
     @classmethod
-    def from_vmec(cls, wout, rho: float, ntheta: int, nzeta: int):
+    def from_vmec(cls, wout, rho: Float[ArrayLike, ""], ntheta: int, nzeta: int):
         """Construct Field from VMEC equilibrium.
 
         Parameters

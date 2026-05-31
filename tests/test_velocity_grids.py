@@ -194,10 +194,10 @@ def test_legendre_pitch_grid_resample():
     requested size.
     """
     g = LegendrePitchAngleGrid(6)
-    assert g.na == 6
+    assert g.nalpha == 6
     g2 = g.resample(10)
     assert isinstance(g2, LegendrePitchAngleGrid)
-    assert g2.na == 10
+    assert g2.nalpha == 10
     assert g2.xi.shape == (10,)
 
 

@@ -89,6 +89,7 @@ Solution Objects
 .. autosummary::
     :toctree: _api/
     :recursive:
+    :template: solution_class
 
     yancc.solution.DKESolution    -- Solution returned by ``solve_dke``.
     yancc.solution.MDKESolution   -- Solution returned by ``solve_mdke``.

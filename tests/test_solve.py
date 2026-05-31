@@ -3,6 +3,7 @@
 import os
 import time
 
+import interpax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -543,7 +544,7 @@ def test_solve_dke_multispecies_warm_start(field, species2):
         rtol=1e-12,
         verbose=2,
     )
-    size = len(species2) * speedgrid.nx * pitchgrid.na * field.ntheta * field.nzeta
+    size = len(species2) * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
     f1 = np.asarray(sol.f1).reshape(-1)
     assert f1.size == size
     U = info["U"]
@@ -620,3 +621,198 @@ def test_solve_dke_coulomb_log_override(field, pitchgrid, speedgrid):
     assert abs(flux_fixed - flux_default) > 1e-3 * abs(flux_default)
     # setting coulomb_log to the computed value should reproduce the default
     np.testing.assert_allclose(flux_matching, flux_default, rtol=1e-6)
+
+
+def test_solve_mdke_tokamak_axisymmetric():
+    """Axisymmetric (tokamak) MDKE: nzeta=1 reproduces a zeta-resolved solve.
+
+    A tokamak field is independent of zeta, so the toroidal derivative drops
+    (d/dzeta == 0) and a single toroidal point (nzeta=1) must reproduce the
+    transport coefficients computed on a zeta-resolved grid.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    import desc.examples  # pyright: ignore[reportMissingImports]
+
+    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
+    pitchgrid = UniformPitchAngleGrid(31)
+    nuhat = 1e-1
+    erhohat = 0.0
+
+    field_axi = Field.from_desc(eq, 0.5, 11, 1)
+    # nzeta=5 is the smallest zeta-resolved grid the default p1="4d" stencil allows
+    field_res = Field.from_desc(eq, 0.5, 11, 5)
+    assert field_axi.nzeta == 1
+    # the field really is axisymmetric: no toroidal variation of |B|
+    np.testing.assert_allclose(field_axi.dBdz, 0.0, atol=1e-12)
+
+    sol_axi, info_axi = solve_mdke(field_axi, pitchgrid, erhohat, nuhat)
+    sol_res, _ = solve_mdke(field_res, pitchgrid, erhohat, nuhat)
+    assert bool(info_axi["success1"]) and bool(info_axi["success2"])
+
+    Dij_axi = sol_axi.get("Dij_DKES")
+    Dij_res = sol_res.get("Dij_DKES")
+    # nzeta=1 must match the zeta-resolved solve to solver tolerance
+    np.testing.assert_allclose(Dij_axi, Dij_res, rtol=1e-3, atol=1e-5)
+
+    # Onsager symmetry D31 = -D13
+    np.testing.assert_allclose(Dij_axi[2, 0], -Dij_axi[0, 2], rtol=1e-2, atol=1e-4)
+
+
+def test_solve_dke_tokamak_axisymmetric():
+    """Axisymmetric (tokamak) DKE: nzeta=1 reproduces a zeta-resolved solve.
+
+    As for the MDKE, a tokamak field is zeta-independent so d/dzeta == 0 and a
+    single toroidal point must reproduce the fluxes from a zeta-resolved grid.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    import desc.examples  # pyright: ignore[reportMissingImports]
+
+    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
+    pitchgrid = UniformPitchAngleGrid(31)
+    speedgrid = MaxwellSpeedGrid(5)
+
+    def solve(nz):
+        field = Field.from_desc(eq, 0.5, 15, nz)
+        species = [
+            LocalMaxwellian(
+                yancc.species.Hydrogen,
+                0.8e3,
+                1.5e20,
+                -2e3 * field.a_minor,
+                -0.4e20 * field.a_minor,
+            )
+        ]
+        C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
+        operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
+        sol, info = solve_dke(
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            Erho=0.0,
+            operator_weights=operator_weights,
+            rtol=1e-6,
+            multigrid_options={"max_grids": 3, "coarse_N": 2000},
+        )
+        fluxes = np.array(
+            [
+                sol.get("particleFlux_vm_rN_sfincs"),
+                sol.get("heatFlux_vm_rN_sfincs"),
+                sol.get("FSABFlow_sfincs"),
+            ]
+        ).squeeze()
+        return fluxes, info
+
+    # nzeta=5 is the smallest zeta-resolved grid the default p1="4d" stencil allows
+    fluxes_axi, info_axi = solve(1)
+    fluxes_res, _ = solve(5)
+    assert bool(info_axi["success"])
+
+    assert np.all(np.isfinite(fluxes_axi))
+    # heat flux (component 1) is outward (down-gradient) for these profiles
+    assert fluxes_axi[1] > 0
+    # nzeta=1 must match the zeta-resolved solve to solver tolerance
+    np.testing.assert_allclose(fluxes_axi, fluxes_res, rtol=5e-3, atol=1e-8)
+
+
+# these indices are rho=0.8, 0.9, so collisionality isn't too low
+@pytest.mark.parametrize("ir", [15, 17])
+def test_solve_dke_dshape_2species(ir):
+    """Test solving DKE vs sfincs for DSHAPE tokamak."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    sfincs_path = (
+        "tests/data/20260528-01-013_tokamak_radialScan_ntheta71_nxi160_"
+        "nx24_tol1e-6_results.txt"
+    )
+    data = np.loadtxt(sfincs_path, delimiter="\t", skiprows=1)
+
+    with open(sfincs_path) as f:
+        headers = f.readlines()[0].split("\t")
+
+    headers = [h.lstrip().strip("\n") for h in headers]
+
+    sfincs_data = {head: dat for head, dat in zip(headers, data.T)}
+    rho, unique_idx = np.unique(sfincs_data["rN"], return_index=True)
+    r = rho[ir]
+
+    ne = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e20 * sfincs_data["nHats_electron"][unique_idx]
+    )
+    ni = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e20 * sfincs_data["nHats_ion"][unique_idx]
+    )
+    Te = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e3 * sfincs_data["THats_electron"][unique_idx]
+    )
+    Ti = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e3 * sfincs_data["THats_ion"][unique_idx]
+    )
+
+    ions = yancc.species.GlobalMaxwellian(yancc.species.Hydrogen, Ti, ni)
+    electrons = yancc.species.GlobalMaxwellian(yancc.species.Electron, Te, ne)
+
+    nt0 = 71
+    nz0 = 1
+    na0 = 81
+    nx0 = 12
+    nL0 = 8
+    pitchgrid0 = yancc.velocity_grids.UniformPitchAngleGrid(na0)
+    speedgrid0 = yancc.velocity_grids.MaxwellSpeedGrid(nx0)
+
+    vmec_path = "tests/data/wout_DSHAPE.nc"
+
+    field = yancc.field.Field.from_vmec(vmec_path, r, nt0, nz0)
+    species = [electrons.localize(r), ions.localize(r)]
+
+    sol, info = yancc.solve.solve_dke(
+        field,
+        pitchgrid0,
+        speedgrid0,
+        species,
+        Erho=sfincs_data["Er"][ir] * 1000 * field.a_minor,
+        verbose=2,
+        multigrid_options={"coarse_N": 2000, "max_grids": 3},
+        nL=nL0,
+        rtol=1e-6,
+        coulomb_log=17,
+    )
+    assert info["success"]
+
+    np.testing.assert_allclose(
+        sol.get("FSABFlow_sfincs")[0],
+        sfincs_data["FSABFlow_electron"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("FSABFlow_sfincs")[1],
+        sfincs_data["FSABFlow_ion"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("particleFlux_vm_rN_sfincs")[0] * field.a_minor,
+        sfincs_data["particleFlux_vm_rHat_electron"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("particleFlux_vm_rN_sfincs")[1] * field.a_minor,
+        sfincs_data["particleFlux_vm_rHat_ion"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("heatFlux_vm_rN_sfincs")[0] * field.a_minor,
+        sfincs_data["heatFlux_vm_rHat_electron"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("heatFlux_vm_rN_sfincs")[1] * field.a_minor,
+        sfincs_data["heatFlux_vm_rHat_ion"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("FSABjHat_sfincs"),
+        sfincs_data["FSABjHat"][ir],
+        rtol=2e-2,
+    )

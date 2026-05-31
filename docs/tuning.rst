@@ -71,7 +71,7 @@ DKE-only options
    Scale factors for the 8 sub-operators that make up the DKE:
 
       0. :math:`\dot{x} \frac{\partial f}{\partial x}`
-      1. :math:`\dot{a} \frac{\partial f}{\partial a}`
+      1. :math:`\dot{\alpha} \frac{\partial f}{\partial \alpha}`
       2. :math:`\dot{\theta} \frac{\partial f}{\partial \theta}`
       3. :math:`\dot{\zeta} \frac{\partial f}{\partial \zeta}`
       4. :math:`C_L`

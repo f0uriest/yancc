@@ -53,12 +53,12 @@ def test_prolongation_restriction(field, nx):
     field_f = field.resample(15, 17)
     pitchgrid_c = UniformPitchAngleGrid(11)
     pitchgrid_f = UniformPitchAngleGrid(15)
-    N_c = nx * pitchgrid_c.na * field_c.ntheta * field_c.nzeta
-    N_f = nx * pitchgrid_f.na * field_f.ntheta * field_f.nzeta
+    N_c = nx * pitchgrid_c.nalpha * field_c.ntheta * field_c.nzeta
+    N_f = nx * pitchgrid_f.nalpha * field_f.ntheta * field_f.nzeta
 
     t_c, t_f = field_c.theta, field_f.theta
     z_c, z_f = field_c.zeta, field_f.zeta
-    a_c, a_f = pitchgrid_c.a, pitchgrid_f.a
+    a_c, a_f = pitchgrid_c.alpha, pitchgrid_f.alpha
     x = (1 + np.arange(nx)) ** 2
 
     def foo(x, a, t, z):
@@ -138,7 +138,10 @@ def _two_level_dke(field, pitchgrid, speedgrid, species):
     ns, nx = len(species), speedgrid.nx
     # (ns, nx, na, nt, nz), coarse then fine. Need >= 5 points per algebraic axis
     # (a, t, z) for the finite-difference stencils.
-    resolutions = [(ns, nx, 5, 5, 5), (ns, nx, pitchgrid.na, field.ntheta, field.nzeta)]
+    resolutions = [
+        (ns, nx, 5, 5, 5),
+        (ns, nx, pitchgrid.nalpha, field.ntheta, field.nzeta),
+    ]
     fields, grids = get_fields_grids(field, pitchgrid, resolutions)
     ops = get_dke_operators(
         fields,

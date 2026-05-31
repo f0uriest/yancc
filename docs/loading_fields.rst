@@ -46,6 +46,18 @@ Surface resolution
 ``nzeta`` covers a single field period :math:`[0, 2\pi / \mathrm{NFP})`,
 not the full torus. The number of field periods is read from the file.
 
+Axisymmetric (tokamak) fields
+-----------------------------
+
+For an axisymmetric device (a tokamak) the field has no toroidal variation,
+so pass ``nzeta=1`` to any constructor. yancc then treats the surface as
+zeta-independent: the toroidal derivative drops out
+(:math:`\partial / \partial \zeta = 0`) and the value of ``NFP`` is
+irrelevant. The poloidal resolution ``ntheta`` is chosen exactly as for a
+stellarator. For example::
+
+    field = Field.from_desc(eq, rho=0.5, ntheta=17, nzeta=1)
+
 Stellarator symmetry
 --------------------
 

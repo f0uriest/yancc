@@ -164,10 +164,10 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
 
 
 class MaxwellSpeedGrid(AbstractSpeedGrid):
-    """Grid for speed variable x=v/vth.
+    r"""Grid for speed variable :math:`x = v/v_{th}`.
 
-    Uses Maxwell Polynomials, which are orthogonal on (0, xmax) with the weight
-    function x^k exp(-x^2)
+    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, x_{max}]` with the
+    weight function :math:`x^k \exp(-x^2)`
 
     Parameters
     ----------
@@ -286,13 +286,13 @@ class _MapFunction(eqx.Module):
 class AbstractPitchAngleGrid(ABC, eqx.Module):
     """Base class for pitch angle coordinate grids."""
 
-    na: int = eqx.field(static=True)
-    a: jax.Array
+    nalpha: int = eqx.field(static=True)
+    alpha: jax.Array
     xi: jax.Array
     wxi: jax.Array
 
     @abstractmethod
-    def resample(self, na) -> "AbstractPitchAngleGrid":
+    def resample(self, nalpha) -> "AbstractPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
 
 
@@ -304,22 +304,22 @@ class LegendrePitchAngleGrid(AbstractPitchAngleGrid):
 
     Parameters
     ----------
-    na : int
+    nalpha : int
         Number of grid points.
 
     """
 
     xirec: orthax.recurrence.AbstractRecurrenceRelation
 
-    def __init__(self, na):
-        self.na = na
+    def __init__(self, nalpha):
+        self.nalpha = nalpha
         self.xirec = orthax.recurrence.Legendre()
-        self.xi, self.wxi = orthax.orthgauss(na, self.xirec)
-        self.a = -jnp.acos(self.xi)
+        self.xi, self.wxi = orthax.orthgauss(nalpha, self.xirec)
+        self.alpha = -jnp.acos(self.xi)
 
-    def resample(self, na):
+    def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(na)
+        return self.__class__(nalpha)
 
 
 class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
@@ -339,19 +339,19 @@ class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
 
     map_func: _MapFunction
 
-    def __init__(self, na, map_func):
-        na = eqx.error_if(na, na % 2 == 0, "na must be odd")
-        self.na = na
-        a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
+    def __init__(self, nalpha, map_func):
+        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
+        self.nalpha = nalpha
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
         self.map_func = _MapFunction(map_func)
 
-        self.a = self.map_func(a)
-        self.xi = -jnp.cos(self.a)
+        self.alpha = self.map_func(alpha)
+        self.xi = -jnp.cos(self.alpha)
         self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 
-    def resample(self, na):
+    def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(na, self.map_func.f)
+        return self.__class__(nalpha, self.map_func.f)
 
 
 def _linear_map(x):
@@ -359,26 +359,26 @@ def _linear_map(x):
 
 
 class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
-    """Grid for pitch angle variable a = -arccos(v||/v).
+    r"""Grid for pitch angle variable :math:`\alpha = -\arccos(v_{||}/v)`.
 
-    Uniform grid not including endpoints.
+    Uniform grid on :math:`[0, \pi]`, not including endpoints.
 
     Parameters
     ----------
-    na : int
+    nalpha : int
         Number of grid points.
 
     """
 
-    def __init__(self, na):
-        super().__init__(na, _linear_map)
+    def __init__(self, nalpha):
+        super().__init__(nalpha, _linear_map)
         # uniform in a means chebyshev nodes in xi, so we can do better than
         # newton-cotes: fejer type 1 quadrature
-        self.wxi = fejer_type_1_weights(na)
+        self.wxi = fejer_type_1_weights(nalpha)
 
-    def resample(self, na):
+    def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(na)
+        return self.__class__(nalpha)
 
 
 def _quadratic_map(x, c):
@@ -386,43 +386,44 @@ def _quadratic_map(x, c):
 
 
 class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
-    """Pitch angle grid with quadratic spacing near v|| = 0.
+    r"""Pitch angle grid with quadratic spacing near :math:`v_{||} = 0`
 
-    At low collisionality, the DKE develops very sharp features near v||=0 (a=pi/2).
+    At low collisionality, the DKE develops very sharp features near
+    :math:`v_{||}=0`  (:math:`\alpha=\pi/2`).
     This grid packs nodes closer to that region to resolve it more accurately,
     while sacrificing nodes near the endpoints where the solution varies less.
 
     Parameters
     ----------
-    na : int
+    nalpha : int
         Number of points in pitch angle coordinate.
     c : float in [0,1]
         Grid packing parameter. ``c=0`` means nodes uniformly spaced in a, ``c=1``
-        packs quadratically near a=pi/2 (v||=0). Recommended values are in the range
-        ``c=[0.5, 0.8]`` at low collisionality.
+        packs quadratically near :math:`\alpha=\pi/2` (:math:`v_{||}=0`). Recommended
+        values are in the range ``c=[0.5, 0.8]`` at low collisionality.
     """
 
     c: jax.Array
 
-    def __init__(self, na: int, c: Float[ArrayLike, ""]):
-        na = eqx.error_if(na, na % 2 == 0, "na must be odd")
+    def __init__(self, nalpha: int, c: Float[ArrayLike, ""]):
+        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
         c = jnp.asarray(c)
         c = eqx.error_if(c, jnp.logical_or(c > 1, c < 0), "c must be between [0,1]")
         # error_if loses the static type, so reassert it (c is an array post-asarray)
-        self.na = na
+        self.na = nalpha
         self.c = cast(jax.Array, c)
-        a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
         # pass c as a dynamic param (not baked into a static callable) so the
         # grid can be traced and differentiated through jit.
         self.map_func = _MapFunction(_quadratic_map, (self.c,))
 
-        self.a = self.map_func(a)
-        self.xi = -jnp.cos(self.a)
+        self.a = self.map_func(alpha)
+        self.xi = -jnp.cos(self.alpha)
         self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 
-    def resample(self, na):
+    def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(na, self.c)
+        return self.__class__(nalpha, self.c)
 
 
 def composite_newton_cotes_weights(
