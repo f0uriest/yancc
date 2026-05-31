@@ -58,6 +58,9 @@ def test_bordered_operator():
     np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(Ab), atol=1e-14)
     np.testing.assert_allclose(Fi.T.as_matrix(), np.linalg.inv(Ab.T), atol=1e-14)
 
+    assert Fi.in_structure().shape == (n + k,)
+    assert Fi.out_structure().shape == (n + k,)
+
 
 def test_tridiagonal():
     """Test for solving tridiagonal systems."""
@@ -182,6 +185,42 @@ def test_banded_transpose(p, q, n, periodic):
     a = yancc.linalg.dense_to_banded(p, q, A)
     at, pt, qt = yancc.linalg.banded_transpose(p, q, a)
     np.testing.assert_allclose(A.T, yancc.linalg.banded_to_dense(int(pt), int(qt), at))
+
+
+def test_inverse_linear_operator():
+    """Interface coverage for InverseLinearOperator."""
+    rng = np.random.default_rng(0)
+    n = 6
+    A = rng.standard_normal((n, n)) + n * np.eye(n)  # well-conditioned
+    Aop = lx.MatrixLinearOperator(jnp.array(A))
+    Ainv = yancc.linalg.InverseLinearOperator(Aop)
+
+    np.testing.assert_allclose(Ainv.as_matrix(), np.linalg.inv(A), atol=1e-10)
+    assert Ainv.in_structure().shape == (n,)
+    assert Ainv.out_structure().shape == (n,)
+    # is_diagonal dispatches to the wrapped operator
+    assert lx.is_diagonal(Ainv) == lx.is_diagonal(Aop)
+    # transpose is the inverse of the transpose
+    np.testing.assert_allclose(
+        Ainv.transpose().as_matrix(), np.linalg.inv(A.T), atol=1e-10
+    )
+
+
+def test_transposed_linear_operator():
+    """Interface coverage for TransposedLinearOperator."""
+    rng = np.random.default_rng(1)
+    n = 5
+    A = rng.standard_normal((n, n))
+    Aop = lx.MatrixLinearOperator(jnp.array(A))
+    AT = yancc.linalg.TransposedLinearOperator(Aop)
+
+    np.testing.assert_allclose(np.asarray(AT.as_matrix()), A.T, atol=1e-12)
+    assert AT.in_structure().shape == (n,)
+    assert AT.out_structure().shape == (n,)
+    # transposing back returns the original operator
+    assert AT.transpose() is Aop
+    # unknown attributes are delegated to the wrapped operator
+    np.testing.assert_allclose(np.asarray(AT.matrix), A)
 
 
 @pytest.mark.parametrize("p", [1, 2])

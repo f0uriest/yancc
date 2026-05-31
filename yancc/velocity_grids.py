@@ -188,6 +188,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     gauge_idx: jax.Array
 
     def __init__(self, nx, **kwargs):
+        assert nx >= 2, "MaxwellSpeedGrid requires nx >= 2"
         self.nx = nx
         if nx < 20:
             self.xrec = default_xrec
@@ -250,32 +251,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         gauge_idx = kwargs.get("gauge_idx", None)
         if gauge_idx is None:
             gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
-            if self.nx == 1:
-                gauge_idx = gauge_idx[0]
         self.gauge_idx = jnp.sort(gauge_idx)
-
-    def _dfdx(self, f):
-        # this only knows about a single species,
-        # f assumed to be shape(xi, x, theta, zeta)
-        return jnp.einsum("ax,ixtz->iatz", self.Dx_pseudospectral, f)
-
-    def _interp(self, x, f, xq, weight=True):
-        # f assumed to be shape(xi, x, theta, zeta)
-        M = orthax.orthvander(x, len(x) - 1, self.xrec)
-        if weight:
-            M *= jnp.sqrt(self.xrec.weight(x[:, None]))
-        f = jnp.moveaxis(f, 1, 0)
-        shp = f.shape
-        c = jnp.linalg.lstsq(M, f.reshape((self.nx, -1)))[0].reshape(shp)
-        fq = orthax.orthval(xq, c, self.xrec)
-        if weight:
-            fq *= jnp.sqrt(self.xrec.weight(xq))
-        # fq now of shape (xi, theta, zeta, x)
-        return jnp.moveaxis(fq, -1, 1)
-
-    def _integral(self, f):
-        # f assumed to be shape(xi, x, theta, zeta)
-        return (f * self.wx[None, :, None, None]).sum(axis=1)
 
     def resample(self, nx):
         """Resample grid to a lower or higher resolution."""

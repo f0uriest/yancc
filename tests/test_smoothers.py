@@ -17,9 +17,12 @@ from yancc.multigrid import (
     standard_smooth,
 )
 from yancc.smoothers import (
+    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
+    optimal_smoothing_parameter_3d,
+    optimal_smoothing_parameter_4d,
     permute_f_3d,
 )
 from yancc.species import GlobalMaxwellian, Hydrogen
@@ -236,3 +239,176 @@ def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
     err = np.linalg.norm(L.mv(x_smoothed - x_true)) / np.linalg.norm(L.mv(x_true))
     print("err=", err)
     assert err < 1
+
+
+# ---------------------------------------------------------------------------
+# operator protocol sweep: out_structure / in_structure / transpose / as_matrix
+# ---------------------------------------------------------------------------
+
+
+def _check_protocol(op):
+    """in/out structures agree (square) and transpose matches matrix transpose."""
+    assert op.out_structure() == op.in_structure()
+    opT = op.transpose()
+    assert opT.in_structure() == op.out_structure()
+    assert opT.out_structure() == op.in_structure()
+    M = op.as_matrix()
+    # TransposedLinearOperator.as_matrix is defined as operator.as_matrix().T
+    np.testing.assert_allclose(opT.as_matrix(), M.T)
+    # and the transpose action (via jax.linear_transpose) matches M.T @ v
+    rng = np.random.default_rng(0)
+    v = jnp.asarray(rng.standard_normal(M.shape[0]))
+    np.testing.assert_allclose(opT.mv(v), M.T @ v, atol=1e-8, rtol=1e-6)
+
+
+def test_smoother_protocol_mdke(field, pitchgrid):
+    op = MDKEJacobiSmoother(field, pitchgrid, 1e-3, 1e-3, smooth_solver="dense")
+    _check_protocol(op)
+
+
+def test_smoother_protocol_dke_jacobi(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    op = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        axorder="atzsx",
+        smooth_solver="dense",
+        operator_weights=jnp.ones(8).at[-2:].set(0),
+    )
+    _check_protocol(op)
+
+
+def test_dke_jacobi_banded_default_operator_weights(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """A banded smoother with default (None) operator_weights also zeros slot -2."""
+    op = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        axorder="atzsx",
+        smooth_solver="banded",
+        operator_weights=None,
+    )
+    assert op.smooth_solver == "banded"
+    _check_protocol(op)
+
+
+def test_smoother_protocol_dke_jacobi2(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    op = DKEJacobi2Smoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        smooth_solver="dense",
+    )
+    _check_protocol(op)
+
+
+@pytest.mark.parametrize("normalize", [True, False])
+def test_dke_laplacian_protocol(field, pitchgrid, speedgrid, species2, normalize):
+    op = DKELaplacian(field, pitchgrid, speedgrid, species2, normalize=normalize)
+    _check_protocol(op)
+
+
+# ---------------------------------------------------------------------------
+# optimal_smoothing_parameter fallbacks (unknown stencil / axis -> warn + default)
+# ---------------------------------------------------------------------------
+
+
+def test_optimal_smoothing_parameter_3d_unknown_stencil():
+    with pytest.warns(UserWarning, match="stencil"):
+        w = optimal_smoothing_parameter_3d("not_a_stencil", 2, 1e-3, "a")
+    np.testing.assert_allclose(float(w), 0.1)
+
+
+def test_optimal_smoothing_parameter_3d_unknown_axis():
+    with pytest.warns(UserWarning, match="ax="):
+        w = optimal_smoothing_parameter_3d("1a", 2, 1e-3, "q")
+    np.testing.assert_allclose(float(w), 0.1)
+
+
+def test_optimal_smoothing_parameter_4d_unknown_stencil():
+    with pytest.warns(UserWarning, match="stencil"):
+        w = optimal_smoothing_parameter_4d("not_a_stencil", 2, 1e-3, "a")
+    np.testing.assert_allclose(float(w), 0.01)
+
+
+def test_optimal_smoothing_parameter_4d_unknown_axis():
+    with pytest.warns(UserWarning, match="ax="):
+        w = optimal_smoothing_parameter_4d("2d", 2, 1e-3, "q")
+    np.testing.assert_allclose(float(w), 0.01)
+
+
+# ---------------------------------------------------------------------------
+# smoother constructor default-argument branches
+# ---------------------------------------------------------------------------
+
+
+def test_dke_jacobi_smoother_default_operator_weights_explicit_weight(
+    pitchgrid, speedgrid, species2, field, potentials2
+):
+    """operator_weights=None default branch + explicit (scalar) weight branch."""
+    Erho = jnp.array(1e3)
+    s = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        axorder="atzsx",
+        smooth_solver="dense",
+        weight=jnp.array(0.5),  # exercises the `else: _weight = weight` branch
+        # operator_weights omitted -> None -> default-weights branch
+    )
+    mat = s.as_matrix()
+    assert mat.shape[0] == mat.shape[1]
+    assert np.all(np.isfinite(mat))
+
+
+def test_dke_jacobi2_smoother_default_background(
+    pitchgrid, speedgrid, species2, field, potentials2
+):
+    """background=None default branch in DKEJacobi2Smoother."""
+    Erho = jnp.array(1e3)
+    s = DKEJacobi2Smoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        smooth_solver="dense",
+        # background omitted -> None -> [] branch
+    )
+    assert s.background == []
+
+
+def test_dke_jacobi2_smoother_banded_not_implemented(
+    pitchgrid, speedgrid, species2, field, potentials2
+):
+    """The banded solver path is not implemented for DKEJacobi2Smoother."""
+    Erho = jnp.array(1e3)
+    with pytest.raises(NotImplementedError):
+        DKEJacobi2Smoother(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            Erho,
+            potentials=potentials2,
+            smooth_solver="banded",
+        )

@@ -25,32 +25,48 @@ def crop2(a, b):
     return a, b
 
 
-def test_fgmres():
-    """Test that FGMRES is equivalent to scipy."""
-    n = 20
-    rng = np.random.default_rng(0)
-    A = rng.random((n, n))
-    A = lx.MatrixLinearOperator(jnp.array(A))
-    M = rng.random((n, n))
-    M = lx.MatrixLinearOperator(jnp.array(M))
-    b = rng.random(n)
-    b /= np.linalg.norm(b)  # scipy version assumes b is unit norm
-
-    atol = 0
-    m = 7
-    k = 5
-    C = None
-    lc = None
-
+def _scipy_fgmres(A_mv, b, m, k, atol, cs=(), **kw):
+    """Run scipy's internal _fgmres and return (H, B, V, Z, y)."""
     Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k, atol=atol, cs=()
+        A_mv, b, m=m + k - len(cs), atol=atol, cs=cs, **kw
     )
     H1 = (Q1 @ R1).T
     V1 = np.array(vs1).T
     Z1 = np.array(zs1).T
+    return H1, B1, V1, Z1, y1
 
+
+@pytest.mark.parametrize("gs_method", ["cgs", "cgs2", "mgs"])
+def test_fgmres_gs_methods(gs_method):
+    """All three Gram-Schmidt variants should produce same Krylov basis."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n)) + n * np.eye(n)  # diagonally-dominant for stability
+    A = lx.MatrixLinearOperator(jnp.array(A))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+
+    m, k = 10, 5
+    _, _, _, Z, y, _, _, _, _, _ = _fgmres(
+        A.mv, b, m=m, k=k, atol=0.0, C=None, lc=None, gs_method=gs_method
+    )
+    # Z = V when no right preconditioner; reconstruct x and verify residual.
+    x = Z @ y
+    np.testing.assert_allclose(A.mv(x), b, atol=1e-8)
+
+
+def test_fgmres_base():
+    """FGMRES without C or preconditioner matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
+
+    H1, B1, V1, Z1, y1 = _scipy_fgmres(A.mv, b, m=m, k=k, atol=atol)
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
-        A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc
+        A.mv, b, m=m, k=k, atol=atol, C=None, lc=None
     )
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
@@ -59,21 +75,19 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
-    # test passing C
-    atol = 0
-    m = 7
-    k = 5
-    C = rng.random((3, n))
-    C = np.linalg.qr(C.T)[0].T
+
+def test_fgmres_with_c():
+    """FGMRES with a full C augmentation matrix matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
+    C = np.linalg.qr(rng.random((3, n)).T)[0].T
     lc = 3
 
-    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k - len(C), atol=atol, cs=C
-    )
-    H1 = (Q1 @ R1).T
-    V1 = np.array(vs1).T
-    Z1 = np.array(zs1).T
-
+    H1, B1, V1, Z1, y1 = _scipy_fgmres(A.mv, b, m=m, k=k, atol=atol, cs=C)
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc
     )
@@ -84,21 +98,20 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
-    # test using bogus right preconditioner
-    atol = 0
-    m = 7
-    k = 5
-    C = rng.random((3, n))
-    C = np.linalg.qr(C.T)[0].T
+
+def test_fgmres_right_preconditioner():
+    """FGMRES with right preconditioner and C augmentation matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
+    C = np.linalg.qr(rng.random((3, n)).T)[0].T
     lc = 3
 
-    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k - len(C), atol=atol, cs=C, rpsolve=M.mv
-    )
-    H1 = (Q1 @ R1).T
-    V1 = np.array(vs1).T
-    Z1 = np.array(zs1).T
-
+    H1, B1, V1, Z1, y1 = _scipy_fgmres(A.mv, b, m=m, k=k, atol=atol, cs=C, rpsolve=M.mv)
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
@@ -109,21 +122,20 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
-    # test using bogus left preconditioner
-    atol = 0
-    m = 7
-    k = 5
-    C = rng.random((3, n))
-    C = np.linalg.qr(C.T)[0].T
+
+def test_fgmres_left_preconditioner():
+    """FGMRES with left preconditioner and C augmentation matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
+    C = np.linalg.qr(rng.random((3, n)).T)[0].T
     lc = 3
 
-    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k - len(C), atol=atol, cs=C, lpsolve=M.mv
-    )
-    H1 = (Q1 @ R1).T
-    V1 = np.array(vs1).T
-    Z1 = np.array(zs1).T
-
+    H1, B1, V1, Z1, y1 = _scipy_fgmres(A.mv, b, m=m, k=k, atol=atol, cs=C, lpsolve=M.mv)
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, lpsolve=M.mv
     )
@@ -134,22 +146,23 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
-    # check using a partial C matrix
-    atol = 0
-    m = 7
-    k = 5
-    C = rng.random((3, n))
-    C = np.linalg.qr(C.T)[0].T
+
+def test_fgmres_partial_c():
+    """FGMRES with a partially-filled C (lc < shape) matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
+    C = np.linalg.qr(rng.random((3, n)).T)[0].T
     C[-1] = 0
     lc = 2
 
-    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k - lc, atol=atol, cs=C[:-1], rpsolve=M.mv
+    H1, B1, V1, Z1, y1 = _scipy_fgmres(
+        A.mv, b, m=m, k=k, atol=atol, cs=C[:-1], rpsolve=M.mv
     )
-    H1 = (Q1 @ R1).T
-    V1 = np.array(vs1).T
-    Z1 = np.array(zs1).T
-
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, C=C.T, lc=lc, rpsolve=M.mv
     )
@@ -160,22 +173,20 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(Z1, Z2), rtol=1e-6)
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
-    # test for stopping on tolerance
-    atol = 0.2
-    m = 15
-    k = 5
-    C = None
-    lc = None
 
-    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k, atol=atol, cs=(), rpsolve=M.mv
-    )
-    H1 = (Q1 @ R1).T
-    V1 = np.array(vs1).T
-    Z1 = np.array(zs1).T
+def test_fgmres_early_stop():
+    """FGMRES stops early when atol is met and the reconstructed x satisfies it."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 15, 5, 0.2
 
+    H1, B1, V1, Z1, y1 = _scipy_fgmres(A.mv, b, m=m, k=k, atol=atol, rpsolve=M.mv)
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
-        A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
+        A.mv, b, m=m, k=k, atol=atol, C=None, lc=None, rpsolve=M.mv
     )
 
     np.testing.assert_allclose(*crop2(H1, H2), rtol=1e-6)
@@ -190,25 +201,21 @@ def test_fgmres():
     u /= a
     c /= a
     x = np.dot(c, b) * u
-
     assert np.linalg.norm(A.mv(x) - b) < atol
 
-    # test for stopping on tolerance
-    atol = 1e-10
-    m = 70
-    k = 0
-    C = None
-    lc = None
 
-    Q1, R1, B1, vs1, zs1, y1, _ = scipy.sparse.linalg._isolve._gcrotmk._fgmres(
-        A.mv, b, m=m + k, atol=atol, cs=(), rpsolve=M.mv
-    )
-    H1 = (Q1 @ R1).T
-    V1 = np.array(vs1).T
-    Z1 = np.array(zs1).T
+def test_fgmres_full_space_convergence():
+    """FGMRES with m >= n converges to machine precision within atol."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 70, 0, 1e-10
 
     H2, B2, V2, Z2, y2, _, _, _, _, _ = _fgmres(
-        A.mv, b, m=m, k=k, atol=atol, C=C, lc=lc, rpsolve=M.mv
+        A.mv, b, m=m, k=k, atol=atol, C=None, lc=None, rpsolve=M.mv
     )
 
     u = Z2 @ y2
@@ -217,13 +224,17 @@ def test_fgmres():
     u /= a
     c /= a
     x = np.dot(c, b) * u
-
     assert np.linalg.norm(A.mv(x) - b) < atol
 
-    # test passing v
-    atol = 0
-    m = 7
-    k = 5
+
+def test_fgmres_outer_v():
+    """FGMRES with LGMRES-style outer_v augmentation matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
     outer_v = rng.random((3, n))
     outer_Av = jax.vmap(A.mv, in_axes=0, out_axes=0)(outer_v)
     lv = 3
@@ -251,22 +262,16 @@ def test_fgmres():
     np.testing.assert_allclose(*crop2(y1, y2), rtol=1e-6)
 
 
-def test_fgmres_nonflexible():
-    """Test that non-flexible _fgmres matches the flexible variant for linear MR."""
+def test_fgmres_nonflexible_base():
+    """Non-flexible _fgmres matches flexible for a linear preconditioner."""
     n = 20
     rng = np.random.default_rng(0)
-    A = rng.random((n, n))
-    A = lx.MatrixLinearOperator(jnp.array(A))
-    M = rng.random((n, n))
-    M = lx.MatrixLinearOperator(jnp.array(M))
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
     b = rng.random(n)
     b /= np.linalg.norm(b)
+    m, k, atol = 7, 5, 0
 
-    atol = 0
-    m = 7
-    k = 5
-
-    # No augmentation, no projection: H/B/V/y must agree, dx = M(V[:, :-1] @ y)
     H1, B1, V1, Z1, y1, j1, *_ = _fgmres(A.mv, b, m=m, k=k, atol=atol, rpsolve=M.mv)
     H2, B2, V2, Z2, y2, j2, *_ = _fgmres(
         A.mv, b, m=m, k=k, atol=atol, rpsolve=M.mv, flexible=False
@@ -287,7 +292,16 @@ def test_fgmres_nonflexible():
     dx_nonflex = np.asarray(M.mv(np.asarray(V2[..., :-1]) @ y_masked))
     np.testing.assert_allclose(dx_flex, dx_nonflex, rtol=1e-10)
 
-    # With augmentation (LGMRES-style): same H/B/V/y, dx still reconstructs.
+
+def test_fgmres_nonflexible_augmented():
+    """Non-flexible _fgmres matches flexible with LGMRES-style outer_v augmentation."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, atol = 7, 0
     outer_v = rng.random((3, n))
     outer_Av = jax.vmap(A.mv, in_axes=0, out_axes=0)(outer_v)
     lv = 3
@@ -323,26 +337,18 @@ def test_fgmres_nonflexible():
 
 
 @pytest.mark.parametrize("flexible", [True, False])
-def test_gcrotmk(flexible):
-    """Test that GCROT(m,k) agrees with scipy."""
+def test_gcrotmk_base(flexible):
+    """GCROT(m,k) from a cold start matches scipy."""
     n = 20
     rng = np.random.default_rng(0)
-    A = rng.random((n, n))
-    A = lx.MatrixLinearOperator(jnp.array(A))
-    M = rng.random((n, n))
-    M = lx.MatrixLinearOperator(jnp.array(M))
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
     b = rng.random(n)
-
-    tol = 0
-    m = 7
-    k = 5
-    maxiter = 10
+    m, k, tol, maxiter = 7, 5, 0, 10
     CU = []
 
-    x1, info1 = scipy.sparse.linalg.gcrotmk(
+    x1, _ = scipy.sparse.linalg.gcrotmk(
         np.array(A.matrix), b, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
     )
-    # scipy outputs None for the last c, ours outputs Ax
     CU[-1] = (A.mv(x1), CU[-1][1])
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
@@ -355,26 +361,41 @@ def test_gcrotmk(flexible):
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
 
-    # test passing in C, U
-    tol = 0
-    m = 7
-    k = 5
-    maxiter = 6
 
-    CU = [(C1.T[0].copy(), U1.T[0].copy())]
-    # idiot check to make sure we're putting in the same thing to both
-    np.testing.assert_allclose(CU[0][0], C2[:, 0])
-    np.testing.assert_allclose(CU[0][1], U2[:, 0])
+@pytest.mark.parametrize("flexible", [True, False])
+def test_gcrotmk_warm_start(flexible):
+    """GCROT(m,k) warm-started with 1, k, and x0+k CU pairs matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    m, k, tol = 7, 5, 0
 
-    x1, info1 = scipy.sparse.linalg.gcrotmk(
-        np.array(A.matrix), b, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
+    # Round 1: cold start → produces k CU pairs.
+    CU = []
+    x1, _ = scipy.sparse.linalg.gcrotmk(
+        np.array(A.matrix), b, rtol=tol, maxiter=10, m=m, k=k, CU=CU
     )
+    CU[-1] = (A.mv(x1), CU[-1][1])
+    C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
+    U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
+    x2, _, _, _, _, C2, U2 = gcrotmk(
+        A, b, rtol=tol, maxiter=10, m=m, k=k, refine=False, flexible=flexible
+    )
+    # sanity check: both implementations agree on the newest CU pair
+    np.testing.assert_allclose(C1[:, 0], C2[:, 0])
+    np.testing.assert_allclose(U1[:, 0], U2[:, 0])
 
+    # Round 2: warm-start with 1 CU pair.
+    CU = [(C1.T[0].copy(), U1.T[0].copy())]
+    x1, _ = scipy.sparse.linalg.gcrotmk(
+        np.array(A.matrix), b, rtol=tol, maxiter=6, m=m, k=k, CU=CU
+    )
     x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         rtol=tol,
-        maxiter=maxiter,
+        maxiter=6,
         m=m,
         k=k,
         C=C2[:, 0],
@@ -382,35 +403,23 @@ def test_gcrotmk(flexible):
         refine=False,
         flexible=flexible,
     )
-
     CU[-1] = (A.mv(x1), CU[-1][1])
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
-
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
 
-    # test passing in C, U
-    tol = 0
-    m = 7
-    k = 5
-    maxiter = 1
-
+    # Round 3: warm-start with k CU pairs.
     CU = [(c, u) for c, u in zip(C1[:, :k].T, U1[:, :k].T)]
-
-    x1, info1 = scipy.sparse.linalg.gcrotmk(
-        np.array(A.matrix), b, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
+    x1, _ = scipy.sparse.linalg.gcrotmk(
+        np.array(A.matrix), b, rtol=tol, maxiter=1, m=m, k=k, CU=CU
     )
-    CU[-1] = (A.mv(x1), CU[-1][1])
-    C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
-    U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
-
     x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         rtol=tol,
-        maxiter=maxiter,
+        maxiter=1,
         m=m,
         k=k,
         C=C2,
@@ -418,32 +427,24 @@ def test_gcrotmk(flexible):
         refine=False,
         flexible=flexible,
     )
-
+    CU[-1] = (A.mv(x1), CU[-1][1])
+    C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
+    U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
 
-    # test passing in x
-    tol = 0
-    m = 7
-    k = 5
-    maxiter = 1
-
+    # Round 4: warm-start with x0 and k CU pairs.
     CU = [(c, u) for c, u in zip(C1[:, :k].T, U1[:, :k].T)]
-
-    x1, info1 = scipy.sparse.linalg.gcrotmk(
-        np.array(A.matrix), b, x0=x1, rtol=tol, maxiter=maxiter, m=m, k=k, CU=CU
+    x1, _ = scipy.sparse.linalg.gcrotmk(
+        np.array(A.matrix), b, x0=x1, rtol=tol, maxiter=1, m=m, k=k, CU=CU
     )
-    CU[-1] = (A.mv(x1), CU[-1][1])
-    C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
-    U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
-
     x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
         x0=x2,
         rtol=tol,
-        maxiter=maxiter,
+        maxiter=1,
         m=m,
         k=k,
         C=C2,
@@ -451,22 +452,28 @@ def test_gcrotmk(flexible):
         refine=False,
         flexible=flexible,
     )
-
+    CU[-1] = (A.mv(x1), CU[-1][1])
+    C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
+    U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
 
-    # test dummy preconditioner
-    tol = 0
-    m = 7
-    k = 5
-    maxiter = 6
+
+@pytest.mark.parametrize("flexible", [True, False])
+def test_gcrotmk_preconditioner(flexible):
+    """GCROT(m,k) with a right preconditioner matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    m, k, tol, maxiter = 7, 5, 0, 6
     CU = []
 
-    x1, info1 = scipy.sparse.linalg.gcrotmk(
+    x1, _ = scipy.sparse.linalg.gcrotmk(
         np.array(A.matrix),
         b,
-        x0=x1,
         M=np.array(M.matrix),
         rtol=tol,
         maxiter=maxiter,
@@ -481,7 +488,6 @@ def test_gcrotmk(flexible):
     x2, _, _, _, _, C2, U2 = gcrotmk(
         A,
         b,
-        x0=x2,
         MR=M,
         rtol=tol,
         maxiter=maxiter,
@@ -497,23 +503,16 @@ def test_gcrotmk(flexible):
 
 
 @pytest.mark.parametrize("flexible", [True, False])
-def test_lgmres(flexible):
-    """Test that LGMRES agrees with scipy."""
+def test_lgmres_base(flexible):
+    """LGMRES from a cold start matches scipy."""
     n = 20
     rng = np.random.default_rng(0)
-    A = rng.random((n, n))
-    A = lx.MatrixLinearOperator(jnp.array(A))
-    M = rng.random((n, n))
-    M = lx.MatrixLinearOperator(jnp.array(M))
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
     b = rng.random(n)
-
-    tol = 0
-    m = 7
-    k = 5
-    maxiter = 10
+    m, k, tol, maxiter = 7, 5, 0, 10
     outer_v = []
 
-    x1, info1 = scipy.sparse.linalg.lgmres(
+    x1, _ = scipy.sparse.linalg.lgmres(
         np.array(A.matrix),
         b,
         rtol=tol,
@@ -523,11 +522,10 @@ def test_lgmres(flexible):
         outer_v=outer_v,
         prepend_outer_v=True,
     )
-
     V1 = np.array([v for (v, Av) in outer_v])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v])[::-1].T
 
-    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
+    x2, _, _, _, _, V2, A2 = lgmres(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, refine=False, flexible=flexible
     )
 
@@ -535,11 +533,20 @@ def test_lgmres(flexible):
     np.testing.assert_allclose(V1, V2)
     np.testing.assert_allclose(A1, A2)
 
-    # test passing in outer_v
-    outer_v2 = rng.random((3, n))
-    outer_v1 = [(v, None) for v in outer_v2[::-1]]
 
-    x1, info1 = scipy.sparse.linalg.lgmres(
+@pytest.mark.parametrize("flexible", [True, False])
+def test_lgmres_with_outer_v(flexible):
+    """LGMRES warm-started with outer_v matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    m, k, tol, maxiter = 7, 5, 0, 10
+
+    outer_v_arr = rng.random((3, n))
+    outer_v1 = [(v, None) for v in outer_v_arr[::-1]]
+
+    x1, _ = scipy.sparse.linalg.lgmres(
         np.array(A.matrix),
         b,
         rtol=tol,
@@ -549,18 +556,17 @@ def test_lgmres(flexible):
         outer_v=outer_v1,
         prepend_outer_v=True,
     )
-
     V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
-    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
+    x2, _, _, _, _, V2, A2 = lgmres(
         A,
         b,
         rtol=tol,
         maxiter=maxiter,
         m=m,
         k=k,
-        outer_v=outer_v2.T,
+        outer_v=outer_v_arr.T,
         refine=False,
         flexible=flexible,
     )
@@ -569,13 +575,19 @@ def test_lgmres(flexible):
     np.testing.assert_allclose(V1, V2)
     np.testing.assert_allclose(A1, A2)
 
-    # test dummy preconditioner
-    outer_v1 = []
-    m = 5
-    k = 3
-    maxiter = 10
 
-    x1, info1 = scipy.sparse.linalg.lgmres(
+@pytest.mark.parametrize("flexible", [True, False])
+def test_lgmres_preconditioner(flexible):
+    """LGMRES with a left preconditioner matches scipy."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    M = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    m, k, tol, maxiter = 5, 3, 0, 10
+    outer_v1 = []
+
+    x1, _ = scipy.sparse.linalg.lgmres(
         np.array(A.matrix),
         b,
         rtol=tol,
@@ -586,11 +598,10 @@ def test_lgmres(flexible):
         outer_v=outer_v1,
         prepend_outer_v=True,
     )
-
     V1 = np.array([v for (v, Av) in outer_v1])[::-1].T
     A1 = np.array([Av for (v, Av) in outer_v1])[::-1].T
 
-    x2, j_outer, nmv, beta, _, V2, A2 = lgmres(
+    x2, _, _, _, _, V2, A2 = lgmres(
         A,
         b,
         rtol=tol,
@@ -609,8 +620,9 @@ def test_lgmres(flexible):
 
 
 @pytest.mark.parametrize("flexible", [True, False])
-def test_left_right_preconditioner(flexible):
-    """Test that left and right preconditioning both work."""
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_left_right_preconditioner(solver, flexible):
+    """Left and right preconditioning both converge to the same solution."""
     rng = np.random.default_rng(123)
     n = 1000
 
@@ -623,16 +635,12 @@ def test_left_right_preconditioner(flexible):
     A = lx.MatrixLinearOperator(jnp.array(A.toarray()))
     M = lx.MatrixLinearOperator(jnp.array(Ai))
 
-    m = 5
-    k = 3
-    maxiter = 10
-    tol = 1e-5
+    m, k, maxiter, tol = 5, 3, 10, 1e-5
 
-    x1, j1, nmv1, beta1, _, _, _ = lgmres(
+    x1, _, _, beta1, *_ = solver(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M, flexible=flexible
     )
-
-    x2, j2, nmv2, beta2, _, _, _ = lgmres(
+    x2, _, _, beta2, *_ = solver(
         A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M, flexible=flexible
     )
 
@@ -640,22 +648,74 @@ def test_left_right_preconditioner(flexible):
     assert beta2 / np.linalg.norm(b) < tol
     np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
 
-    m = 5
-    k = 3
-    maxiter = 10
-    tol = 1e-5
 
-    x1, j1, nmv1, beta1, _, _, _ = gcrotmk(
-        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, ML=M, flexible=flexible
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_complex_system(solver):
+    """Solve a complex-valued ``A x = b`` end to end."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = rng.random((n, n)) + 1j * rng.random((n, n)) + n * np.eye(n)
+    Aop = lx.MatrixLinearOperator(jnp.array(A))
+    b = rng.random(n) + 1j * rng.random(n)
+    x_true = np.linalg.solve(A, b)
+
+    x, _, _, _, _, _, _ = solver(
+        Aop, jnp.array(b), rtol=1e-10, maxiter=50, m=20, k=5, refine=False
     )
+    np.testing.assert_allclose(np.asarray(x), x_true, rtol=1e-6, atol=1e-7)
 
-    x2, j2, nmv2, beta2, _, _, _ = gcrotmk(
-        A, b, rtol=tol, maxiter=maxiter, m=m, k=k, MR=M, flexible=flexible
+
+def test_fgmres_optional_defaults():
+    """FGMRES derives lv, outer_Av from outer_v, lc from C when they are None."""
+    n = 20
+    rng = np.random.default_rng(0)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n))))
+    b = rng.random(n)
+    b /= np.linalg.norm(b)
+    m, k = 7, 5
+
+    # outer_v given, lv and outer_Av defaulted (computed internally).
+    outer_v = rng.random((n, 3))
+    outer_Av = jax.vmap(A.mv, in_axes=1, out_axes=1)(outer_v)
+    out_def = _fgmres(A.mv, b, m=m, k=k, atol=0.0, outer_v=outer_v)
+    out_exp = _fgmres(
+        A.mv, b, m=m, k=k, atol=0.0, outer_v=outer_v, outer_Av=outer_Av, lv=3
     )
+    for a, c in zip(out_def[:5], out_exp[:5]):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(c), rtol=1e-10)
 
-    assert beta1 / np.linalg.norm(b) < tol
-    assert beta2 / np.linalg.norm(b) < tol
-    np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
+    # C given, lc defaulted (derived from C column count).
+    C = np.linalg.qr(rng.random((n, 3)))[0]  # orthonormal columns
+    out_def = _fgmres(A.mv, b, m=m, k=k, atol=0.0, C=C)
+    out_exp = _fgmres(A.mv, b, m=m, k=k, atol=0.0, C=C, lc=3)
+    for a, c in zip(out_def[:5], out_exp[:5]):
+        np.testing.assert_allclose(np.asarray(a), np.asarray(c), rtol=1e-10)
+
+
+def test_gcrotmk_optional_defaults():
+    """GCROT with U supplied but C=None recomputes C = AU, k=None defaults to m."""
+    n = 20
+    rng = np.random.default_rng(1)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = rng.random(n)
+    U = rng.random((n, 2))
+
+    # k=None -> k=m
+    x, _, _, _, _, _, _ = gcrotmk(A, b, rtol=1e-10, maxiter=30, m=5, U=U)
+    np.testing.assert_allclose(np.asarray(A.mv(x)), b, rtol=1e-6, atol=1e-7)
+
+
+def test_lgmres_optional_defaults():
+    """LGMRES with explicit x0 and verbose=True exercises the print branches."""
+    n = 20
+    rng = np.random.default_rng(2)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = rng.random(n)
+
+    x, _, _, _, _, _, _ = lgmres(
+        A, b, x0=jnp.zeros(n), rtol=1e-10, maxiter=30, m=5, k=3, verbose=True
+    )
+    np.testing.assert_allclose(np.asarray(A.mv(x)), b, rtol=1e-6, atol=1e-7)
 
 
 @pytest.mark.parametrize("flexible", [True, False])

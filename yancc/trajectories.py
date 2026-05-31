@@ -1853,12 +1853,13 @@ class DKESpeed(lx.AbstractLinearOperator):
         assert self.axorder[-2:] == "sx"
         if self.axorder[2] == "a":
             return _refold(self.block_diagonal(), len(self.species) * self.pitchgrid.na)
-        if self.axorder[2] == "t":
+        elif self.axorder[2] == "t":
             return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        if self.axorder[2] == "z":
+        elif self.axorder[2] == "z":
             return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
         else:
-            raise ValueError()
+            # unreachable, just kept to appease type checker
+            raise ValueError()  # pragma: no cover
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -2066,8 +2067,12 @@ class DKE(lx.AbstractLinearOperator):
             x = jnp.broadcast_to(jnp.identity(n2), (n1, n2, n2))
         else:
             if bw is None:
-                bw = max(
-                    fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+                bw = min(
+                    max(
+                        fd_coeffs[1][self.p1].size // 2,
+                        fd_coeffs[2][self.p2].size // 2,
+                    ),
+                    n2 // 2,
                 )
             x = jnp.zeros((n1, 2 * bw + 1, n2)).at[:, bw, :].set(1)
         x = self.operator_weights[-1] * x

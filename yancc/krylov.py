@@ -323,8 +323,8 @@ def _fgmres(
     if outer_v is None:
         assert lv is None, "if outer_v is None, lv must also be None"
         assert outer_Av is None, "if outer_v is None, outer_Av must also be None"
-        outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
-        outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
+        outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
+        outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
         lv = 0
 
     if lv is None:
@@ -338,7 +338,7 @@ def _fgmres(
 
     if C is None:
         assert lc is None, "if C is None, lc must also be None"
-        C = tree_map(lambda x: jnp.empty((*x.shape, 1)), v0)
+        C = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
         lc = 0
     else:
         C = tree_map(jnp.asarray, C)
@@ -640,8 +640,8 @@ def _gcrot_init_UC(
     if U is None:
         assert C is None
         lc = jnp.array(0)
-        U = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-        C = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        U = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        C = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
     else:  # U provided
         U = tree_map(lambda x: jnp.atleast_2d(x.T).T, U)
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
@@ -1070,8 +1070,8 @@ def _lgmres_solve(
     if outer_v is None:
         assert outer_Av is None
         lv = 0
-        outer_v = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
     else:  # outer_v provided
         outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
         lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs

@@ -11,6 +11,7 @@ from scipy.constants import elementary_charge, proton_mass
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .finite_diff import DEFAULT_P1A, DEFAULT_P2A
 from .krylov import gcrotmk
 from .linalg import BorderedOperator, InverseBorderedOperator
 from .misc import (
@@ -95,8 +96,8 @@ def solve_mdke(
         {} if multigrid_options is None else copy.copy(multigrid_options)
     )
 
-    p1 = options.pop("p1", "4d")
-    p2 = options.pop("p2", 4)
+    p1 = options.pop("p1", DEFAULT_P1A)
+    p2 = options.pop("p2", DEFAULT_P2A)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 150)
@@ -126,6 +127,8 @@ def solve_mdke(
         verbose=verbose,
         **multigrid_options,
     )
+    if verbose:
+        M.print_resolution_summary()
     flexible = not _preconditioner_is_linear(M)
     A = MDKE(
         field,
@@ -278,8 +281,8 @@ def solve_dke(  # noqa: C901
         {} if multigrid_options is None else copy.copy(multigrid_options)
     )
 
-    p1 = options.pop("p1", "4d")
-    p2 = options.pop("p2", 4)
+    p1 = options.pop("p1", DEFAULT_P1A)
+    p2 = options.pop("p2", DEFAULT_P2A)
     rtol = jnp.asarray(options.pop("rtol", 1e-5))
     atol = jnp.asarray(options.pop("atol", 0.0))
     m = options.pop("m", 150)
@@ -330,7 +333,7 @@ def solve_dke(  # noqa: C901
         M = DKEPreconditioner(**multigrid_options)
 
     if verbose and not skip_init_print:
-        _print_dke_resolutions(M)
+        M.print_resolution_summary()
 
     if B is None:
         B = DKESources(field, pitchgrid, speedgrid, species)
@@ -359,14 +362,20 @@ def solve_dke(  # noqa: C901
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.na, field.ntheta, field.nzeta)
     size = np.prod(shape)
-    if U is not None:
-        assert U.shape[0] == size
-        U = U.reshape((size, -1))
-        U = jnp.pad(U, [(0, 2 * len(species)), (0, 0)])
-    if f1 is not None:
+    if f1 is None:
+        f1 = jnp.zeros(size + 2 * len(species))
+    else:
         f1 = f1.flatten()
-        assert f1.size == size
-        f1 = jnp.pad(f1, [(0, 2 * len(species))])
+        assert (f1.shape[0] == size) or (f1.shape[0] == (size + 2 * len(species)))
+        # maybe pad with zeros for sources
+        f1 = jnp.pad(f1, [(0, size + 2 * len(species) - f1.shape[0])])
+    if U is None:
+        U = jnp.zeros((size + 2 * len(species), k))
+    else:
+        assert (U.shape[0] == size) or (U.shape[0] == (size + 2 * len(species)))
+        U = U.reshape((U.shape[0], -1))
+        # maybe pad with zeros for sources
+        U = jnp.pad(U, [(0, size + 2 * len(species) - U.shape[0]), (0, 0)])
 
     f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
@@ -389,8 +398,8 @@ def solve_dke(  # noqa: C901
         "nmv": nmv1,
         "res": res1 / jnp.linalg.norm(rhs),
         "success": success,
-        "C": C1[:size],
-        "U": U1[:size],
+        "C": C1,
+        "U": U1,
     }
     if verbose:
         jax.debug.print(
@@ -472,23 +481,6 @@ def _print_thermodynamic_forces(species, field, Erho, EparB):
     jax.debug.print(s, *forces[1], ordered=True)
     s = "A₃: [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *forces[2], ordered=True)
-
-
-def _print_dke_resolutions(preconditioner):
-    for i, op in enumerate(preconditioner.operators):
-        ns = len(op.species)
-        nx = op.speedgrid.nx
-        na = op.pitchgrid.na
-        nt = op.field.ntheta
-        nz = op.field.nzeta
-        jax.debug.print(
-            f"Grid {i}: nx={nx:4d}, "
-            f"na={na:4d}, "
-            f"nt={nt:4d}, "
-            f"nz={nz:4d}, "
-            f"N={ns*nx*na*nt*nz:,d}",
-            ordered=True,
-        )
 
 
 def _print_field_summary(field: Field) -> None:

@@ -268,14 +268,6 @@ def _tridiag_solve(l, d, u, b, *args):
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
 
 
-@jax.jit
-def lstsq(a, b):
-    """Least squares via normal equations."""
-    A = a.T @ a
-    B = a.T @ b
-    return jnp.linalg.solve(A, B)
-
-
 class InverseLinearOperator(lx.AbstractLinearOperator):
     """Inverse of another linear operator."""
 
@@ -410,12 +402,6 @@ def dense_to_banded(p, q, A):
 
     # Gather elements natively
     return A[i, j]
-
-
-def _safediv(a, b):
-    mask = jnp.abs(b) < jnp.finfo(b.dtype).eps
-    b = _where(mask, jnp.array(1), b)
-    return _where(mask, jnp.array(0), a / b)
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "equilibrate"))
