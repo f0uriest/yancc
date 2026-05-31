@@ -249,6 +249,7 @@ class DKEPreconditioner(MultigridOperator):
         cycle_index = options.pop("cycle_index", 1)
         operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
         smoother_weights = options.pop("smoother_weights", operator_weights)
+        coulomb_log = options.pop("coulomb_log", None)
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
 
@@ -282,7 +283,7 @@ class DKEPreconditioner(MultigridOperator):
             p2=self.p2,
             gauge=gauge,
             operator_weights=operator_weights,
-            **options,
+            coulomb_log=coulomb_log,
         )
         if smooth_type == 1:
             smoothers = get_dke_jacobi_smoothers(
@@ -299,7 +300,7 @@ class DKEPreconditioner(MultigridOperator):
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
-                **options,
+                coulomb_log=coulomb_log,
             )
         else:
             smoothers = get_dke_jacobi2_smoothers(
@@ -316,6 +317,7 @@ class DKEPreconditioner(MultigridOperator):
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
+                coulomb_log=coulomb_log,
                 **options,
             )
         coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)

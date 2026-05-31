@@ -257,10 +257,6 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nx)
 
-    def resample(self, nx):
-        """Resample grid to a lower or higher resolution."""
-        return self.__class__(nx)
-
 
 class LegendrePitchAngleGrid(eqx.Module):
     """Grid for pitch angle variable xi=v||/v.

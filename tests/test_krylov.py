@@ -798,3 +798,43 @@ def test_krylov_autodiff(flexible):
     np.testing.assert_allclose(dz_exact, dz_vjp_gcrot)
     np.testing.assert_allclose(dz_exact, dz_jvp_lgmres)
     np.testing.assert_allclose(dz_exact, dz_vjp_lgmres)
+
+
+@pytest.mark.parametrize("solver_fn", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_krylov_throw_forward(solver_fn):
+    """throw=True raises on forward non-convergence; throw=False does not."""
+    n = 20
+    rng = np.random.default_rng(42)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = jnp.array(rng.random(n))
+
+    # maxiter=0: no iterations, residual = norm(b) >> rtol*norm(b), success=False
+    solver_fn(A, b, m=1, k=1, maxiter=0, throw=False)
+
+    with pytest.raises(Exception, match="forward"):
+        solver_fn(A, b, m=1, k=1, maxiter=0, throw=True)
+
+
+@pytest.mark.parametrize("solver_fn", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_krylov_throw_tangent(solver_fn):
+    """throw=True raises during vjp when the tangent solve fails to converge."""
+    n = 30
+    rng = np.random.default_rng(42)
+    A_mat = rng.random((n, n)) + n * np.eye(n)
+    b = jnp.array(rng.random(n))
+    # x0 = exact solution so forward residual ≈ machine-epsilon << atol=1e-12
+    x_exact = jnp.array(np.linalg.solve(A_mat, np.array(b)))
+    A = lx.MatrixLinearOperator(jnp.array(A_mat))
+
+    # m=1, k=1, maxiter=1 → only 2 inner Arnoldi steps per outer iteration.
+    # Forward: starts at x_exact, residual ~1e-14 < atol=1e-12 → success immediately.
+    # Tangent: starts at x_exact (wrong for A^T y = g), residual O(sqrt(n)) >> 1e-12,
+    #          2 Krylov steps cannot converge a 30×30 system → success=False.
+    def f(b):
+        x, *_ = solver_fn(
+            A, b, x0=x_exact, m=1, k=1, maxiter=1, rtol=0.0, atol=1e-12, throw=True
+        )
+        return x.sum()
+
+    with pytest.raises(Exception, match="tangent"):
+        jax.grad(f)(b)

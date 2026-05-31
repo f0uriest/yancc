@@ -47,6 +47,7 @@ def solve_mdke(
     nuhat: Union[float, Float[Any, ""]],
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
+    throw: bool = False,
     **options,
 ) -> tuple[MDKESolution, dict[str, jax.Array]]:
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
@@ -75,6 +76,9 @@ def solve_mdke(
         calculated at each step.
     multigrid_options : dict, optional
         Optional parameters to control behavior of multigrid preconditioner.
+    throw : bool, optional
+        If True, raise a runtime error if the Krylov solver fails to converge
+        (forward solve or tangent solve). Default False.
 
     Returns
     -------
@@ -152,6 +156,7 @@ def solve_mdke(
         print_every_inner=jnp.asarray(print_every),
         U=U1,
         flexible=flexible,
+        throw=throw,
     )
     if f2 is None:
         f2 = jnp.zeros_like(rhs[:, 0])
@@ -169,6 +174,7 @@ def solve_mdke(
         print_every_inner=jnp.asarray(print_every),
         U=U2,
         flexible=flexible,
+        throw=throw,
     )
     info = {
         "j1": j1,
@@ -219,6 +225,7 @@ def solve_dke(  # noqa: C901
     background: Optional[list[LocalMaxwellian]] = None,
     verbose: Union[bool, int] = False,
     multigrid_options: Optional[dict] = None,
+    throw: bool = False,
     **options,
 ) -> tuple[DKESolution, dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
@@ -254,6 +261,9 @@ def solve_dke(  # noqa: C901
         calculated at each step.
     multigrid_options : dict, optional
         Optional parameters to control behavior of multigrid preconditioner.
+    throw : bool, optional
+        If True, raise a runtime error if the Krylov solver fails to converge
+        (forward solve or tangent solve). Default False.
 
     Returns
     -------
@@ -288,6 +298,7 @@ def solve_dke(  # noqa: C901
     C = options.pop("C", None)
     U = options.pop("U", None)
     f1 = options.pop("f1", None)
+    coulomb_log = options.pop("coulomb_log", None)
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
@@ -299,7 +310,7 @@ def solve_dke(  # noqa: C901
 
     if verbose and not skip_init_print:
         _print_field_summary(field)
-        _print_species_summary(species, field, speedgrid, background)
+        _print_species_summary(species, field, speedgrid, background, coulomb_log)
         _print_er_summary(species, field, Erho, EparB)
         _print_thermodynamic_forces(species, field, Erho, EparB)
 
@@ -307,11 +318,7 @@ def solve_dke(  # noqa: C901
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
 
     if M is None:
-        if len(species) > 1:
-            default_operator_weights = operator_weights.at[-2].set(0)
-        else:
-            default_operator_weights = operator_weights
-        multigrid_options.setdefault("operator_weights", default_operator_weights)
+        multigrid_options.setdefault("operator_weights", operator_weights)
         multigrid_options.setdefault("field", field)
         multigrid_options.setdefault("pitchgrid", pitchgrid)
         multigrid_options.setdefault("speedgrid", speedgrid)
@@ -321,6 +328,7 @@ def solve_dke(  # noqa: C901
         multigrid_options.setdefault("potentials", potentials)
         multigrid_options.setdefault("gauge", True)
         multigrid_options.setdefault("verbose", verbose)
+        multigrid_options.setdefault("coulomb_log", coulomb_log)
         M = DKEPreconditioner(**multigrid_options)
 
     if verbose and not skip_init_print:
@@ -343,6 +351,7 @@ def solve_dke(  # noqa: C901
         p2=p2,
         gauge=False,
         operator_weights=operator_weights,
+        coulomb_log=coulomb_log,
     )
 
     operator = BorderedOperator(A, B, C)
@@ -381,6 +390,7 @@ def solve_dke(  # noqa: C901
         print_every_inner=jnp.asarray(print_every),
         U=U,
         flexible=flexible,
+        throw=throw,
     )
     info = {
         "niter": j1,
@@ -424,7 +434,7 @@ def solve_dke(  # noqa: C901
     )
 
 
-def _print_species_summary(species, field, speedgrid, background):
+def _print_species_summary(species, field, speedgrid, background, coulomb_log=None):
     for si, spec in enumerate(species):
         jax.debug.print(
             "Species {si:2d}:  "
@@ -447,7 +457,7 @@ def _print_species_summary(species, field, speedgrid, background):
         )
         others = species[:si] + species[si + 1 :] + background
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
-        nustars = nustar(spec, field, tempx, *others)
+        nustars = nustar(spec, field, tempx, *others, lnlambda=coulomb_log)
         for nu, x in zip(nustars, tempx):
             jax.debug.print(
                 " " * 13 + "ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True
