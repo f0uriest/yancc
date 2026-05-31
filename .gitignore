@@ -3,7 +3,6 @@ build/
 dist/
 docs/generated
 docs/_build
-docs/_static
 docs/_api
 htmlcov/
 local/
