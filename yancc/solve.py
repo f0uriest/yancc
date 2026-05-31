@@ -1,7 +1,7 @@
 """Main interface for solving drift kinetic equations in yancc."""
 
 import copy
-from typing import Any, Optional, Union
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -44,10 +44,11 @@ def _preconditioner_is_linear(M) -> bool:
 def solve_mdke(
     field: Field,
     pitchgrid: AbstractPitchAngleGrid,
-    erhohat: Union[float, Float[Any, ""]],
-    nuhat: Union[float, Float[Any, ""]],
-    verbose: Union[bool, int] = False,
-    multigrid_options: Optional[dict] = None,
+    erhohat: float | Float[Any, ""],
+    nuhat: float | Float[Any, ""],
+    verbose: bool | int = False,
+    multigrid_options: dict | None = None,
+    throw: bool = False,
     **options,
 ) -> tuple[MDKESolution, dict[str, jax.Array]]:
     """Solve the mono-energetic drift kinetic equation, giving 3x3 transport matrix.
@@ -76,6 +77,9 @@ def solve_mdke(
         calculated at each step.
     multigrid_options : dict, optional
         Optional parameters to control behavior of multigrid preconditioner.
+    throw : bool, optional
+        If True, raise a runtime error if the Krylov solver fails to converge
+        (forward solve or tangent solve). Default False.
 
     Returns
     -------
@@ -153,6 +157,7 @@ def solve_mdke(
         print_every_inner=jnp.asarray(print_every),
         U=U1,
         flexible=flexible,
+        throw=throw,
     )
     if f2 is None:
         f2 = jnp.zeros_like(rhs[:, 0])
@@ -170,6 +175,7 @@ def solve_mdke(
         print_every_inner=jnp.asarray(print_every),
         U=U2,
         flexible=flexible,
+        throw=throw,
     )
     info = {
         "j1": j1,
@@ -215,11 +221,12 @@ def solve_dke(  # noqa: C901
     pitchgrid: AbstractPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
-    Erho: Union[float, Float[Any, ""]],
-    EparB: Union[float, Float[Any, ""]] = 0.0,
-    background: Optional[list[LocalMaxwellian]] = None,
-    verbose: Union[bool, int] = False,
-    multigrid_options: Optional[dict] = None,
+    Erho: float | Float[Any, ""],
+    EparB: float | Float[Any, ""] = 0.0,
+    background: list[LocalMaxwellian] | None = None,
+    verbose: bool | int = False,
+    multigrid_options: dict | None = None,
+    throw: bool = False,
     **options,
 ) -> tuple[DKESolution, dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
@@ -255,6 +262,9 @@ def solve_dke(  # noqa: C901
         calculated at each step.
     multigrid_options : dict, optional
         Optional parameters to control behavior of multigrid preconditioner.
+    throw : bool, optional
+        If True, raise a runtime error if the Krylov solver fails to converge
+        (forward solve or tangent solve). Default False.
 
     Returns
     -------
@@ -309,11 +319,7 @@ def solve_dke(  # noqa: C901
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
 
     if M is None:
-        if len(species) > 1:
-            default_operator_weights = operator_weights.at[-2].set(0)
-        else:
-            default_operator_weights = operator_weights
-        multigrid_options.setdefault("operator_weights", default_operator_weights)
+        multigrid_options.setdefault("operator_weights", operator_weights)
         multigrid_options.setdefault("field", field)
         multigrid_options.setdefault("pitchgrid", pitchgrid)
         multigrid_options.setdefault("speedgrid", speedgrid)
@@ -385,6 +391,7 @@ def solve_dke(  # noqa: C901
         print_every_inner=jnp.asarray(print_every),
         U=U,
         flexible=flexible,
+        throw=throw,
     )
     info = {
         "niter": j1,

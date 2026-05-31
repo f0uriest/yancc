@@ -1,7 +1,6 @@
 """Magnetic field data structures."""
 
 import functools
-from typing import Optional
 
 import equinox as eqx
 import interpax
@@ -96,9 +95,9 @@ class Field(eqx.Module):
         a_minor: Float[ArrayLike, ""],
         NFP: Int[ArrayLike, ""] = 1,
         *,
-        dBdt: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
-        dBdz: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
-        B0: Optional[Float[ArrayLike, ""]] = None,
+        dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        B0: Float[ArrayLike, ""] | None = None,
     ):
         self.rho = jnp.asarray(rho)
         self.NFP = jnp.asarray(NFP)
@@ -110,9 +109,9 @@ class Field(eqx.Module):
         self.Bmag = jnp.asarray(Bmag)
         self.ntheta = self.sqrtg.shape[0]
         self.nzeta = self.sqrtg.shape[1]
-        assert (self.ntheta % 2 == 1) and (
-            self.nzeta % 2 == 1
-        ), "ntheta and nzeta must be odd"
+        assert (self.ntheta % 2 == 1) and (self.nzeta % 2 == 1), (
+            "ntheta and nzeta must be odd"
+        )
         if dBdt is None:
             dBdt = self._dfdt(self.Bmag)
         if dBdz is None:
@@ -328,9 +327,9 @@ class Field(eqx.Module):
 
         s = rho**2
         file = Dataset(booz, mode="r")
-        assert not bool(
-            file.variables["lasym__logical__"][:].filled()
-        ), "non-symmetric booz-xform not supported"
+        assert not bool(file.variables["lasym__logical__"][:].filled()), (
+            "non-symmetric booz-xform not supported"
+        )
 
         ns = file.variables["ns_b"][:].filled()
         nfp = file.variables["nfp_b"][:].filled()
@@ -484,9 +483,9 @@ class Field(eqx.Module):
         a_minor: Float[ArrayLike, ""],
         NFP: Int[ArrayLike, ""] = 1,
         *,
-        dBdt: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
-        dBdz: Optional[Float[ArrayLike, "ntheta nzeta"]] = None,
-        B0: Optional[Float[ArrayLike, ""]] = None,
+        dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        B0: Float[ArrayLike, ""] | None = None,
     ):
         """Construct a field in Boozer coordinates.
 
@@ -632,9 +631,9 @@ def _strip_comments(lines):
 
 
 def _read_globals(lines):
-    assert (
-        lines[0].strip().startswith("m0b")
-    ), "Error in reading global parameters of bc file"
+    assert lines[0].strip().startswith("m0b"), (
+        "Error in reading global parameters of bc file"
+    )
     lines = lines.copy()
     dat = np.genfromtxt(lines[:2], skip_header=1)
     data = {}

@@ -369,9 +369,9 @@ def debye_length(*maxwellians: LocalMaxwellian) -> jax.Array:
 def chandrasekhar(x: ArrayLike) -> jax.Array:
     """Chandrasekhar function."""
     x = jnp.asarray(x)
-    return (
-        jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))
-    ) / (2 * x**2)
+    return (jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))) / (
+        2 * x**2
+    )
 
 
 def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):

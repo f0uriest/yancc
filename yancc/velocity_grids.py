@@ -1,7 +1,8 @@
 """Velocity grids for yancc."""
 
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, cast
+from collections.abc import Callable
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -261,10 +262,6 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nx)
 
-    def resample(self, nx):
-        """Resample grid to a lower or higher resolution."""
-        return self.__class__(nx)
-
 
 class _MapFunction(eqx.Module):
     """Wraps a domain map f(x, *params) defined on [-1, 1].
@@ -429,7 +426,7 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
 
 
 def composite_newton_cotes_weights(
-    x: jax.Array, order: int, global_limits: Optional[tuple] = None
+    x: jax.Array, order: int, global_limits: tuple | None = None
 ):
     """Computes composite quadrature weights.
 

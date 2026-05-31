@@ -1,7 +1,6 @@
 """Stuff for multigrid cycles."""
 
 import functools
-from typing import Optional, Union
 
 import equinox as eqx
 import interpax
@@ -200,7 +199,7 @@ def get_dke_jacobi2_smoothers(
     return smoothers
 
 
-def _half_next_odd(k: int, m: Union[int, float] = 2):
+def _half_next_odd(k: int, m: int | float = 2):
     if int(k // m) == 0:
         return 1
     elif int(k // m) % 2 == 0:
@@ -219,8 +218,8 @@ def get_grid_resolutions(
     min_na: int = 5,
     min_nt: int = 5,
     min_nz: int = 5,
-    max_grids: Optional[int] = None,
-    coarsening_factor: Optional[Union[int, float]] = None,
+    max_grids: int | None = None,
+    coarsening_factor: int | float | None = None,
 ) -> list[tuple]:
     """Determine resolutions for multigrid scheme.
 
@@ -1247,7 +1246,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
     smoothers: list[list[lx.AbstractLinearOperator]]
     prolongations: list[lx.AbstractLinearOperator]
     restrictions: list[lx.AbstractLinearOperator]
-    x0: Union[None, jax.Array]
+    x0: None | jax.Array
     cycle_index: jax.Array
     v1: jax.Array
     v2: jax.Array
@@ -1262,14 +1261,14 @@ class MultigridOperator(lx.AbstractLinearOperator):
         smoothers: list[list[lx.AbstractLinearOperator]],
         prolongations: list[lx.AbstractLinearOperator],
         restrictions: list[lx.AbstractLinearOperator],
-        x0: Optional[jax.Array] = None,
-        cycle_index: Union[int, Int[Array, ""]] = 1,
-        v1: Union[int, Int[Array, ""]] = 1,
-        v2: Union[int, Int[Array, ""]] = 1,
+        x0: jax.Array | None = None,
+        cycle_index: int | Int[Array, ""] = 1,
+        v1: int | Int[Array, ""] = 1,
+        v2: int | Int[Array, ""] = 1,
         smooth_method: str = "standard",
-        coarse_opinv: Optional[lx.AbstractLinearOperator] = None,
+        coarse_opinv: lx.AbstractLinearOperator | None = None,
         coarse_method: str = "standard",
-        verbose: Union[bool, int] = False,
+        verbose: bool | int = False,
     ):
         assert len(prolongations) == len(operators) - 1
         assert len(restrictions) == len(operators) - 1
