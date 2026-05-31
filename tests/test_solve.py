@@ -3,6 +3,7 @@
 import os
 import time
 
+import interpax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -685,3 +686,104 @@ def test_solve_dke_tokamak_axisymmetric():
     assert fluxes_axi[1] > 0
     # nzeta=1 must match the zeta-resolved solve to solver tolerance
     np.testing.assert_allclose(fluxes_axi, fluxes_res, rtol=5e-3, atol=1e-8)
+
+
+# these indices are rho=0.8, 0.9, so collisionality isn't too low
+@pytest.mark.parametrize("ir", [15, 17])
+def test_solve_dke_dshape_2species(ir):
+    """Test solving DKE vs sfincs for DSHAPE tokamak."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    sfincs_path = (
+        "tests/data/20260528-01-013_tokamak_radialScan_ntheta71_nxi160_"
+        "nx24_tol1e-6_results.txt"
+    )
+    data = np.loadtxt(sfincs_path, delimiter="\t", skiprows=1)
+
+    with open(sfincs_path) as f:
+        headers = f.readlines()[0].split("\t")
+
+    headers = [h.lstrip().strip("\n") for h in headers]
+
+    sfincs_data = {head: dat for head, dat in zip(headers, data.T)}
+    rho, unique_idx = np.unique(sfincs_data["rN"], return_index=True)
+    r = rho[ir]
+
+    ne = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e20 * sfincs_data["nHats_electron"][unique_idx]
+    )
+    ni = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e20 * sfincs_data["nHats_ion"][unique_idx]
+    )
+    Te = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e3 * sfincs_data["THats_electron"][unique_idx]
+    )
+    Ti = interpax.CubicSpline(
+        sfincs_data["rN"][unique_idx], 1e3 * sfincs_data["THats_ion"][unique_idx]
+    )
+
+    ions = yancc.species.GlobalMaxwellian(yancc.species.Hydrogen, Ti, ni)
+    electrons = yancc.species.GlobalMaxwellian(yancc.species.Electron, Te, ne)
+
+    nt0 = 71
+    nz0 = 1
+    na0 = 81
+    nx0 = 12
+    nL0 = 8
+    pitchgrid0 = yancc.velocity_grids.UniformPitchAngleGrid(na0)
+    speedgrid0 = yancc.velocity_grids.MaxwellSpeedGrid(nx0)
+
+    vmec_path = "tests/data/wout_DSHAPE.nc"
+
+    field = yancc.field.Field.from_vmec(vmec_path, r, nt0, nz0)
+    species = [electrons.localize(r), ions.localize(r)]
+
+    sol, info = yancc.solve.solve_dke(
+        field,
+        pitchgrid0,
+        speedgrid0,
+        species,
+        Erho=sfincs_data["Er"][ir] * 1000 * field.a_minor,
+        verbose=2,
+        multigrid_options={"coarse_N": 2000, "max_grids": 3},
+        nL=nL0,
+        rtol=1e-6,
+        coulomb_log=17,
+    )
+    assert info["success"]
+
+    np.testing.assert_allclose(
+        sol.get("FSABFlow_sfincs")[0],
+        sfincs_data["FSABFlow_electron"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("FSABFlow_sfincs")[1],
+        sfincs_data["FSABFlow_ion"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("particleFlux_vm_rN_sfincs")[0] * field.a_minor,
+        sfincs_data["particleFlux_vm_rHat_electron"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("particleFlux_vm_rN_sfincs")[1] * field.a_minor,
+        sfincs_data["particleFlux_vm_rHat_ion"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("heatFlux_vm_rN_sfincs")[0] * field.a_minor,
+        sfincs_data["heatFlux_vm_rHat_electron"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("heatFlux_vm_rN_sfincs")[1] * field.a_minor,
+        sfincs_data["heatFlux_vm_rHat_ion"][ir],
+        rtol=2e-2,
+    )
+    np.testing.assert_allclose(
+        sol.get("FSABjHat_sfincs"),
+        sfincs_data["FSABjHat"][ir],
+        rtol=2e-2,
+    )
