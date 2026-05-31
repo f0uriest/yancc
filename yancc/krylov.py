@@ -181,7 +181,6 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
 
     max_k = Q_mat.shape[1]
     if method in ["cgs", "cgs2"]:
-
         # dynamic mask to handle the dynamic k
         mask = jnp.arange(max_k) < k
 
@@ -517,11 +516,23 @@ def gcrotmk(
         orthogonalized as described in [3]_. ``U`` should have the same tree structure
         as ``x`` but with a trailing dimension, and ``C`` should have the same
         structure as ``b`` but with a trailing dimension.
+    verbose : bool, optional
+        If True, print convergence information at each iteration.
+        Default: False.
+    print_every : int, optional
+        Print convergence info every this many outer iterations. Default: 1.
+    print_every_inner : int, optional
+        Print convergence info every this many inner (FGMRES) iterations. Default: 1.
+    refine : bool, optional
+        If True (default), ensure a strict decrease even if inner FGMRES breaks down
+        by performing line search along supplied direction.
     flexible : bool, optional
         If True (default), use flexible GMRES inside, which permits ``MR`` to be
         nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
         ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
         cutting inner-iteration storage roughly in half.
+    throw : bool, optional
+        If True, raise an error if the solver does not converge. Default: False.
 
     Returns
     -------
@@ -897,11 +908,23 @@ def lgmres(
          ``outer_v`` should have the same tree structure as ``x`` but with a trailing
         dimension, and ``outer_Av`` should have the same structure as ``b`` but with
         a trailing dimension.
+    verbose : bool, optional
+        If True, print convergence information at each iteration.
+        Default: False.
+    print_every : int, optional
+        Print convergence info every this many outer iterations. Default: 1.
+    print_every_inner : int, optional
+        Print convergence info every this many inner (FGMRES) iterations. Default: 1.
+    refine : bool, optional
+        If True (default), ensure a strict decrease even if inner FGMRES breaks down
+        by performing line search along supplied direction.
     flexible : bool, optional
         If True (default), use flexible GMRES inside, which permits ``MR`` to be
         nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
         ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
         cutting inner-iteration storage roughly in half.
+    throw : bool, optional
+        If True, raise an error if the solver does not converge. Default: False.
 
     Returns
     -------
