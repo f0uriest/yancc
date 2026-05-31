@@ -687,7 +687,7 @@ class Prolongation(lx.AbstractLinearOperator):
     field_coarse, field_fine : Field
         Magnetic field data at the coarse and fine theta/zeta resolutions.
     pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
-        Pitch angle grids at the coarse and fine na resolutions.
+        Pitch angle grids at the coarse and fine alpha resolutions.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
@@ -795,7 +795,7 @@ class Restriction(lx.AbstractLinearOperator):
     field_coarse, field_fine : Field
         Magnetic field data at the coarse and fine theta/zeta resolutions.
     pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
-        Pitch angle grids at the coarse and fine na resolutions.
+        Pitch angle grids at the coarse and fine alpha resolutions.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
