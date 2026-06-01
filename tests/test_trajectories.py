@@ -53,16 +53,16 @@ def test_pitch_operator_nonuniform(field, p1):
 
     kwargs = fd_kwargs[p1]
     fd = build_advection_matrix(
-        grid.a, direction="fwd", bc_type="symmetric", domain=(0, np.pi), **kwargs
+        grid.alpha, direction="fwd", bc_type="symmetric", domain=(0, np.pi), **kwargs
     )
     bd = build_advection_matrix(
-        grid.a, direction="bwd", bc_type="symmetric", domain=(0, np.pi), **kwargs
+        grid.alpha, direction="bwd", bc_type="symmetric", domain=(0, np.pi), **kwargs
     )
     np.testing.assert_allclose(op._fd, fd)
     np.testing.assert_allclose(op._bd, bd)
 
     # operator applies cleanly on the non-uniform grid
-    n = field.ntheta * field.nzeta * grid.na
+    n = field.ntheta * field.nzeta * grid.nalpha
     out = op.mv(jnp.ones(n))
     assert out.shape == (n,)
     assert jnp.all(jnp.isfinite(out))

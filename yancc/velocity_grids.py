@@ -410,14 +410,14 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
         c = jnp.asarray(c)
         c = eqx.error_if(c, jnp.logical_or(c > 1, c < 0), "c must be between [0,1]")
         # error_if loses the static type, so reassert it (c is an array post-asarray)
-        self.na = nalpha
+        self.nalpha = nalpha
         self.c = cast(jax.Array, c)
         alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
         # pass c as a dynamic param (not baked into a static callable) so the
         # grid can be traced and differentiated through jit.
         self.map_func = _MapFunction(_quadratic_map, (self.c,))
 
-        self.a = self.map_func(alpha)
+        self.alpha = self.map_func(alpha)
         self.xi = -jnp.cos(self.alpha)
         self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 

@@ -92,7 +92,7 @@ def test_quadratic_pitch_reduces_to_uniform():
     """c=0 should give the same nodes as the uniform grid."""
     quad = QuadraticPitchAngleGrid(31, 0.0)
     uni = UniformPitchAngleGrid(31)
-    np.testing.assert_allclose(quad.a, uni.a)
+    np.testing.assert_allclose(quad.alpha, uni.alpha)
     np.testing.assert_allclose(quad.xi, uni.xi)
 
 
@@ -100,7 +100,7 @@ def test_quadratic_pitch_reduces_to_uniform():
 def test_quadratic_pitch_properties(na):
     """Nodes should be monotonic, odd-symmetric in xi, and span (-1, 1)."""
     grid = QuadraticPitchAngleGrid(na, 0.7)
-    assert grid.na == na
+    assert grid.nalpha == na
     assert grid.xi.min() > -1 and grid.xi.max() < 1
     assert np.all(np.diff(grid.xi) > 0)
     # odd map + symmetric a-grid => xi is antisymmetric about 0
@@ -123,7 +123,7 @@ def test_quadratic_pitch_node_packing(c):
 
 def test_quadratic_pitch_validation():
     """Even na and out-of-range c should raise."""
-    with pytest.raises(Exception, match="na must be odd"):
+    with pytest.raises(Exception, match="nalpha must be odd"):
         QuadraticPitchAngleGrid(30, 0.5)
     with pytest.raises(Exception, match="c must be between"):
         QuadraticPitchAngleGrid(31, 1.5)
@@ -135,7 +135,7 @@ def test_quadratic_pitch_resample():
     """Resampling should change na but preserve the packing parameter c."""
     grid = QuadraticPitchAngleGrid(31, 0.7)
     new = grid.resample(51)
-    assert new.na == 51
+    assert new.nalpha == 51
     np.testing.assert_allclose(new.c, grid.c)
     np.testing.assert_allclose(new.xi, QuadraticPitchAngleGrid(51, 0.7).xi)
 
@@ -150,7 +150,7 @@ def test_nonuniform_pitch_custom_map():
     np.testing.assert_allclose(grid.wxi, quad.wxi)
 
     new = grid.resample(51)
-    assert new.na == 51
+    assert new.nalpha == 51
     np.testing.assert_allclose(new.xi, NonUniformPitchAngleGrid(51, map_func).xi)
 
 
@@ -159,7 +159,7 @@ def test_nonuniform_pitch_identity_map():
     na = 31
     grid = NonUniformPitchAngleGrid(na, lambda x: x)
     a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
-    np.testing.assert_allclose(grid.a, a)
+    np.testing.assert_allclose(grid.alpha, a)
     np.testing.assert_allclose(grid.xi, -jnp.cos(a))
 
 
