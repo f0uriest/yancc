@@ -1122,6 +1122,7 @@ class FieldPartCD(lx.AbstractLinearOperator):
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     C: jax.Array
+    _scale: jax.Array
 
     def __init__(
         self,
@@ -1175,6 +1176,12 @@ class FieldPartCD(lx.AbstractLinearOperator):
             Ca = []
         self.C = jnp.asarray(C)
 
+        # gauge scale depends only on operator data, not the input vector
+        idxs = jnp.arange(len(species))
+        self._scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[
+            :, speedgrid.gauge_idx
+        ]
+
     @eqx.filter_jit
     @jax.named_scope("FieldPartCD.mv")
     def mv(self, vector):
@@ -1194,11 +1201,9 @@ class FieldPartCD(lx.AbstractLinearOperator):
         df = jnp.einsum("psyx,sxatz->pyatz", self.C, f)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
         gval = jnp.where(
             self.gauge,
-            scale * f[:, idxx, idxa, 0, 0],
+            self._scale * f[:, idxx, idxa, 0, 0],
             df[:, idxx, idxa, 0, 0],
         )
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
@@ -1224,8 +1229,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
         )
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[:, idxx]
+        # gauge scale is input-independent; reuse the value cached in __init__.
+        scale = self._scale
         gval = jnp.where(self.gauge, scale, df[:, idxx, idxa, 0, 0])
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1260,7 +1265,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
         idxs = jnp.arange(len(self.species))
         idxs_mesh = idxs[:, None]
         idxx_mesh = idxx[None, :]
-        scale = jnp.mean(jnp.abs(self.C[idxs, idxs]), axis=(2,))[idxs_mesh, idxx_mesh]
+        # gauge scale is input-independent; reuse the value cached in __init__.
+        scale = self._scale
 
         # nx is basically always small and these matrices are usually dense
         # so we always compute it using dense fmt and convert to banded at the
@@ -1464,6 +1470,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
     prefactor: jax.Array
     Txi: jax.Array
     Txi_inv: jax.Array
+    _Ghat: jax.Array
+    _scale: jax.Array
 
     def __init__(
         self,
@@ -1509,6 +1517,17 @@ class FieldPartCG(lx.AbstractLinearOperator):
         )
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
+        # Gabxlk and the gauge scale depend only on operator data, not the input
+        # vector, so precompute them here rather than on every matvec. We also
+        # pre-fold the nodal->modal speed transform (xvander_inv) into the
+        # potential tensor, eliminating one einsum per matvec.
+        Gabxlk = self.prefactor[:, :, :, None, None] * potentials.ddGxlk
+        self._Ghat = jnp.einsum("psxlk,km->psxlm", Gabxlk, speedgrid.xvander_inv)
+        idxs = jnp.arange(len(species))
+        self._scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[
+            :, speedgrid.gauge_idx
+        ]
+
     @eqx.filter_jit
     @jax.named_scope("FieldPartCG.mv")
     def mv(self, vector):
@@ -1526,25 +1545,19 @@ class FieldPartCG(lx.AbstractLinearOperator):
         f0 = f0.reshape(shape)
         f0 = jnp.moveaxis(f0, caxorder, (0, 1, 2, 3, 4))
         # G is in modal basis in legendre/xi
-        # these go from nodal alpha to modal l, and back
+        # this goes from nodal alpha to modal l
         f = jnp.einsum("la,sxatz->sxltz", self.Txi_inv, f0)
-        # convert to modal basis in x
-        f = jnp.einsum("kx,sxltz->skltz", self.speedgrid.xvander_inv, f)
-        # apply potential, G is effectively block diagonal in l
-        Gabxlk = (
-            self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
-        )
-        df = jnp.einsum("psxlk,skltz->pxltz", Gabxlk, f)
+        # apply potential, G is effectively block diagonal in l. The nodal->modal
+        # speed transform (xvander_inv) is pre-folded into Ghat.
+        df = jnp.einsum("psxlk,skltz->pxltz", self._Ghat, f)
         # transform back to real space in pitch angle
         df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
 
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
         gval = jnp.where(
             self.gauge,
-            scale * f0[:, idxx, idxa, 0, 0],
+            self._scale * f0[:, idxx, idxa, 0, 0],
             df[:, idxx, idxa, 0, 0],
         )
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
@@ -1564,10 +1577,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
             len(self.species),
             self.axorder,
         )
-        Gabxlk = (
-            self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
-        )
-        Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
+        # Gabxly (potential * xvander_inv) is input-independent; reuse the cache.
+        Gabxly = self._Ghat
         Gabxliy = (
             Gabxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
         )
@@ -1580,8 +1591,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
 
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
+        # gauge scale is input-independent; reuse the value cached in __init__.
+        scale = self._scale
         gval = jnp.where(self.gauge, scale, df[:, idxx, idxa, 0, 0])
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
 
@@ -1620,14 +1631,13 @@ class FieldPartCG(lx.AbstractLinearOperator):
             len(self.species),
             self.axorder,
         )
-        Gabxlk = (
-            self.prefactor[:, :, :, None, None] * self.potentials.ddGxlk[:, :, :, :]
-        )
-
         idxs = jnp.arange(len(self.species))
         idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Gabxlk[idxs, idxs]), axis=(2, 3))[:, idxx]
+        # Gabxly (potential * xvander_inv) and the gauge scale are input-
+        # independent; reuse the values cached in __init__.
+        Gabxly = self._Ghat
+        scale = self._scale
 
         # nx, ns are basically always small and these matrices are usually dense
         # so we always compute it using dense fmt and convert to banded at the
@@ -1635,7 +1645,6 @@ class FieldPartCG(lx.AbstractLinearOperator):
         if self.axorder[-1] == "s":
             if bw is None:
                 bw = len(self.species) // 2
-            Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
             Gabxliy = (
                 Gabxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
             )
@@ -1668,7 +1677,6 @@ class FieldPartCG(lx.AbstractLinearOperator):
         elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
-            Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
             Gabxliy = (
                 Gabxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
             )
@@ -1693,7 +1701,6 @@ class FieldPartCG(lx.AbstractLinearOperator):
         elif self.axorder[-1] == "a":
             if bw is None:
                 bw = self.pitchgrid.nalpha // 2  # full matrix
-            Gabxly = jnp.einsum("abxik,ky->abxiy", Gabxlk, self.speedgrid.xvander_inv)
             Gsxl = jnp.einsum("aaxlx->axl", Gabxly)
             Gsxlj = jax.vmap(jax.vmap(jnp.diag))(Gsxl)
             Gsxij = jnp.einsum("il,sxlj->sxij", self.Txi, Gsxlj)
@@ -1892,6 +1899,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
     prefactor_dH: jax.Array
     Txi: jax.Array
     Txi_inv: jax.Array
+    _Hhat: jax.Array
+    _scale: jax.Array
 
     def __init__(
         self,
@@ -1944,6 +1953,19 @@ class FieldPartCH(lx.AbstractLinearOperator):
         )
         self.Txi_inv = jnp.linalg.pinv(self.Txi)
 
+        # The H potential tensor and gauge scale depend only on operator data, not
+        # the input vector, so precompute them here rather than on every matvec. We
+        # also pre-fold the nodal->modal speed transform (xvander_inv) into the
+        # tensor, eliminating one einsum per matvec.
+        Habxlk = self.prefactor_H[:, :, :, None, None] * potentials.Hxlk
+        dHabxlk = self.prefactor_dH[:, :, :, None, None] * potentials.dHxlk
+        Hsum = Habxlk + dHabxlk
+        self._Hhat = jnp.einsum("psxlk,km->psxlm", Hsum, speedgrid.xvander_inv)
+        idxs = jnp.arange(len(species))
+        self._scale = jnp.mean(jnp.abs(Hsum[idxs, idxs]), axis=(2, 3))[
+            :, speedgrid.gauge_idx
+        ]
+
     @eqx.filter_jit
     @jax.named_scope("FieldPartCH.mv")
     def mv(self, vector):
@@ -1961,28 +1983,19 @@ class FieldPartCH(lx.AbstractLinearOperator):
         f0 = f0.reshape(shape)
         f0 = jnp.moveaxis(f0, caxorder, (0, 1, 2, 3, 4))
         # H is in modal basis in legendre/xi
-        # these go from nodal alpha to modal l, and back
+        # this goes from nodal alpha to modal l
         f = jnp.einsum("la,sxatz->sxltz", self.Txi_inv, f0)
-        # convert to modal basis in x
-        f = jnp.einsum("kx,sxltz->skltz", self.speedgrid.xvander_inv, f)
-        # apply potential, H is effectively block diagonal in l
-        Habxlk = (
-            self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
-        )
-        dHabxlk = (
-            self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :]
-        )
-        df = jnp.einsum("psxlk,skltz->pxltz", Habxlk + dHabxlk, f)
+        # apply potential, H is effectively block diagonal in l. The nodal->modal
+        # speed transform (xvander_inv) is pre-folded into Hhat.
+        df = jnp.einsum("psxlk,skltz->pxltz", self._Hhat, f)
         # transform back to real space in pitch angle
         df = jnp.einsum("al,pxltz->pxatz", self.Txi, df)
 
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        scale = jnp.mean(jnp.abs(Habxlk + dHabxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
         gval = jnp.where(
             self.gauge,
-            scale * f0[:, idxx, idxa, 0, 0],
+            self._scale * f0[:, idxx, idxa, 0, 0],
             df[:, idxx, idxa, 0, 0],
         )
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
@@ -2002,10 +2015,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
             len(self.species),
             self.axorder,
         )
-        Habxlk = (
-            self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
-        ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
-        Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
+        # Habxly (potential * xvander_inv) is input-independent; reuse the cache.
+        Habxly = self._Hhat
         Habxliy = (
             Habxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
         )
@@ -2017,8 +2028,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
         )
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
+        # gauge scale is input-independent; reuse the value cached in __init__.
+        scale = self._scale
         gval = jnp.where(self.gauge, scale, df[:, idxx, idxa, 0, 0])
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
 
@@ -2057,14 +2068,13 @@ class FieldPartCH(lx.AbstractLinearOperator):
             len(self.species),
             self.axorder,
         )
-        Habxlk = (
-            self.prefactor_H[:, :, :, None, None] * self.potentials.Hxlk[:, :, :, :]
-        ) + (self.prefactor_dH[:, :, :, None, None] * self.potentials.dHxlk[:, :, :, :])
-
         idxs = jnp.arange(len(self.species))
         idxa = jnp.atleast_1d(self.pitchgrid.nalpha // 2)
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(Habxlk)[idxs, idxs], axis=(2, 3))[:, idxx]
+        # Habxly (potential * xvander_inv) and the gauge scale are input-
+        # independent; reuse the values cached in __init__.
+        Habxly = self._Hhat
+        scale = self._scale
 
         # nx, ns are basically always small and these matrices are usually dense
         # so we always compute it using dense fmt and convert to banded at the
@@ -2072,7 +2082,6 @@ class FieldPartCH(lx.AbstractLinearOperator):
         if self.axorder[-1] == "s":
             if bw is None:
                 bw = len(self.species) // 2
-            Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
             Habxliy = (
                 Habxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
             )
@@ -2105,7 +2114,6 @@ class FieldPartCH(lx.AbstractLinearOperator):
         elif self.axorder[-1] == "x":
             if bw is None:
                 bw = self.speedgrid.nx // 2
-            Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
             Habxliy = (
                 Habxly[:, :, :, :, None, :] * self.Txi_inv[None, None, None, :, :, None]
             )
@@ -2130,7 +2138,6 @@ class FieldPartCH(lx.AbstractLinearOperator):
         elif self.axorder[-1] == "a":
             if bw is None:
                 bw = self.pitchgrid.nalpha // 2
-            Habxly = jnp.einsum("abxik,ky->abxiy", Habxlk, self.speedgrid.xvander_inv)
             Hsxl = jnp.einsum("aaxlx->axl", Habxly)
             Hsxlj = jax.vmap(jax.vmap(jnp.diag))(Hsxl)
             Hsxij = jnp.einsum("il,sxlj->sxij", self.Txi, Hsxlj)
