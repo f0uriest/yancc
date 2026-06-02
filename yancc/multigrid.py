@@ -721,7 +721,7 @@ class Prolongation(lx.AbstractLinearOperator):
         self.prefix_size = prefix_size
         self.method = method
         self.P_xi = _build_interp_matrix(
-            pitchgrid_coarse.xi, pitchgrid_fine.xi, method=method, period=None
+            pitchgrid_coarse.alpha, pitchgrid_fine.alpha, method=method, period=None
         )
         self.P_theta = _build_interp_matrix(
             field_coarse.theta, field_fine.theta, method=method, period=2 * jnp.pi
@@ -832,7 +832,7 @@ class Restriction(lx.AbstractLinearOperator):
         # Store the coarse->fine prolongation matrix; restriction applies its
         # volume-weighted transpose.
         self.P_xi = _build_interp_matrix(
-            pitchgrid_coarse.xi, pitchgrid_fine.xi, method=method, period=None
+            pitchgrid_coarse.alpha, pitchgrid_fine.alpha, method=method, period=None
         )
         self.P_theta = _build_interp_matrix(
             field_coarse.theta, field_fine.theta, method=method, period=2 * jnp.pi
