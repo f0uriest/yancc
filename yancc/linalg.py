@@ -125,12 +125,13 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
         """Matrix vector product."""
         X1 = vector[: self.Ai.in_size()]
         X2 = vector[self.Ai.in_size() :]
-        z11 = X1 - self.B.mv(self.CBi.mv(self.C.mv(X1)))
+        cbic_x1 = self.CBi.mv(self.C.mv(X1))
+        z11 = X1 - self.B.mv(cbic_x1)
         Az11 = self.Ai.mv(z11)
         z11 = Az11 - self.B.mv(self.CBi.mv(self.C.mv(Az11)))
         z12 = self.B.mv(self.CBi.mv(X2))
         Y1 = z11 + z12
-        Y2 = self.CBi.mv(self.C.mv(X1))
+        Y2 = cbic_x1
         return jnp.concatenate([Y1, Y2])
 
     def as_matrix(self):
