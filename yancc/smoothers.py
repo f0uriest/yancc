@@ -442,9 +442,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if operator_weights is None:
             # defaults, zero out krook diffusion term
             operator_weights = jnp.ones(8).at[-1].set(0)
-            if smooth_solver == "banded":
-                # also zero out field scattering to keep bandwidth small
-                operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
 
