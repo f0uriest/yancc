@@ -626,7 +626,7 @@ def solve_banded(p, q, A, b, *, unroll=None, pivot_tol=0.0, equilibrate=False):
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "equilibrate"))
 @functools.partial(
     jnp.vectorize,
-    signature="(k,n)->(l,n),(n),(n,m),(m,n),(n)",
+    signature="(k,n)->(l,n),(n),(n,m),(m,m),(n)",
     excluded=(0, 1, "unroll", "pivot_tol", "equilibrate"),
 )
 @jax.named_call
@@ -663,8 +663,10 @@ def lu_factor_banded_periodic(
         Pivots (only used for the small dense fallback).
     BUschur : jax.Array, shape(...,N, 2*r+1)
         Additional matrix for solving the periodic part
-    V : jax.Array, shape(...,2*r+1, N)
-        Additional matrix for solving the periodic part
+    V : jax.Array, shape(...,2*r+1, 2*r+1)
+        Additional matrix for solving the periodic part. Only the ``2*r+1``
+        wrap-around columns of the capacitance solution are nonzero, so just
+        those columns are stored (see ``lu_solve_banded_periodic``).
     s : jax.Array, shape(...,N)
         Row-equilibration factors (ones when ``equilibrate=False``).
     """
@@ -676,14 +678,14 @@ def lu_factor_banded_periodic(
             A,
             jnp.arange(n).astype(jnp.int32),
             jnp.zeros((n, r)),
-            jnp.zeros((r, n)),
+            jnp.zeros((r, r)),
             ones,
         )
     if n <= r:
         # below is incorrect, so just use dense solution
         A = banded_to_dense(p, q, A)
         lu, piv = jax.scipy.linalg.lu_factor(A)
-        return lu, piv, jnp.zeros((n, r)), jnp.zeros((r, n)), ones
+        return lu, piv, jnp.zeros((n, r)), jnp.zeros((r, r)), ones
 
     # ---------------------------------------------------------
     # 1. Isolate the strictly banded part & identify wrap-arounds
@@ -740,8 +742,12 @@ def lu_factor_banded_periodic(
 
     # Compute the capacitance matrix C = I + V^T @ Z_U
     C = jnp.eye(k_dim, dtype=A.dtype) + jnp.matmul(V_T, Z_U)
-    # Solve the small dense system: C @ Y = V^T @ Z_b
-    Y = jnp.linalg.solve(C, V_T)
+    # V^T is nonzero only in the wrap-around columns (the first q and last p),
+    # so C^{-1} V^T is too. Solve/store just those k_dim columns: the dropped
+    # columns contribute nothing to V^T @ b in lu_solve_banded_periodic.
+    wrap_cols = jnp.concatenate([jnp.arange(q), n - p + jnp.arange(p)])
+    # Solve the small dense system: C @ Y = (V^T restricted to wrap columns)
+    Y = jnp.linalg.solve(C, V_T[:, wrap_cols])
     piv = jnp.arange(n)  # dummy pivots for now
     return lu, piv, Z_U, Y, s
 
@@ -773,7 +779,7 @@ def lu_solve_banded_periodic(p, q, lu, b, *, unroll=None):
 
 
 @functools.partial(
-    jnp.vectorize, signature="(k,n),(n),(n,m),(m,n),(n),(n)->(n)", excluded=(0, 1, 8)
+    jnp.vectorize, signature="(k,n),(n),(n,m),(m,m),(n),(n)->(n)", excluded=(0, 1, 8)
 )
 def _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, s, b, unroll):
     nn = b.shape[-1]
@@ -784,7 +790,10 @@ def _lu_solve_banded_periodic(p, q, lu, piv, Z_U, Y, s, b, unroll):
         return jax.scipy.linalg.lu_solve((lu, piv), b)
     # s applies the row equilibration chosen at factor time (ones if disabled).
     Binvb = _lu_solve_banded(p, q, lu, s * b, unroll=unroll)
-    return Binvb - Z_U @ (Y @ Binvb)
+    # Y holds only the wrap-around columns of C^{-1} V^T (see factor), so contract
+    # against the matching entries of Binvb: the first q and last p.
+    wrap_cols = jnp.concatenate([jnp.arange(q), nn - p + jnp.arange(p)])
+    return Binvb - Z_U @ (Y @ Binvb[wrap_cols])
 
 
 @functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
