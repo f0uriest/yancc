@@ -22,7 +22,12 @@ from .linalg import (
 )
 from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import (
+    AbstractPitchAngleGrid,
+    AbstractSpeedGrid,
+    MaxwellSpeedGrid,
+    UniformPitchAngleGrid,
+)
 
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
@@ -34,94 +39,149 @@ config.update("jax_enable_x64", True)
 
 OPTIMAL_SMOOTHING_COEFFS_3D = {
     "1a": {
-        "z": jnp.array([0.73684211, 0.73684211, 0.68421053, 0.63157895, 0.63157895]),
-        "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
-        "a": jnp.array([0.52631579, 0.57894737, 0.68421053, 0.94736842, 1.00000000]),
+        "z": jnp.array([0.5789, 0.5789, 0.5789, 0.5789, 0.6316, 0.6316, 0.6316]),
+        "t": jnp.array([0.5263, 0.5263, 0.5263, 0.6316, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.5263, 0.5263, 0.5263, 0.5263, 0.6842, 0.9474, 1.0000]),
     },
     "1b": {
-        "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.63157895, 0.63157895]),
-        "t": jnp.array([0.21052632, 0.21052632, 0.52631579, 0.63157895, 0.63157895]),
-        "a": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.89473684, 0.89473684]),
+        "z": jnp.array([0.0526, 0.0526, 0.0526, 0.1053, 0.4737, 0.6316, 0.6316]),
+        "t": jnp.array([0.0526, 0.0526, 0.0526, 0.1579, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.1579, 0.1579, 0.1579, 0.1579, 0.1579, 0.2105, 0.2105]),
     },
     "2a": {
-        "z": jnp.array([0.57894737, 0.57894737, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.42105263, 0.42105263, 0.52631579, 0.89473684, 0.94736842]),
+        "z": jnp.array([0.4211, 0.4211, 0.4211, 0.4211, 0.4737, 0.6316, 0.6316]),
+        "t": jnp.array([0.4211, 0.4211, 0.4211, 0.4737, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.4211, 0.4211, 0.4211, 0.4211, 0.4737, 0.6842, 0.6842]),
     },
     "2b": {
-        "z": jnp.array([0.52631579, 0.52631579, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.31578947, 0.31578947, 0.52631579, 0.89473684, 0.94736842]),
+        "z": jnp.array([0.1579, 0.1579, 0.1579, 0.2105, 0.4737, 0.6316, 0.6316]),
+        "t": jnp.array([0.1579, 0.1579, 0.1579, 0.2632, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.2632, 0.2632, 0.2632, 0.3158, 0.3158, 0.3158, 0.3158]),
     },
     "2c": {
-        "z": jnp.array([0.42105263, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.21052632, 0.21052632, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.21052632, 0.21052632, 0.42105263, 0.89473684, 0.89473684]),
+        "z": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.3158, 0.6316, 0.6316]),
+        "t": jnp.array([0.0526, 0.0526, 0.0526, 0.1053, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.1053, 0.1053, 0.0526, 0.1053, 0.1579, 0.1579, 0.1579]),
     },
     "2d": {
-        "z": jnp.array([0.52631579, 0.57894737, 0.63157895, 0.63157895, 0.63157895]),
-        "t": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.63157895, 0.63157895]),
-        "a": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.68421053, 0.78947368]),
+        "z": jnp.array([0.5263, 0.5263, 0.5263, 0.5263, 0.6316, 0.6316, 0.6316]),
+        "t": jnp.array([0.5263, 0.5263, 0.5263, 0.5789, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.5263, 0.5263, 0.5263, 0.5263, 0.6316, 0.8947, 0.8947]),
+    },
+    "2e": {
+        "z": jnp.array([0.5263, 0.5263, 0.0526, 0.0526, 0.0526, 0.5789, 0.6316]),
+        "t": jnp.array([0.5263, 0.5263, 0.0526, 0.0526, 0.0526, 0.5789, 0.6316]),
+        "a": jnp.array([0.5263, 0.5263, 0.2105, 0.0526, 0.0526, 0.0526, 0.7895]),
+    },
+    "2f": {
+        "z": jnp.array([0.4211, 0.4211, 0.3684, 0.0526, 0.0526, 0.5789, 0.6316]),
+        "t": jnp.array([0.4737, 0.4737, 0.4211, 0.0526, 0.0526, 0.5789, 0.6316]),
+        "a": jnp.array([0.4737, 0.4737, 0.4737, 0.0526, 0.0526, 0.0526, 0.5263]),
+    },
+    "2g": {
+        "z": jnp.array([0.5263, 0.5263, 0.5263, 0.5263, 0.5789, 0.6316, 0.6316]),
+        "t": jnp.array([0.5263, 0.5263, 0.5263, 0.5789, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.5263, 0.5263, 0.4737, 0.4737, 0.6316, 0.7895, 0.7895]),
     },
     "3a": {
-        "z": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.52631579, 0.52631579]),
-        "t": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.52631579, 0.52631579]),
-        "a": jnp.array([0.26315789, 0.26315789, 0.36842105, 0.84210526, 0.94736842]),
+        "z": jnp.array([0.1579, 0.1579, 0.1579, 0.1579, 0.3684, 0.6316, 0.6316]),
+        "t": jnp.array([0.1579, 0.1579, 0.1579, 0.1579, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.2632, 0.2632, 0.2632, 0.2632, 0.3158, 0.3158, 0.3158]),
     },
     "3b": {
-        "z": jnp.array([0.47368421, 0.47368421, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.89473684]),
+        "z": jnp.array([0.0526, 0.0526, 0.0526, 0.1053, 0.3684, 0.6316, 0.6316]),
+        "t": jnp.array([0.0526, 0.0526, 0.0526, 0.1579, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.1579, 0.1579, 0.1579, 0.1579, 0.2105, 0.2105, 0.2105]),
     },
     "3c": {
-        "z": jnp.array([0.63157895, 0.63157895, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.89473684, 0.94736842]),
+        "z": jnp.array([0.4737, 0.4737, 0.4737, 0.4737, 0.5263, 0.6316, 0.6316]),
+        "t": jnp.array([0.4211, 0.4211, 0.4211, 0.5263, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.4211, 0.4211, 0.4211, 0.4211, 0.5789, 0.7368, 0.7368]),
     },
     "3d": {
-        "z": jnp.array([0.68421053, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
+        "z": jnp.array([0.3684, 0.3684, 0.3684, 0.4737, 0.5789, 0.6316, 0.6316]),
+        "t": jnp.array([0.4211, 0.4211, 0.4211, 0.5789, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.4737, 0.4737, 0.4737, 0.4737, 0.5263, 0.5263, 0.5263]),
     },
     "3e": {
-        "z": jnp.array([0.73684211, 0.73684211, 0.73684211, 0.63157895, 0.57894737]),
-        "t": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.84210526, 0.94736842]),
+        "z": jnp.array([0.5263, 0.5263, 0.5263, 0.0526, 0.0526, 0.5789, 0.6316]),
+        "t": jnp.array([0.5263, 0.5263, 0.5263, 0.0526, 0.0526, 0.5789, 0.6316]),
+        "a": jnp.array([0.5263, 0.5263, 0.5263, 0.0526, 0.0526, 0.0526, 0.7895]),
+    },
+    "3f": {
+        "z": jnp.array([0.5263, 0.5263, 0.5263, 0.5263, 0.6316, 0.6316, 0.6316]),
+        "t": jnp.array([0.5263, 0.5263, 0.5263, 0.5789, 0.6316, 0.6316, 0.6316]),
+        "a": jnp.array([0.5263, 0.5263, 0.5263, 0.5263, 0.6316, 0.6842, 0.6842]),
     },
     "4a": {
-        "z": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.47368421, 0.47368421]),
-        "t": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.47368421, 0.47368421]),
-        "a": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.73684211, 0.84210526]),
+        "z": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.1579, 0.5789, 0.5789]),
+        "t": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.4737, 0.5789, 0.5789]),
+        "a": jnp.array([0.0526, 0.0526, 0.0526, 0.1053, 0.1053, 0.1579, 0.1053]),
     },
     "4b": {
-        "z": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.26315789, 0.26315789, 0.47368421, 0.89473684, 0.94736842]),
+        "z": jnp.array([0.1053, 0.1053, 0.1053, 0.1579, 0.4211, 0.5789, 0.5789]),
+        "t": jnp.array([0.1053, 0.1053, 0.1053, 0.2105, 0.5789, 0.5789, 0.5789]),
+        "a": jnp.array([0.2632, 0.2632, 0.2632, 0.2632, 0.2632, 0.2632, 0.2632]),
     },
     "4d": {
-        "z": jnp.array([0.63157895, 0.68421053, 0.68421053, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.47368421, 0.47368421, 0.57894737, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.47368421, 0.47368421, 0.63157895, 0.94736842, 0.94736842]),
+        "z": jnp.array([0.4211, 0.4211, 0.4211, 0.4737, 0.5789, 0.5789, 0.5789]),
+        "t": jnp.array([0.3158, 0.3158, 0.3158, 0.4737, 0.5789, 0.5789, 0.5789]),
+        "a": jnp.array([0.3684, 0.3684, 0.4737, 0.4737, 0.5789, 0.5263, 0.5263]),
+    },
+    "4e": {
+        "z": jnp.array([0.2632, 0.2632, 0.0526, 0.0526, 0.0526, 0.5789, 0.5789]),
+        "t": jnp.array([0.2105, 0.2105, 0.0526, 0.0526, 0.0526, 0.5789, 0.5789]),
+        "a": jnp.array([0.3158, 0.3158, 0.2105, 0.0526, 0.0526, 0.0526, 0.4211]),
     },
     "5a": {
-        "z": jnp.array([0.15789474, 0.15789474, 0.26315789, 0.42105263, 0.42105263]),
-        "t": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.42105263, 0.42105263]),
-        "a": jnp.array([0.10526316, 0.10526316, 0.15789474, 0.57894737, 0.73684211]),
+        "z": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.0526, 0.5789, 0.5789]),
+        "t": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.1053, 0.5789, 0.5789]),
+        "a": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.0526, 0.0526, 0.0526]),
     },
     "5b": {
-        "z": jnp.array([0.31578947, 0.31578947, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.10526316, 0.10526316, 0.36842105, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.10526316, 0.10526316, 0.31578947, 0.78947368, 0.78947368]),
+        "z": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.2105, 0.5789, 0.5789]),
+        "t": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.5789, 0.5789, 0.5789]),
+        "a": jnp.array([0.0526, 0.0526, 0.0526, 0.0526, 0.0526, 0.0526, 0.0526]),
     },
     "5c": {
-        "z": jnp.array([0.52631579, 0.52631579, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.31578947, 0.31578947, 0.47368421, 0.89473684, 0.94736842]),
+        "z": jnp.array([0.1053, 0.1053, 0.1053, 0.1579, 0.4737, 0.5789, 0.5789]),
+        "t": jnp.array([0.1579, 0.1579, 0.1579, 0.2105, 0.5789, 0.5789, 0.5789]),
+        "a": jnp.array([0.2632, 0.2632, 0.2632, 0.2105, 0.2632, 0.2632, 0.2632]),
     },
     "5d": {
-        "z": jnp.array([0.63157895, 0.63157895, 0.63157895, 0.57894737, 0.57894737]),
-        "t": jnp.array([0.42105263, 0.42105263, 0.57894737, 0.57894737, 0.57894737]),
-        "a": jnp.array([0.42105263, 0.42105263, 0.63157895, 0.94736842, 0.94736842]),
+        "z": jnp.array([0.2105, 0.2105, 0.2105, 0.3158, 0.5789, 0.5789, 0.5789]),
+        "t": jnp.array([0.1579, 0.1579, 0.1579, 0.2632, 0.5789, 0.5789, 0.5789]),
+        "a": jnp.array([0.3158, 0.3158, 0.3158, 0.2105, 0.3684, 0.4211, 0.3684]),
+    },
+    "5e": {
+        "z": jnp.array([0.2143, 0.2143, 0.2143, 0.2857, 0.5000, 0.5714, 0.5714]),
+        "t": jnp.array([0.2143, 0.2143, 0.2143, 0.2857, 0.5714, 0.5714, 0.5714]),
+        "a": jnp.array([0.2857, 0.2857, 0.2857, 0.2143, 0.3571, 0.4286, 0.4286]),
+    },
+    "6a": {
+        "z": jnp.array([0.0714, 0.0714, 0.0714, 0.0714, 0.0714, 0.4286, 0.5714]),
+        "t": jnp.array([0.0714, 0.0714, 0.0714, 0.0714, 0.0714, 0.5000, 0.5714]),
+        "a": jnp.array([0.0714, 0.0714, 0.0714, 0.0714, 0.0714, 0.0714, 0.0714]),
+    },
+    "6b": {
+        "z": jnp.array([0.2143, 0.2143, 0.2143, 0.0714, 0.0714, 0.5714, 0.5714]),
+        "t": jnp.array([0.2143, 0.2143, 0.2143, 0.0714, 0.0714, 0.5714, 0.5714]),
+        "a": jnp.array([0.2857, 0.2857, 0.0714, 0.0714, 0.0714, 0.0714, 0.3571]),
+    },
+    "6c": {
+        "z": jnp.array([0.1429, 0.1429, 0.1429, 0.0714, 0.0714, 0.5714, 0.5714]),
+        "t": jnp.array([0.1429, 0.1429, 0.1429, 0.0714, 0.0714, 0.5714, 0.5714]),
+        "a": jnp.array([0.2143, 0.2143, 0.0714, 0.0714, 0.0714, 0.0714, 0.3571]),
+    },
+    "7a": {
+        "z": jnp.array([0.1429, 0.1429, 0.1429, 0.2143, 0.4286, 0.5714, 0.5714]),
+        "t": jnp.array([0.1429, 0.1429, 0.1429, 0.2143, 0.5714, 0.5714, 0.5714]),
+        "a": jnp.array([0.2857, 0.2857, 0.2857, 0.2857, 0.2857, 0.2857, 0.2857]),
+    },
+    "7b": {
+        "z": jnp.array([0.1429, 0.1429, 0.1429, 0.1429, 0.5000, 0.5714, 0.5714]),
+        "t": jnp.array([0.1429, 0.1429, 0.1429, 0.2143, 0.5714, 0.5714, 0.5714]),
+        "a": jnp.array([0.2143, 0.2143, 0.2143, 0.2143, 0.2857, 0.2857, 0.2857]),
     },
 }
 
@@ -138,7 +198,7 @@ OPTIMAL_SMOOTHING_COEFFS_4D = {
 
 
 def permute_f_3d(
-    f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
+    f: jax.Array, field: Field, pitchgrid: AbstractPitchAngleGrid, axorder: str
 ) -> jax.Array:
     """Rearrange elements of f to a given grid ordering."""
     shape, caxorder = _parse_axorder_shape_3d(
@@ -152,7 +212,7 @@ def permute_f_3d(
 def permute_f_4d(
     f: jax.Array,
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
@@ -167,7 +227,7 @@ def permute_f_4d(
 
 
 def inverse_permute_f_3d(
-    f: jax.Array, field: Field, pitchgrid: UniformPitchAngleGrid, axorder: str
+    f: jax.Array, field: Field, pitchgrid: AbstractPitchAngleGrid, axorder: str
 ) -> jax.Array:
     """Inverse of permute_f_3d: canonical (a,t,z) layout back to axorder layout."""
     nt, nz, na = field.ntheta, field.nzeta, pitchgrid.nalpha
@@ -180,7 +240,7 @@ def inverse_permute_f_3d(
 def inverse_permute_f_4d(
     f: jax.Array,
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     speedgrid: AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
@@ -225,7 +285,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     axorder: str = eqx.field(static=True)
@@ -237,7 +297,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
         p1: str = "2d",
@@ -286,8 +346,10 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 self.bandwidth,
                 self.bandwidth,
                 mats,
-                equilibriate=True,
+                equilibrate=True,
                 pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                # unroll has little effect on CPU but ~2x faster on GPU
+                unroll=4,
             )
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -302,7 +364,12 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    self.bandwidth,
+                    self.bandwidth,
+                    self.mats,
+                    x,
+                    # unroll here has little effect on GPU but modest gain on CPU
+                    unroll=8,
                 )
             else:
                 size, N, M = self.mats.shape
@@ -373,7 +440,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -388,7 +455,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -442,9 +509,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if operator_weights is None:
             # defaults, zero out krook diffusion term
             operator_weights = jnp.ones(8).at[-1].set(0)
-            if smooth_solver == "banded":
-                # also zero out field scattering to keep bandwidth small
-                operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
 
@@ -486,8 +550,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 self.bandwidth,
                 self.bandwidth,
                 mats,
-                equilibriate=True,
+                equilibrate=True,
                 pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                # unroll has little effect on CPU but ~2x faster on GPU
+                unroll=4,
             )
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -509,7 +575,12 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    self.bandwidth,
+                    self.bandwidth,
+                    self.mats,
+                    x,
+                    # unroll here has little effect on GPU but modest gain on CPU
+                    unroll=8,
                 )
             else:
                 size, N, M = self.mats.shape
@@ -599,7 +670,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -614,7 +685,7 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -761,6 +832,10 @@ class DKELaplacian(lx.AbstractLinearOperator):
     norm: jax.Array
 
     def __init__(self, field, pitchgrid, speedgrid, species, normalize=True):
+        assert isinstance(pitchgrid, UniformPitchAngleGrid), (
+            "DKELaplacian smoother requires a uniform pitch grid "
+            "(use smooth_method='standard' for non-uniform grids)."
+        )
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -869,7 +944,7 @@ def _(operator):
 def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
     """Approximate best relaxation parameter for block jacobi smoother for MDKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
-    nus = jnp.array([-6, -4, -2, 0, 2])
+    nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
     nu = jnp.log10(nuhat)
     if method not in OPTIMAL_SMOOTHING_COEFFS_3D:
         warnings.warn(

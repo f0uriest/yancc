@@ -57,7 +57,9 @@ The full DKE requires a magnetic field, pitch-angle and speed grids, one or
 more species, and a radial electric field. Each species is a
 :class:`~yancc.species.LocalMaxwellian` built from a
 :class:`~yancc.species.Species` (for example one of the predefined isotope
-constants like :data:`~yancc.species.Hydrogen`).
+constants like :data:`~yancc.species.Hydrogen`). The examples below use a
+uniform pitch-angle grid; see :ref:`choosing-a-pitch-angle-grid` for the
+non-uniform grids that resolve low-collisionality cases more efficiently.
 
 .. code-block:: python
 

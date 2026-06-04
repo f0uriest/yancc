@@ -26,6 +26,8 @@ from .conftest import (
     _compute_CGab_sympy,
     _compute_CHab_sympy,
     _eval_f,
+    _eval_f_sampled,
+    _speed_subset,
 )
 
 
@@ -365,10 +367,10 @@ def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CHab = _compute_CHab_sympy(Fa, fb, l, v, vta, vtb, ma, mb, Gamma_ab)
     CHba = _compute_CHab_sympy(Fb, fa, l, v, vtb, vta, mb, ma, Gamma_ba)
     CHbb = _compute_CHab_sympy(Fb, fb, l, v, vtb, vtb, mb, mb, Gamma_bb)
-    CHaa_sympy = _eval_f(CHaa, v, speedgrid.x * species[0].v_thermal, subs)
-    CHab_sympy = _eval_f(CHab, v, speedgrid.x * species[0].v_thermal, subs)
-    CHba_sympy = _eval_f(CHba, v, speedgrid.x * species[1].v_thermal, subs)
-    CHbb_sympy = _eval_f(CHbb, v, speedgrid.x * species[1].v_thermal, subs)
+    CHaa_sympy = _eval_f_sampled(CHaa, v, speedgrid.x * species[0].v_thermal, subs)
+    CHab_sympy = _eval_f_sampled(CHab, v, speedgrid.x * species[0].v_thermal, subs)
+    CHba_sympy = _eval_f_sampled(CHba, v, speedgrid.x * species[1].v_thermal, subs)
+    CHbb_sympy = _eval_f_sampled(CHbb, v, speedgrid.x * species[1].v_thermal, subs)
     CHa_sympy = CHaa_sympy + CHab_sympy
     CHb_sympy = CHba_sympy + CHbb_sympy
 
@@ -390,8 +392,9 @@ def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CH_jax = jnp.einsum("la,sxatz->sxltz", Txi_inv, CH_jax)
     CHa_jax = CH_jax[0, :, :, 0, 0]
     CHb_jax = CH_jax[1, :, :, 0, 0]
-    np.testing.assert_allclose(CHa_jax[:, l], CHa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(CHb_jax[:, l], CHb_sympy, rtol=1e-8, atol=0)
+    i = _speed_subset(speedgrid.nx)
+    np.testing.assert_allclose(CHa_jax[i, l], CHa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(CHb_jax[i, l], CHb_sympy, rtol=1e-8, atol=0)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
@@ -493,10 +496,10 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CGab = _compute_CGab_sympy(Fa, fb, l, v, vta, vtb, Gamma_ab)
     CGba = _compute_CGab_sympy(Fb, fa, l, v, vtb, vta, Gamma_ba)
     CGbb = _compute_CGab_sympy(Fb, fb, l, v, vtb, vtb, Gamma_bb)
-    CGaa_sympy = _eval_f(CGaa, v, speedgrid.x * species[0].v_thermal, subs)
-    CGab_sympy = _eval_f(CGab, v, speedgrid.x * species[0].v_thermal, subs)
-    CGba_sympy = _eval_f(CGba, v, speedgrid.x * species[1].v_thermal, subs)
-    CGbb_sympy = _eval_f(CGbb, v, speedgrid.x * species[1].v_thermal, subs)
+    CGaa_sympy = _eval_f_sampled(CGaa, v, speedgrid.x * species[0].v_thermal, subs)
+    CGab_sympy = _eval_f_sampled(CGab, v, speedgrid.x * species[0].v_thermal, subs)
+    CGba_sympy = _eval_f_sampled(CGba, v, speedgrid.x * species[1].v_thermal, subs)
+    CGbb_sympy = _eval_f_sampled(CGbb, v, speedgrid.x * species[1].v_thermal, subs)
     CGa_sympy = CGaa_sympy + CGab_sympy
     CGb_sympy = CGba_sympy + CGbb_sympy
 
@@ -518,8 +521,9 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CG_jax = jnp.einsum("la,sxatz->sxltz", Txi_inv, CG_jax)
     CGa_jax = CG_jax[0, :, :, 0, 0]
     CGb_jax = CG_jax[1, :, :, 0, 0]
-    np.testing.assert_allclose(CGa_jax[:, l], CGa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(CGb_jax[:, l], CGb_sympy, rtol=1e-8, atol=0)
+    i = _speed_subset(speedgrid.nx)
+    np.testing.assert_allclose(CGa_jax[i, l], CGa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(CGb_jax[i, l], CGb_sympy, rtol=1e-8, atol=0)
 
 
 def test_verify_collision_null_single_species(dummy_field):

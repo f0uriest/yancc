@@ -19,7 +19,7 @@ from .smoothers import (
     MDKEJacobiSmoother,
 )
 from .trajectories import DKE, MDKE
-from .velocity_grids import UniformPitchAngleGrid
+from .velocity_grids import AbstractPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
@@ -321,7 +321,7 @@ def get_prolongations(fields, pitchgrids, prefix_size=1, method="linear"):
     ----------
     fields : list[Field]
         Fields at each level, ordered coarse to fine.
-    pitchgrids : list[UniformPitchAngleGrid]
+    pitchgrids : list[AbstractPitchAngleGrid]
         Pitch angle grids at each level, ordered coarse to fine.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
@@ -357,7 +357,7 @@ def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
     ----------
     fields : list[Field]
         Fields at each level, ordered coarse to fine.
-    pitchgrids : list[UniformPitchAngleGrid]
+    pitchgrids : list[AbstractPitchAngleGrid]
         Pitch angle grids at each level, ordered coarse to fine.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
@@ -686,8 +686,8 @@ class Prolongation(lx.AbstractLinearOperator):
     ----------
     field_coarse, field_fine : Field
         Magnetic field data at the coarse and fine theta/zeta resolutions.
-    pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
-        Pitch angle grids at the coarse and fine alpha resolutions.
+    pitchgrid_coarse, pitchgrid_fine : AbstractPitchAngleGrid
+        Pitch angle grids at the coarse and fine nalpha resolutions.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
@@ -697,8 +697,8 @@ class Prolongation(lx.AbstractLinearOperator):
 
     field_coarse: Field
     field_fine: Field
-    pitchgrid_coarse: UniformPitchAngleGrid
-    pitchgrid_fine: UniformPitchAngleGrid
+    pitchgrid_coarse: AbstractPitchAngleGrid
+    pitchgrid_fine: AbstractPitchAngleGrid
     prefix_size: int = eqx.field(static=True)
     method: str = eqx.field(static=True)
     P_xi: jax.Array
@@ -709,8 +709,8 @@ class Prolongation(lx.AbstractLinearOperator):
         self,
         field_coarse: Field,
         field_fine: Field,
-        pitchgrid_coarse: UniformPitchAngleGrid,
-        pitchgrid_fine: UniformPitchAngleGrid,
+        pitchgrid_coarse: AbstractPitchAngleGrid,
+        pitchgrid_fine: AbstractPitchAngleGrid,
         prefix_size: int = 1,
         method: str = "linear",
     ):
@@ -721,7 +721,7 @@ class Prolongation(lx.AbstractLinearOperator):
         self.prefix_size = prefix_size
         self.method = method
         self.P_xi = _build_interp_matrix(
-            pitchgrid_coarse.xi, pitchgrid_fine.xi, method=method, period=None
+            pitchgrid_coarse.alpha, pitchgrid_fine.alpha, method=method, period=None
         )
         self.P_theta = _build_interp_matrix(
             field_coarse.theta, field_fine.theta, method=method, period=2 * jnp.pi
@@ -794,8 +794,8 @@ class Restriction(lx.AbstractLinearOperator):
     ----------
     field_coarse, field_fine : Field
         Magnetic field data at the coarse and fine theta/zeta resolutions.
-    pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
-        Pitch angle grids at the coarse and fine alpha resolutions.
+    pitchgrid_coarse, pitchgrid_fine : AbstractPitchAngleGrid
+        Pitch angle grids at the coarse and fine nalpha resolutions.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
@@ -805,8 +805,8 @@ class Restriction(lx.AbstractLinearOperator):
 
     field_coarse: Field
     field_fine: Field
-    pitchgrid_coarse: UniformPitchAngleGrid
-    pitchgrid_fine: UniformPitchAngleGrid
+    pitchgrid_coarse: AbstractPitchAngleGrid
+    pitchgrid_fine: AbstractPitchAngleGrid
     prefix_size: int = eqx.field(static=True)
     method: str = eqx.field(static=True)
     P_xi: jax.Array
@@ -818,8 +818,8 @@ class Restriction(lx.AbstractLinearOperator):
         self,
         field_coarse: Field,
         field_fine: Field,
-        pitchgrid_coarse: UniformPitchAngleGrid,
-        pitchgrid_fine: UniformPitchAngleGrid,
+        pitchgrid_coarse: AbstractPitchAngleGrid,
+        pitchgrid_fine: AbstractPitchAngleGrid,
         prefix_size: int = 1,
         method: str = "linear",
     ):
@@ -832,7 +832,7 @@ class Restriction(lx.AbstractLinearOperator):
         # Store the coarse->fine prolongation matrix; restriction applies its
         # volume-weighted transpose.
         self.P_xi = _build_interp_matrix(
-            pitchgrid_coarse.xi, pitchgrid_fine.xi, method=method, period=None
+            pitchgrid_coarse.alpha, pitchgrid_fine.alpha, method=method, period=None
         )
         self.P_theta = _build_interp_matrix(
             field_coarse.theta, field_fine.theta, method=method, period=2 * jnp.pi

@@ -1,10 +1,15 @@
 """Velocity grids for yancc."""
 
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import cast
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import orthax
 from jax import config
+from jaxtyping import ArrayLike, Float
 
 # need this here as well so that const default_xrec uses 64 bit
 config.update("jax_enable_x64", True)
@@ -258,8 +263,41 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         return self.__class__(nx)
 
 
-class LegendrePitchAngleGrid(eqx.Module):
-    r"""Grid for pitch angle variable :math:`\xi = v_{||} / v`.
+class _MapFunction(eqx.Module):
+    """Wraps a domain map f(x, *params) defined on [-1, 1].
+
+    f is a static (non-traced) callable, so arbitrary user-supplied maps are
+    allowed. params holds any dynamic (traceable) arguments, e.g. the
+    packing parameter of QuadraticPitchAngleGrid so they remain JAX
+    leaves rather than being baked into the static callable.
+    """
+
+    f: Callable = eqx.field(static=True)
+    params: tuple = ()
+
+    @eqx.filter_jit
+    def __call__(self, x):
+        x = (x / jnp.pi) * 2 - 1  # map [0,pi] to [-1,1]
+        x = self.f(x, *self.params)  # map [-1,1] to [-1,1]
+        x = (x + 1) / 2 * jnp.pi  # map [-1,1] to [0,pi]
+        return x
+
+
+class AbstractPitchAngleGrid(ABC, eqx.Module):
+    """Base class for pitch angle coordinate grids."""
+
+    nalpha: int = eqx.field(static=True)
+    alpha: jax.Array
+    xi: jax.Array
+    wxi: jax.Array
+
+    @abstractmethod
+    def resample(self, nalpha) -> "AbstractPitchAngleGrid":
+        """Resample grid to a lower or higher resolution."""
+
+
+class LegendrePitchAngleGrid(AbstractPitchAngleGrid):
+    """Grid for pitch angle variable xi=v||/v.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
     function 1.
@@ -271,42 +309,57 @@ class LegendrePitchAngleGrid(eqx.Module):
 
     """
 
-    nalpha: int = eqx.field(static=True)
     xirec: orthax.recurrence.AbstractRecurrenceRelation
-    xi: jax.Array
-    wxi: jax.Array
-    xivander: jax.Array
-    xivander_inv: jax.Array
-    Dxi: jax.Array
-    Dxi_pseudospectral: jax.Array
-    L: jax.Array
 
     def __init__(self, nalpha):
         self.nalpha = nalpha
         self.xirec = orthax.recurrence.Legendre()
         self.xi, self.wxi = orthax.orthgauss(nalpha, self.xirec)
-        self.xivander = orthax.orthvander(self.xi, self.nalpha - 1, self.xirec)
-        self.xivander_inv = jnp.linalg.pinv(self.xivander)
-
-        def _dxifun(c):
-            c = jnp.append(c, jnp.array([0.0]))
-            dc = orthax.orthder(c, self.xirec)
-            return dc
-
-        self.Dxi = jax.jacfwd(_dxifun)(self.xi)
-        self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
-        k = jnp.arange(self.nalpha)
-        kk = -jnp.diag(k * (k + 1))
-        # pitch angle scattering operator ~ -k(k+1)
-        self.L = self.xivander @ kk @ self.xivander_inv
+        self.alpha = -jnp.acos(self.xi)
 
     def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
 
 
-class UniformPitchAngleGrid(eqx.Module):
-    r"""Grid for pitch angle variable :math:`α = -\arccos(v_{||} / v)`.
+class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
+    """User controlled non-uniform grid in pitch angle coordinate a = -arccos(v||/v).
+
+    Allows an arbitrary mapping function to control grid spacing. Nodes are initially
+    created uniformly, then mapped through ``map_func``.
+
+    Parameters
+    ----------
+    na : int
+        Number of points in pitch angle coordinate.
+    map_func : callable
+        Smooth, odd, monotonic function that maps the domain [-1,1] to [-1,1].
+        Defines the spacing of nodes in the domain.
+    """
+
+    map_func: _MapFunction
+
+    def __init__(self, nalpha, map_func):
+        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
+        self.nalpha = nalpha
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        self.map_func = _MapFunction(map_func)
+
+        self.alpha = self.map_func(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+    def resample(self, nalpha):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nalpha, self.map_func.f)
+
+
+def _linear_map(x):
+    return x
+
+
+class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""Grid for pitch angle variable :math:`\alpha = -\arccos(v_{||}/v)`.
 
     Uniform grid on :math:`[0, \pi]`, not including endpoints.
 
@@ -317,35 +370,146 @@ class UniformPitchAngleGrid(eqx.Module):
 
     """
 
-    nalpha: int = eqx.field(static=True)
-    alpha: jax.Array
-    xi: jax.Array
-    wxi: jax.Array
-
     def __init__(self, nalpha):
-        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
-        self.nalpha = nalpha
-        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False)
-        alpha += jnp.pi / (2 * nalpha)
-        self.alpha = alpha
-        self.xi = -jnp.cos(alpha)
-
-        # fejer type 1 quadrature
-        length = nalpha // 2
-        r = nalpha - length
-
-        kappa = jnp.arange(r)
-        beta = jnp.hstack(
-            [
-                2 * jnp.exp(1j * jnp.pi * kappa / nalpha) / (1 - 4 * kappa**2),
-                jnp.zeros(length + 1),
-            ]
-        )
-        beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
-
-        wxi = jnp.fft.ifft(beta)
-        self.wxi = wxi.real
+        super().__init__(nalpha, _linear_map)
+        # uniform in a means chebyshev nodes in xi, so we can do better than
+        # newton-cotes: fejer type 1 quadrature
+        self.wxi = fejer_type_1_weights(nalpha)
 
     def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
+
+
+def _quadratic_map(x, c):
+    return c * x**3 + (1 - c) * x
+
+
+class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""Pitch angle grid with quadratic spacing near :math:`v_{||} = 0`
+
+    At low collisionality, the DKE develops very sharp features near
+    :math:`v_{||}=0`  (:math:`\alpha=\pi/2`).
+    This grid packs nodes closer to that region to resolve it more accurately,
+    while sacrificing nodes near the endpoints where the solution varies less.
+
+    Parameters
+    ----------
+    nalpha : int
+        Number of points in pitch angle coordinate.
+    c : float in [0,1]
+        Grid packing parameter. ``c=0`` means nodes uniformly spaced in a, ``c=1``
+        packs quadratically near :math:`\alpha=\pi/2` (:math:`v_{||}=0`). Recommended
+        values are in the range ``c=[0.5, 0.8]`` at low collisionality.
+    """
+
+    c: jax.Array
+
+    def __init__(self, nalpha: int, c: Float[ArrayLike, ""]):
+        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
+        c = jnp.asarray(c)
+        c = eqx.error_if(c, jnp.logical_or(c > 1, c < 0), "c must be between [0,1]")
+        # error_if loses the static type, so reassert it (c is an array post-asarray)
+        self.nalpha = nalpha
+        self.c = cast(jax.Array, c)
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        # pass c as a dynamic param (not baked into a static callable) so the
+        # grid can be traced and differentiated through jit.
+        self.map_func = _MapFunction(_quadratic_map, (self.c,))
+
+        self.alpha = self.map_func(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+    def resample(self, nalpha):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nalpha, self.c)
+
+
+def composite_newton_cotes_weights(
+    x: jax.Array, order: int, global_limits: tuple | None = None
+):
+    """Computes composite quadrature weights.
+
+    Parameters
+    ----------
+    x : jax.Array
+        Sample points. May be non-uniform
+    order : int
+        Formal order of accuracy desired.
+    global_limits : tuple of floats
+        Limits for integration. If not given assumed to be x[0] and x[-1]
+
+    Returns
+    -------
+    w : jax.Array
+        Quadrature weights.
+    """
+    N = x.shape[0]
+    points_per_panel = order + 1
+    R = N % points_per_panel
+    num_main_panels = N // points_per_panel
+
+    # 1. Calculate interior edges exactly as before
+    # This slicing elegantly captures boundaries between main panels AND
+    # the boundary between the last main panel and the remainder panel.
+    end_of_panels = x[points_per_panel - 1 : N - 1 : points_per_panel]
+    start_of_next = x[points_per_panel:N:points_per_panel]
+    interior_edges = (end_of_panels + start_of_next) / 2.0
+
+    # 2. Assign global limits
+    if global_limits is not None:
+        a, b = global_limits
+    else:
+        a, b = x[0], x[-1]
+
+    panel_edges = jnp.concatenate([jnp.array([a]), interior_edges, jnp.array([b])])
+
+    weights = []
+
+    # 3. Vectorize and compute the main uniform panels
+    if num_main_panels > 0:
+        x_main = x[: N - R].reshape((num_main_panels, points_per_panel))
+        A_main = panel_edges[:num_main_panels]
+        B_main = panel_edges[1 : num_main_panels + 1]
+
+        def vmap_helper(xp, a_edge, b_edge):
+            j = jnp.arange(points_per_panel)
+            V_T = xp[None, :] ** j[:, None]
+            rhs = (b_edge ** (j + 1) - a_edge ** (j + 1)) / (j + 1)
+            return jnp.linalg.solve(V_T, rhs)
+
+        w_main = jax.vmap(vmap_helper)(x_main, A_main, B_main)
+        weights.append(w_main.flatten())
+
+    # 4. Compute the leftover remainder panel
+    if R > 0:
+        x_rem = x[N - R :]
+        A_rem = panel_edges[-2]
+        B_rem = panel_edges[-1]
+
+        # Determine the polynomial degree based on the number of leftover points
+        j = jnp.arange(R)
+        V_T_rem = x_rem[None, :] ** j[:, None]
+        rhs_rem = (B_rem ** (j + 1) - A_rem ** (j + 1)) / (j + 1)
+        w_rem = jnp.linalg.solve(V_T_rem, rhs_rem)
+
+        weights.append(w_rem)
+
+    return jnp.concatenate(weights)
+
+
+def fejer_type_1_weights(n):
+    """Fejer (chebyshev) type 1 quadrature."""
+    length = n // 2
+    r = n - length
+    kappa = jnp.arange(r)
+    beta = jnp.hstack(
+        [
+            2 * jnp.exp(1j * jnp.pi * kappa / n) / (1 - 4 * kappa**2),
+            jnp.zeros(length + 1),
+        ]
+    )
+    beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
+    w = jnp.fft.ifft(beta)
+    return w.real
