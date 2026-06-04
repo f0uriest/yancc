@@ -271,7 +271,7 @@ def test_solve_dke_ncsx_2species(idx):
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
         coulomb_log=17,
-        verbose=3,
+        verbose=2,
         rtol=1e-5,
         multigrid_options={"max_grids": 3, "coarse_N": 2000},
     )
@@ -366,7 +366,7 @@ def test_solve_dke_ncsx_1species(idx):
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
         coulomb_log=17,
-        verbose=3,
+        verbose=2,
         rtol=1e-5,
         multigrid_options={"max_grids": 3, "coarse_N": 2000},
     )

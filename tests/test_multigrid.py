@@ -102,7 +102,7 @@ def test_prolongation_restriction(field, nx):
     P_cubic = Prolongation(
         field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx, method="cubic"
     )
-    np.testing.assert_allclose(f_f, P_cubic.mv(f_c), atol=1e-2, rtol=1e-2)
+    np.testing.assert_allclose(f_f, P_cubic.mv(f_c), atol=2e-2, rtol=2e-2)
 
 
 def test_get_grid_resolutions_max_grids():

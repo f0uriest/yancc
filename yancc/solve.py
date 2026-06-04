@@ -290,7 +290,7 @@ def solve_dke(  # noqa: C901
     maxiter = options.pop("maxiter", 10)
     print_every = options.pop("print_every", 10)
     operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
-    nL = options.pop("nL", 4)
+    nL = options.pop("nL", 8)
     quad = options.pop("quad", False)
     skip_init_print = options.pop("skip_init_print", False)
     potentials = options.pop("potentials", None)

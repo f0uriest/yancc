@@ -346,8 +346,10 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 self.bandwidth,
                 self.bandwidth,
                 mats,
-                equilibriate=True,
+                equilibrate=True,
                 pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                # unroll has little effect on CPU but ~2x faster on GPU
+                unroll=4,
             )
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -362,7 +364,12 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    self.bandwidth,
+                    self.bandwidth,
+                    self.mats,
+                    x,
+                    # unroll here has little effect on GPU but modest gain on CPU
+                    unroll=8,
                 )
             else:
                 size, N, M = self.mats.shape
@@ -502,9 +509,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if operator_weights is None:
             # defaults, zero out krook diffusion term
             operator_weights = jnp.ones(8).at[-1].set(0)
-            if smooth_solver == "banded":
-                # also zero out field scattering to keep bandwidth small
-                operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
 
@@ -546,8 +550,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 self.bandwidth,
                 self.bandwidth,
                 mats,
-                equilibriate=True,
+                equilibrate=True,
                 pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                # unroll has little effect on CPU but ~2x faster on GPU
+                unroll=4,
             )
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -569,7 +575,12 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    self.bandwidth,
+                    self.bandwidth,
+                    self.mats,
+                    x,
+                    # unroll here has little effect on GPU but modest gain on CPU
+                    unroll=8,
                 )
             else:
                 size, N, M = self.mats.shape

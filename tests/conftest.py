@@ -1,5 +1,6 @@
 """Fixtures etc for testing."""
 
+import functools
 import inspect
 import warnings
 
@@ -185,12 +186,28 @@ def potential_gamma(xgrid, species2):
     )
 
 
+# Shared dummy integration variable so identical integrands hash-equal across calls
+# and hit the cache below (H and G share two integrals; the cross-species collision
+# terms request integrals identical to the same-species ones).
+_z = sympy.symbols("z", real=True)
+
+
+@functools.cache
+def _integrate_moment(integrand, lower, upper):
+    """``sympy.integrate(integrand, (_z, lower, upper))``, memoized.
+
+    The result is bit-identical to calling ``sympy.integrate`` directly -- this
+    only avoids recomputing integrals that recur: H and G share two of their
+    integrals, and the cross-species collision terms (e.g. CGba/CGbb) request
+    integrals identical to the same-species ones (CGaa/CGab).
+    """
+    return sympy.integrate(integrand, (_z, lower, upper))
+
+
 def _compute_H_sympy(f, v, l, vt):
-    z = sympy.symbols("z", real=True)
-    integrand1 = z ** (-l + 1) * f.subs(v, z * vt)
-    integrand2 = z ** (l + 2) * f.subs(v, z * vt)
-    integral1 = sympy.integrate(integrand1, (z, v / vt, sympy.oo))
-    integral2 = sympy.integrate(integrand2, (z, 0, v / vt))
+    fz = f.subs(v, _z * vt)
+    integral1 = _integrate_moment(_z ** (-l + 1) * fz, v / vt, sympy.oo)
+    integral2 = _integrate_moment(_z ** (l + 2) * fz, 0, v / vt)
     Hterm1 = 1 / (v / vt) ** (l + 1) * integral2
     Hterm2 = (v / vt) ** l * integral1
     H = vt**2 * 4 * sympy.pi / (2 * l + 1) * (Hterm1 + Hterm2)
@@ -198,15 +215,11 @@ def _compute_H_sympy(f, v, l, vt):
 
 
 def _compute_G_sympy(f, v, l, vt):
-    z = sympy.symbols("z", real=True)
-    integrand1 = z ** (-l + 1) * f.subs(v, z * vt)
-    integrand2 = z ** (l + 2) * f.subs(v, z * vt)
-    integrand3 = z ** (-l + 3) * f.subs(v, z * vt)
-    integrand4 = z ** (l + 4) * f.subs(v, z * vt)
-    integral1 = sympy.integrate(integrand1, (z, v / vt, sympy.oo))
-    integral2 = sympy.integrate(integrand2, (z, 0, v / vt))
-    integral3 = sympy.integrate(integrand3, (z, v / vt, sympy.oo))
-    integral4 = sympy.integrate(integrand4, (z, 0, v / vt))
+    fz = f.subs(v, _z * vt)
+    integral1 = _integrate_moment(_z ** (-l + 1) * fz, v / vt, sympy.oo)
+    integral2 = _integrate_moment(_z ** (l + 2) * fz, 0, v / vt)
+    integral3 = _integrate_moment(_z ** (-l + 3) * fz, v / vt, sympy.oo)
+    integral4 = _integrate_moment(_z ** (l + 4) * fz, 0, v / vt)
     Gterm1 = (v / vt) ** l * integral3
     Gterm2 = -sympy.Rational(2 * l - 1, 2 * l + 3) * (v / vt) ** (l + 2) * integral1
     Gterm3 = -sympy.Rational(2 * l - 1, 2 * l + 3) / (v / vt) ** (l + 1) * integral4
@@ -306,3 +319,28 @@ def _eval_f(f, v, vi, subs):
     if (abs(f.imag) > 1e-16).any():
         print(f.imag)
     return f.real
+
+
+# Comparing the sympy reference against jax at every speed-grid point is dominated
+# by high-precision evalf of large (differentiated, cross-species) expressions.
+# Evaluating a representative subset of points keeps the comparison meaningful
+# while cutting that cost; the matching jax values are selected with the same
+# indices via _speed_subset.
+_SYMPY_SPEED_SUBSET = 5
+
+
+def _speed_subset(n):
+    """Indices of a spread-out subset of ``n`` speed-grid points."""
+    k = min(n, _SYMPY_SPEED_SUBSET)
+    return np.unique(np.linspace(0, n - 1, k).round().astype(int))
+
+
+def _eval_f_sampled(f, v, vi, subs):
+    """``_eval_f`` evaluated only at ``_speed_subset(len(vi))`` of the points.
+
+    For the (expensive) reference expressions compared against jax. The cheap
+    distribution evals that build the jax *input* keep using ``_eval_f`` at full
+    resolution.
+    """
+    vi = np.asarray(vi)
+    return _eval_f(f, v, vi[_speed_subset(len(vi))], subs)
