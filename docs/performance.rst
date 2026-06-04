@@ -53,12 +53,12 @@ Choosing a pitch-angle grid
 ---------------------------
 
 ``na`` is set on the pitch-angle grid object, and yancc offers a few choices
-of how those points are *distributed* in :math:`a`:
+of how those points are *distributed* in :math:`\alpha`:
 
 - :class:`~yancc.velocity_grids.UniformPitchAngleGrid` spaces points uniformly
-  in :math:`a`. This is the simplest choice and a good default.
+  in :math:`\alpha`. This is the simplest choice and a good default.
 - :class:`~yancc.velocity_grids.QuadraticPitchAngleGrid` packs points more
-  densely near :math:`v_\parallel = 0` (:math:`a = \pi/2`), where the sharp
+  densely near :math:`v_\parallel = 0` (:math:`\alpha = \pi/2`), where the sharp
   trapped/passing boundary layers form at low collisionality. It can resolve
   those layers with fewer total points than a uniform grid, so it is often the
   better choice when :math:`\nu^* \to 0`. It takes a second argument ``c`` in
@@ -66,10 +66,10 @@ of how those points are *distributed* in :math:`a`:
   uniform spacing and ``c=1`` is maximal packing near :math:`v_\parallel = 0`;
   ``c = 0.5`` to ``0.8`` works well at low collisionality.
 - :class:`~yancc.velocity_grids.NonUniformPitchAngleGrid` is the general base
-  class: pass it your own smooth, odd, monotonic mapping function to place
+  class: pass it your own smooth, monotonic mapping function to place
   nodes wherever your problem needs resolution.
 
-All three accept ``na`` the same way and are interchangeable as the
+All three accept ``nalpha`` the same way and are interchangeable as the
 ``pitchgrid`` argument to :func:`~yancc.solve.solve_dke` and
 :func:`~yancc.solve.solve_mdke`, so you can swap grids without changing the
 rest of a convergence study:
