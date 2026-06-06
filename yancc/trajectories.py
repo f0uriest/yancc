@@ -2014,9 +2014,7 @@ class DKE(lx.AbstractLinearOperator):
             # could just call C.diagonal() but we prefer to flatten those extra loops
             lambda x: x + self.operator_weights[4] * self._C.CL.diagonal(),
             lambda x: x + self.operator_weights[5] * self._C.CE.diagonal(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.CD.diagonal(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.CG.diagonal(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.CH.diagonal(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.diagonal(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
@@ -2054,15 +2052,7 @@ class DKE(lx.AbstractLinearOperator):
             # could just call C.diagonal() but we prefer to flatten those extra loops
             lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal(fmt, bw),
             lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal(fmt, bw),
-            lambda x: (
-                x + self.operator_weights[6] * self._C.CF.CD.block_diagonal(fmt, bw)
-            ),
-            lambda x: (
-                x + self.operator_weights[6] * self._C.CF.CG.block_diagonal(fmt, bw)
-            ),
-            lambda x: (
-                x + self.operator_weights[6] * self._C.CF.CH.block_diagonal(fmt, bw)
-            ),
+            lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal(fmt, bw),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
@@ -2088,9 +2078,7 @@ class DKE(lx.AbstractLinearOperator):
             # could just call C.diagonal() but we prefer to flatten those extra loops
             lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal2(),
             lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal2(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.CD.block_diagonal2(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.CG.block_diagonal2(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.CH.block_diagonal2(),
+            lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal2(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 
