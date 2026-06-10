@@ -130,7 +130,7 @@ OPTIMAL_SMOOTHING_COEFFS_4D = {
     "2d": {
         "z": jnp.array([0.3503, 0.7894, 0.6710, 0.8939, 0.7280, 0.6392, 0.5938]),
         "t": jnp.array([0.6291, 0.5176, 0.5524, 0.5782, 0.6513, 0.6728, 0.5910]),
-        "a": jnp.array([0.5874, 0.5275, 0.5701, 0.5591, 0.8001, 0.6630, 0.0100]),
+        "a": jnp.array([0.8500, 0.8500, 0.8700, 0.9000, 0.9000, 0.7000, 0.5000]),
         "x": jnp.array([0.5641, 0.5275, 0.5330, 0.5623, 0.6604, 0.6867, 0.5982]),
         "s": jnp.array([0.5797, 0.5254, 0.5435, 0.5641, 0.6617, 0.6698, 0.5938]),
     }
@@ -286,8 +286,10 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 self.bandwidth,
                 self.bandwidth,
                 mats,
-                equilibriate=True,
+                equilibrate=True,
                 pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                # unroll has little effect on CPU but ~2x faster on GPU
+                unroll=4,
             )
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -302,7 +304,12 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    self.bandwidth,
+                    self.bandwidth,
+                    self.mats,
+                    x,
+                    # unroll here has little effect on GPU but modest gain on CPU
+                    unroll=8,
                 )
             else:
                 size, N, M = self.mats.shape
@@ -442,9 +449,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         if operator_weights is None:
             # defaults, zero out krook diffusion term
             operator_weights = jnp.ones(8).at[-1].set(0)
-            if smooth_solver == "banded":
-                # also zero out field scattering to keep bandwidth small
-                operator_weights = operator_weights.at[-2].set(0)
 
         self.smooth_solver = smooth_solver
 
@@ -486,8 +490,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 self.bandwidth,
                 self.bandwidth,
                 mats,
-                equilibriate=True,
+                equilibrate=True,
                 pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                # unroll has little effect on CPU but ~2x faster on GPU
+                unroll=4,
             )
         else:
             self.mats = jnp.linalg.inv(mats)
@@ -509,7 +515,12 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
                 b = lu_solve_banded_periodic(
-                    self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    self.bandwidth,
+                    self.bandwidth,
+                    self.mats,
+                    x,
+                    # unroll here has little effect on GPU but modest gain on CPU
+                    unroll=8,
                 )
             else:
                 size, N, M = self.mats.shape
