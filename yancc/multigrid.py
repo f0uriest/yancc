@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
-from jaxtyping import Array, Int
+from jaxtyping import Array, Float, Int
 
 from .field import Field
 from .linalg import InverseLinearOperator, TransposedLinearOperator
@@ -922,6 +922,7 @@ def _multigrid_cycle_recursive(
     smooth_method,
     coarse_opinv,
     coarse_method,
+    coarse_weight,
     verbose,
 ):
     """Apply multigrid cycle for solving operator @ x = rhs
@@ -1031,12 +1032,15 @@ def _multigrid_cycle_recursive(
                 smooth_method=smooth_method,
                 coarse_opinv=coarse_opinv,
                 coarse_method=coarse_method,
+                coarse_weight=coarse_weight,
                 verbose=verbose,
             )
         with jax.named_scope(f"prolongation level={k}"):
             yk = prolongations[k - 1].mv(ykm1)
         with jax.named_scope(f"coarse_correction level={k}"):
-            x = coarse_correction(x, k, i, Ak, yk, rk, verbose=max(verbose - 1, 0))
+            x = coarse_correction(
+                x, k, i, Ak, yk, rk, coarse_weight, verbose=max(verbose - 1, 0)
+            )
 
         if verbose:
             rk = rhs - Ak.mv(x)
@@ -1073,9 +1077,14 @@ def _multigrid_cycle_recursive(
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
-def standard_coarse_correction(x, k, i, operator, yk, rk, verbose):
-    """Apply coarse grid correction with standard weighting."""
-    alpha = 1.0
+def standard_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose):
+    """Apply coarse grid correction with standard weighting.
+
+    ``coarse_weight`` is a fixed (linear) damping/over-relaxation scalar on the
+    prolonged coarse correction: 1.0 is the textbook correction, <1 under-relaxes
+    and >1 over-relaxes. Being a constant it keeps the preconditioner linear.
+    """
+    alpha = coarse_weight
     dx = alpha * yk
 
     if verbose:
@@ -1095,11 +1104,11 @@ def standard_coarse_correction(x, k, i, operator, yk, rk, verbose):
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
-def krylov1_coarse_correction(x, k, i, operator, yk, rk, verbose):
+def krylov1_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized over yk."""
     Ayk = operator.mv(yk)
     alpha = jnp.linalg.lstsq(Ayk[:, None], rk)[0][0]
-    dx = alpha * yk
+    dx = coarse_weight * alpha * yk
 
     if verbose:
         err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
@@ -1118,7 +1127,7 @@ def krylov1_coarse_correction(x, k, i, operator, yk, rk, verbose):
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
-def krylov1s_coarse_correction(x, k, i, operator, yk, rk, verbose):
+def krylov1s_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized
     over yk, Lyk.
     """
@@ -1129,7 +1138,7 @@ def krylov1s_coarse_correction(x, k, i, operator, yk, rk, verbose):
     dxs = jnp.array([yk, Lyk])
     Adxs = jax.vmap(operator.mv)(dxs)
     alpha = jnp.linalg.lstsq(Adxs.T, rk)[0]
-    dx = dxs.T @ alpha
+    dx = coarse_weight * (dxs.T @ alpha)
 
     if verbose:
         err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
@@ -1148,14 +1157,14 @@ def krylov1s_coarse_correction(x, k, i, operator, yk, rk, verbose):
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
-def krylov2_coarse_correction(x, k, i, operator, yk, rk, verbose):
+def krylov2_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized
     over yk, rk.
     """
     dxs = jnp.array([yk, rk])
     Adxs = jax.vmap(operator.mv)(dxs)
     alpha = jnp.linalg.lstsq(Adxs.T, rk)[0]
-    dx = dxs.T @ alpha
+    dx = coarse_weight * (dxs.T @ alpha)
 
     if verbose:
         err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
@@ -1174,7 +1183,7 @@ def krylov2_coarse_correction(x, k, i, operator, yk, rk, verbose):
 
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
-def krylov2s_coarse_correction(x, k, i, operator, yk, rk, verbose):
+def krylov2s_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose):
     """Apply coarse grid correction st coarse grid residual is minimized
     over yk, rk, Lyk, Lrk.
     """
@@ -1186,7 +1195,7 @@ def krylov2s_coarse_correction(x, k, i, operator, yk, rk, verbose):
     dxs = jnp.concatenate([dxs, Ldxs])
     Adxs = jax.vmap(operator.mv)(dxs)
     alpha = jnp.linalg.lstsq(Adxs.T, rk)[0]
-    dx = dxs.T @ alpha
+    dx = coarse_weight * (dxs.T @ alpha)
 
     if verbose:
         err = jnp.linalg.norm(dx) / jnp.linalg.norm(x)
@@ -1253,6 +1262,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
     smooth_method: str = eqx.field(static=True)
     coarse_opinv: lx.AbstractLinearOperator
     coarse_method: str = eqx.field(static=True)
+    coarse_weight: jax.Array
     verbose: int = eqx.field(static=True)
 
     def __init__(
@@ -1268,6 +1278,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         smooth_method: str = "standard",
         coarse_opinv: lx.AbstractLinearOperator | None = None,
         coarse_method: str = "standard",
+        coarse_weight: float | Float[Array, ""] = 1.0,
         verbose: bool | int = False,
     ):
         assert len(prolongations) == len(operators) - 1
@@ -1286,6 +1297,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
             coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
+        self.coarse_weight = jnp.asarray(coarse_weight)
         self.verbose = verbose
 
     @eqx.filter_jit
@@ -1307,6 +1319,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
             smooth_method=self.smooth_method,
             coarse_opinv=self.coarse_opinv,
             coarse_method=self.coarse_method,
+            coarse_weight=self.coarse_weight,
             verbose=self.verbose,
         )
         return x
@@ -1345,6 +1358,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
             self.smooth_method,
             opit,
             self.coarse_method,
+            self.coarse_weight,
             self.verbose,
         )
 

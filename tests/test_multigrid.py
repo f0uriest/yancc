@@ -183,7 +183,7 @@ def test_coarse_correction_reduces_error(
     # exact coarse solve of the restricted residual, prolong back to the fine grid
     ykm1 = jnp.linalg.solve(A_c.as_matrix(), R[0].mv(rk))
     yk = P[0].mv(ykm1)
-    x_new = correction(x, 1, 0, A_f, yk, rk, verbose=True)
+    x_new = correction(x, 1, 0, A_f, yk, rk, 1.0, verbose=True)
     err_before = float(jnp.linalg.norm(x - x_true))
     err_after = float(jnp.linalg.norm(x_new - x_true))
     assert err_after < err_before
