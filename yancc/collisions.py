@@ -228,7 +228,7 @@ class RosenbluthPotentials(eqx.Module):
     Hxlk: jax.Array
     dHxlk: jax.Array
 
-    def __init__(self, speedgrid, species, nL=4, quad=False):
+    def __init__(self, speedgrid, species, nL=8, quad=False):
         self.speedgrid = speedgrid
         self.species = species
         self.legendregrid = LegendrePitchAngleGrid(nL)
