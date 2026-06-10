@@ -174,6 +174,28 @@ class MDKETheta(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKETheta.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual stencil row sums (not assuming a circulant
+        operator), so it stays correct if the difference operator is
+        generalized to be node-dependent.
+        """
+        _, caxorder = _parse_axorder_shape_3d(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+        )
+        fd = jnp.abs(self._fd).sum(axis=1)[None, :, None]
+        bd = jnp.abs(self._bd).sum(axis=1)[None, :, None]
+        w = self._w
+        df = jnp.abs(w) * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nalpha // 2
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("MDKETheta.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
@@ -324,6 +346,28 @@ class MDKEZeta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
+    @jax.named_scope("MDKEZeta.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual stencil row sums (not assuming a circulant
+        operator), so it stays correct if the difference operator is
+        generalized to be node-dependent.
+        """
+        _, caxorder = _parse_axorder_shape_3d(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+        )
+        fd = jnp.abs(self._fd).sum(axis=1)[None, None, :]
+        bd = jnp.abs(self._bd).sum(axis=1)[None, None, :]
+        w = self._w
+        df = jnp.abs(w) * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nalpha // 2
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
@@ -484,6 +528,28 @@ class MDKEPitch(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitch.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual stencil row sums (not assuming a circulant
+        operator), so it stays correct if the difference operator is
+        generalized to be node-dependent.
+        """
+        _, caxorder = _parse_axorder_shape_3d(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+        )
+        fd = jnp.abs(self._fd).sum(axis=1)[:, None, None]
+        bd = jnp.abs(self._bd).sum(axis=1)[:, None, None]
+        w = self._w
+        df = jnp.abs(w) * ((w > 0) * bd + (w <= 0) * fd)
+        idx = self.pitchgrid.nalpha // 2
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("MDKEPitch.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
@@ -616,6 +682,24 @@ class MDKE(lx.AbstractLinearOperator):
         d1 = self._opt.diagonal()
         d2 = self._opz.diagonal()
         d3 = self._opp.diagonal()
+        return d0 + d1 + d2 + d3
+
+    @eqx.filter_jit
+    @jax.named_scope("MDKE.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """Upper bound on the L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Each operator's exact row L1 norm is summed.  This is *exact* where the
+        operators' sparsity patterns are disjoint -- the theta/zeta derivative
+        off-diagonals live at different strides and never overlap -- and an
+        *upper bound* (via the triangle inequality) where they share entries:
+        the main diagonal carried by every term, and the pitch coupling shared
+        between the pitch advection and pitch-angle-scattering operators.
+        """
+        d0 = self._opa.abs_row_sum()
+        d1 = self._opt.abs_row_sum()
+        d2 = self._opz.abs_row_sum()
+        d3 = self._opp.abs_row_sum()
         return d0 + d1 + d2 + d3
 
     @eqx.filter_jit
@@ -870,6 +954,36 @@ class DKETheta(lx.AbstractLinearOperator):
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
         gval = jnp.where(self.gauge, self._scale, df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
+    @jax.named_scope("DKETheta.abs_row_sum")
+    def abs_row_sum(self):
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual stencil row sums (not assuming a circulant
+        operator), so it stays correct if the difference operator is
+        generalized to be node-dependent.
+        """
+        _, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nalpha,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        fd = jnp.abs(self._fd).sum(axis=1)[None, None, None, :, None]
+        bd = jnp.abs(self._bd).sum(axis=1)[None, None, None, :, None]
+        w = self._w
+        df = jnp.abs(w) * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nalpha // 2
+        idxx = self.speedgrid.gauge_idx
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[:, idxx, idxa, 0, 0])
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
@@ -1176,6 +1290,36 @@ class DKEZeta(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKEZeta.abs_row_sum")
+    def abs_row_sum(self):
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual stencil row sums (not assuming a circulant
+        operator), so it stays correct if the difference operator is
+        generalized to be node-dependent.
+        """
+        _, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nalpha,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        fd = jnp.abs(self._fd).sum(axis=1)[None, None, None, None, :]
+        bd = jnp.abs(self._bd).sum(axis=1)[None, None, None, None, :]
+        w = self._w
+        df = jnp.abs(w) * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nalpha // 2
+        idxx = self.speedgrid.gauge_idx
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("DKEZeta.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
@@ -1474,6 +1618,36 @@ class DKEPitch(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKEPitch.abs_row_sum")
+    def abs_row_sum(self):
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual stencil row sums (not assuming a circulant
+        operator), so it stays correct if the difference operator is
+        generalized to be node-dependent.
+        """
+        _, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nalpha,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        fd = jnp.abs(self._fd).sum(axis=1)[None, None, :, None, None]
+        bd = jnp.abs(self._bd).sum(axis=1)[None, None, :, None, None]
+        w = self._w
+        df = jnp.abs(w) * ((w > 0) * bd + (w <= 0) * fd)
+        idxa = self.pitchgrid.nalpha // 2
+        idxx = self.speedgrid.gauge_idx
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("DKEPitch.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
@@ -1749,6 +1923,44 @@ class DKESpeed(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("DKESpeed.abs_row_sum")
+    def abs_row_sum(self):
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Computed from the actual (dense, pseudospectral) differentiation
+        matrix row sums rather than just the diagonal entry.
+        """
+        _, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nalpha,
+            self.speedgrid.nx,
+            len(self.species),
+            self.axorder,
+        )
+        w = sfincs_w_speed(
+            self.field,
+            self.pitchgrid,
+            self.Erho,
+            self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
+        )
+        df = jnp.abs(self.speedgrid.Dx_pseudospectral).sum(axis=1)[
+            None, :, None, None, None
+        ]
+        df = jnp.abs(w) * df
+        idxa = self.pitchgrid.nalpha // 2
+        idxx = self.speedgrid.gauge_idx
+        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
+            self.speedgrid.wx
+        )
+        gval = jnp.where(self.gauge, jnp.abs(scale), df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("DKESpeed.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
@@ -2015,6 +2227,38 @@ class DKE(lx.AbstractLinearOperator):
             lambda x: x + self.operator_weights[4] * self._C.CL.diagonal(),
             lambda x: x + self.operator_weights[5] * self._C.CE.diagonal(),
             lambda x: x + self.operator_weights[6] * self._C.CF.diagonal(),
+        ]
+        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
+
+    @eqx.filter_jit
+    @jax.named_scope("DKE.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """Upper bound on the L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        Each operator's exact row L1 norm is summed.  This is *exact* where the
+        operators' sparsity patterns are disjoint -- the theta/zeta derivative
+        off-diagonals live at different strides and never overlap -- and an
+        *upper bound* (via the triangle inequality) where they share entries:
+        the main diagonal carried by every term, and the speed/pitch couplings
+        shared between the advection operators and the collision operator.
+
+        The collision contribution is exact (CL/CE/CF combined before the
+        absolute value) and computed from a single velocity-space block, so this
+        works for any ``axorder``.
+        """
+        size = (
+            len(self.species)
+            * self.speedgrid.nx
+            * self.pitchgrid.nalpha
+            * self.field.ntheta
+            * self.field.nzeta
+        )
+        x = jnp.abs(self.operator_weights[-1]) * jnp.ones(size) + self._C.abs_row_sum()
+        intermediates = [
+            lambda x: x + jnp.abs(self.operator_weights[0]) * self._opx.abs_row_sum(),
+            lambda x: x + jnp.abs(self.operator_weights[1]) * self._opa.abs_row_sum(),
+            lambda x: x + jnp.abs(self.operator_weights[2]) * self._opt.abs_row_sum(),
+            lambda x: x + jnp.abs(self.operator_weights[3]) * self._opz.abs_row_sum(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
 

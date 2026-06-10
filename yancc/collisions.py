@@ -134,6 +134,27 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         return df.flatten()
 
     @eqx.filter_jit
+    @jax.named_scope("MDKEPitchAngleScattering.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        The operator is the diffusion stencil ``_D`` applied along the pitch
+        axis and identical at every (theta, zeta), so the row L1 norm is the
+        abs row sum of ``_D`` broadcast over the spatial grid.
+        """
+        _, caxorder = _parse_axorder_shape_3d(
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+        )
+        df = jnp.abs(self._D).sum(axis=1)[:, None, None]
+        df = jnp.broadcast_to(df, df.shape[:1] + (self.field.ntheta, self.field.nzeta))
+
+        idx = self.pitchgrid.nalpha // 2
+        gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, unique_indices=True)
+        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
+        return df.flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("MDKEPitchAngleScattering.block_diagonal")
     def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
@@ -2433,6 +2454,66 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
             lambda x: x + self.operator_weights[2] * self.CF.diagonal(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
+
+    @eqx.filter_jit
+    @jax.named_scope("FokkerPlanckLandau.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+
+        The collision operator is local in (theta, zeta) and its velocity-space
+        block is identical at every spatial point, so the row L1 norm depends
+        only on the (species, speed, pitch) coordinates.  We build that single
+        ``(ns*nx*na, ns*nx*na)`` block once, take its abs row sum, and broadcast
+        the result across the spatial grid (axorder-agnostic).  CL/CE/CF are
+        summed *before* taking absolute values so entries they share (e.g. CF
+        overlaps CL in pitch and CE in speed) are not double counted.
+
+        The gauge row (a single modified row per species, at one spatial point)
+        is not special-cased here; this uses the generic interior block, which
+        is exact when ``gauge`` is False.
+        """
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        na = self.pitchgrid.nalpha
+        w = self.operator_weights
+        eye_s = jnp.eye(ns)
+        eye_x = jnp.eye(nx)
+        eye_a = jnp.eye(na)
+
+        # CL: -nus/2 * D, diagonal in (species, speed), couples pitch
+        cl = jnp.einsum(
+            "su,xv,sx,ab->sxauvb", eye_s, eye_x, -self.CL.nus / 2, self.CL._D
+        )
+        # CE: -M, diagonal in (species, pitch), couples speed
+        ce = jnp.einsum("su,ab,syv->syauvb", eye_s, eye_a, -self.CE._M)
+        # CF: -(GH + CD); dense in (speed, pitch), couples species
+        gh = jnp.einsum(
+            "Al,psxlk,lB->psxAkB", self.CF.Txi, self.CF._GHhat, self.CF.Txi_inv
+        )
+        cd = jnp.einsum("psyx,ab->psyaxb", self.CF.C, eye_a)
+        # both land as (out_s, in_s, out_x, out_a, in_x, in_a); reorder to
+        # (out_s, out_x, out_a, in_s, in_x, in_a) to match CL/CE.
+        cf = jnp.transpose(-(gh + cd), (0, 2, 3, 1, 4, 5))
+
+        block = w[0] * cl + w[1] * ce + w[2] * cf
+        rsum = jnp.abs(block).sum(axis=(3, 4, 5))  # (ns, nx, na)
+
+        # broadcast the (theta, zeta)-independent velocity row sums onto the
+        # full grid and lay them out in the requested axorder.
+        _, caxorder = _parse_axorder_shape_4d(
+            self.field.ntheta,
+            self.field.nzeta,
+            self.pitchgrid.nalpha,
+            self.speedgrid.nx,
+            ns,
+            self.axorder,
+        )
+        df = jnp.broadcast_to(
+            rsum[:, :, :, None, None],
+            (ns, nx, na, self.field.ntheta, self.field.nzeta),
+        )
+        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+        return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.block_diagonal")
