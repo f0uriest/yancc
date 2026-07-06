@@ -3,6 +3,7 @@
 import copy
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -26,6 +27,20 @@ from .solution import DKESolution, MDKESolution
 from .species import Estar, LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+
+
+def _freeze_preconditioner(M):
+    """Detach a preconditioner from autodiff.
+
+    Krylov solvers use lax.custom_linear_solve so the preconditioner isn't in the AD
+    path but its construction happens in the traced region before solve so JAX computes
+    tangents/cotangents through those factorizations and then discards them at the
+    krylov boundary. stop_gradient on the array leaves makes that explicit, freeing AD
+    from building the (unused) factorization derivatives.
+    """
+    arrays, static = eqx.partition(M, eqx.is_inexact_array)
+    arrays = jax.lax.stop_gradient(arrays)
+    return eqx.combine(arrays, static)
 
 
 def _preconditioner_is_linear(M) -> bool:
@@ -127,6 +142,7 @@ def solve_mdke(
         verbose=verbose,
         **multigrid_options,
     )
+    M = _freeze_preconditioner(M)
     if verbose:
         M.print_resolution_summary()
     flexible = not _preconditioner_is_linear(M)
@@ -331,6 +347,7 @@ def solve_dke(  # noqa: C901
         multigrid_options.setdefault("verbose", verbose)
         multigrid_options.setdefault("coulomb_log", coulomb_log)
         M = DKEPreconditioner(**multigrid_options)
+    M = _freeze_preconditioner(M)
 
     if verbose and not skip_init_print:
         M.print_resolution_summary()
