@@ -26,9 +26,10 @@ by both :func:`~yancc.solve.solve_dke` and :func:`~yancc.solve.solve_mdke` (pass
 
 ``rtol`` *(float, default 1e-5)*
    Relative tolerance: convergence is reached when
-   :math:`\|r\| \le \max(\mathrm{rtol}\,\|b\|,\; \mathrm{atol})`. Loosen to
-   ``1e-4`` for transport moments where you don't need more digits;
-   tighten only when comparing against an analytic limit.
+   :math:`\|r\| \le \max(\mathrm{rtol}\,\|b\|,\; \mathrm{atol})`. Relative error in
+   output moments and fluxes is usually 1-2 orders of magnitude larger than ``rtol``.
+   Number of iterations is roughly linear in ``log(rtol)``, but can be much larger at
+   very low ``rtol``.
 
 ``atol`` *(float, default 0.0)*
    Absolute tolerance. Useful when the right-hand side norm is very small
@@ -57,10 +58,10 @@ by both :func:`~yancc.solve.solve_dke` and :func:`~yancc.solve.solve_mdke` (pass
 DKE-only options
 ----------------
 
-``nL`` *(int, default 4)*
+``nL`` *(int, default 8)*
    Number of Legendre modes used to expand the Rosenbluth potentials in the
-   field-particle collision operator. This very rarely needs to be increased, but the
-   cost to do so is negligible.
+   field-particle collision operator. In most cases 4 is sufficient, but the
+   cost of increasing is negligible so we use a default of 8.
 
 ``quad`` *(bool, default False)*
    Use quadrature to compute the Rosenbluth potential Green's functions, otherwise uses

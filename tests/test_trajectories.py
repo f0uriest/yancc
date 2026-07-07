@@ -16,7 +16,9 @@ from yancc.collisions import (
     MDKEPitchAngleScattering,
     PitchAngleScattering,
 )
+from yancc.finite_diff import build_advection_matrix, fd_kwargs
 from yancc.linalg import banded_to_dense
+from yancc.velocity_grids import QuadraticPitchAngleGrid
 
 
 def extract_blocks(a, m):
@@ -36,6 +38,34 @@ def test_scipy_operators(p1, p2, erhohat, nuhat, gauge, field, pitchgrid):
     A1 = trajectories_scipy.mdke(field, pitchgrid, erhohat, nuhat, p1, p2, gauge=gauge)
     A2 = trajectories.MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, "atz", gauge=gauge)
     np.testing.assert_allclose(A1.toarray(), A2.as_matrix())
+
+
+@pytest.mark.parametrize("p1", ["1a", "4d"])
+def test_pitch_operator_nonuniform(field, p1):
+    """Pitch advection operator uses coordinate-based stencils on a non-uniform grid.
+
+    The pitch grid coordinates ``a`` carry the non-uniform spacing, so the
+    operator must build its forward/backward matrices from ``pitchgrid.a`` with
+    symmetric BCs on [0, pi] (not the uniform ``h = pi/na`` assumption).
+    """
+    grid = QuadraticPitchAngleGrid(31, 0.6)
+    op = trajectories.MDKEPitch(field, grid, erhohat=0.0, p1=p1)
+
+    kwargs = fd_kwargs[p1]
+    fd = build_advection_matrix(
+        grid.alpha, direction="fwd", bc_type="symmetric", domain=(0, np.pi), **kwargs
+    )
+    bd = build_advection_matrix(
+        grid.alpha, direction="bwd", bc_type="symmetric", domain=(0, np.pi), **kwargs
+    )
+    np.testing.assert_allclose(op._fd, fd)
+    np.testing.assert_allclose(op._bd, bd)
+
+    # operator applies cleanly on the non-uniform grid
+    n = field.ntheta * field.nzeta * grid.nalpha
+    out = op.mv(jnp.ones(n))
+    assert out.shape == (n,)
+    assert jnp.all(jnp.isfinite(out))
 
 
 @pytest.mark.parametrize("gauge", [True, False])

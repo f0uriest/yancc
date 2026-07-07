@@ -19,9 +19,12 @@ Fields and Velocity Grids
     :toctree: _api/
     :recursive:
 
-    yancc.field.Field                             -- Magnetic field on a flux surface.
-    yancc.velocity_grids.MaxwellSpeedGrid         -- Collocation grid for speed coordinate based on Maxwell polynomials.
-    yancc.velocity_grids.UniformPitchAngleGrid    -- Finite difference grid with uniform spacing for pitch angle coordinate.
+    yancc.field.Field                              -- Magnetic field on a flux surface.
+    yancc.velocity_grids.MaxwellSpeedGrid          -- Collocation grid for speed coordinate based on Maxwell polynomials.
+    yancc.velocity_grids.AbstractPitchAngleGrid    -- Base class for pitch angle coordinate grids.
+    yancc.velocity_grids.UniformPitchAngleGrid     -- Finite difference grid with uniform spacing for pitch angle coordinate.
+    yancc.velocity_grids.NonUniformPitchAngleGrid  -- Finite difference grid with node spacing set by a custom mapping function.
+    yancc.velocity_grids.QuadraticPitchAngleGrid   -- Finite difference grid that packs nodes near v|| = 0 to resolve low-collisionality features.
 
 Species
 -------

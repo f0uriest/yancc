@@ -15,8 +15,9 @@ A yancc solve has four resolution parameters:
 - ``nx`` — collocation nodes in the speed coordinate :math:`x = v / v_{th}`.
   Set on :class:`~yancc.velocity_grids.MaxwellSpeedGrid`. Used by the full
   DKE only; the MDKE is monoenergetic and has no speed grid.
-- ``nalpha`` — points along the pitch-angle :math:`\alpha \in [0, \pi]`. Set
-  on :class:`~yancc.velocity_grids.UniformPitchAngleGrid`.
+- ``nalpha`` — points along the pitch-angle :math:`\alpha \in [0, \pi]`. Set on the
+  pitch-angle grid (:class:`~yancc.velocity_grids.UniformPitchAngleGrid` or a
+  non-uniform variant — see :ref:`choosing-a-pitch-angle-grid` below).
 - ``ntheta`` — points along the poloidal angle :math:`\theta \in [0, 2\pi]`
   on the flux surface. Set when constructing :class:`~yancc.field.Field`.
 - ``nzeta`` — points along the toroidal angle :math:`\zeta \in [0, 2\pi/NFP]`
@@ -45,6 +46,42 @@ What each grid actually resolves
   few points: ``nx = 5–8`` is the usual range and ``nx = 6`` is a sensible
   starting point. Larger values may be needed for multiple species at high
   collisionality.
+
+.. _choosing-a-pitch-angle-grid:
+
+Choosing a pitch-angle grid
+---------------------------
+
+``na`` is set on the pitch-angle grid object, and yancc offers a few choices
+of how those points are *distributed* in :math:`\alpha`:
+
+- :class:`~yancc.velocity_grids.UniformPitchAngleGrid` spaces points uniformly
+  in :math:`\alpha`. This is the simplest choice and a good default.
+- :class:`~yancc.velocity_grids.QuadraticPitchAngleGrid` packs points more
+  densely near :math:`v_\parallel = 0` (:math:`\alpha = \pi/2`), where the sharp
+  trapped/passing boundary layers form at low collisionality. It can resolve
+  those layers with fewer total points than a uniform grid, so it is often the
+  better choice when :math:`\nu^* \to 0`. It takes a second argument ``c`` in
+  :math:`[0, 1]` controlling how strongly nodes are packed: ``c=0`` recovers
+  uniform spacing and ``c=1`` is maximal packing near :math:`v_\parallel = 0`;
+  ``c = 0.5`` to ``0.8`` works well at low collisionality.
+- :class:`~yancc.velocity_grids.NonUniformPitchAngleGrid` is the general base
+  class: pass it your own smooth, monotonic mapping function to place
+  nodes wherever your problem needs resolution.
+
+All three accept ``nalpha`` the same way and are interchangeable as the
+``pitchgrid`` argument to :func:`~yancc.solve.solve_dke` and
+:func:`~yancc.solve.solve_mdke`, so you can swap grids without changing the
+rest of a convergence study:
+
+.. code-block:: python
+
+    from yancc.velocity_grids import QuadraticPitchAngleGrid
+
+    def D11(na):
+        pitchgrid = QuadraticPitchAngleGrid(na, c=0.6)
+        sol, _ = solve_mdke(field, pitchgrid, erhohat, nuhat)
+        return sol.get("Dij")[0, 0]
 
 Doing a convergence study
 -------------------------

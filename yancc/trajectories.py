@@ -16,7 +16,7 @@ from .collisions import (
     RosenbluthPotentials,
 )
 from .field import Field
-from .finite_diff import fd_coeffs, fdbwd, fdfwd
+from .finite_diff import build_advection_matrix, fd_coeffs, fd_kwargs
 from .linalg import (
     TransposedLinearOperator,
     banded_mm,
@@ -26,15 +26,32 @@ from .linalg import (
 from .species import LocalMaxwellian
 from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _refold
 from .velocity_grids import (
+    AbstractPitchAngleGrid,
     AbstractSpeedGrid,
     MaxwellSpeedGrid,
     MonoenergeticSpeedGrid,
-    UniformPitchAngleGrid,
 )
 
 
+def _advection_matrices(x, p, bc_type, domain):
+    """Forward/backward advection matrices for stencil id ``p``.
+
+    Builds the matrices from the actual node coordinates ``x`` (so non-uniform
+    spacing is handled correctly), reproducing the uniform stencil ``p`` via the
+    ``fd_kwargs`` lookup.
+    """
+    kwargs = fd_kwargs[p]
+    fd = build_advection_matrix(
+        x, direction="fwd", bc_type=bc_type, domain=domain, **kwargs
+    )
+    bd = build_advection_matrix(
+        x, direction="bwd", bc_type=bc_type, domain=domain, **kwargs
+    )
+    return fd, bd
+
+
 def dkes_w_theta(
-    field: Field, pitchgrid: UniformPitchAngleGrid, erhohat: Float[Array, ""]
+    field: Field, pitchgrid: AbstractPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in theta direction for MDKE."""
     w = (
@@ -45,7 +62,7 @@ def dkes_w_theta(
 
 
 def dkes_w_zeta(
-    field: Field, pitchgrid: UniformPitchAngleGrid, erhohat: Float[Array, ""]
+    field: Field, pitchgrid: AbstractPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in zeta direction for MDKE."""
     w = (
@@ -56,7 +73,7 @@ def dkes_w_zeta(
 
 
 def dkes_w_pitch(
-    field: Field, pitchgrid: UniformPitchAngleGrid
+    field: Field, pitchgrid: AbstractPitchAngleGrid
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in xi/pitch direction for MDKE."""
     sina = jnp.sqrt(1 - pitchgrid.xi**2)
@@ -76,7 +93,7 @@ class MDKETheta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -94,7 +111,7 @@ class MDKETheta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -103,12 +120,13 @@ class MDKETheta(lx.AbstractLinearOperator):
     _fd: Float[Array, "nt nt"]
     _bd: Float[Array, "nt nt"]
     _w: Float[Array, "na nt nz"]
+    _wpos: Bool[Array, "na nz nt"]
     _scale: Float[Array, ""]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -125,10 +143,12 @@ class MDKETheta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
-        f1 = jnp.ones(field.ntheta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.theta, p1, bc_type="periodic", domain=(0, 2 * np.pi)
+        )
         self._w = dkes_w_theta(field, pitchgrid, self.erhohat)
+        # upwind sign mask, stored in the convolved-axis-last layout used in mv
+        self._wpos = jnp.moveaxis(self._w > 0, 1, -1)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
     @eqx.filter_jit
@@ -143,20 +163,13 @@ class MDKETheta(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
         f1 = jnp.moveaxis(f, 1, -1)  # (na, nz, nt) - convolved axis last
-        fd_f = jnp.moveaxis(f1 @ self._fd.T, -1, 1)
-        bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 1)
-        w = self._w
-        df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
+        # upwind: pick backward/forward difference per node by sign of w, then
+        # move the convolved axis back into place (single transpose).
+        sel = jnp.where(self._wpos, f1 @ self._bd.T, f1 @ self._fd.T)
+        df = self._w * jnp.moveaxis(sel, -1, 1)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0].set(
-                self._scale * f[idx, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
-        )
+        gval = jnp.where(self.gauge, self._scale * f[idx, 0, 0], df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -172,13 +185,8 @@ class MDKETheta(lx.AbstractLinearOperator):
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0].set(
-                self._scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
-        )
+        gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -201,14 +209,10 @@ class MDKETheta(lx.AbstractLinearOperator):
         w = self._w[:, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idx, 0, 0, 0]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
+        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
+        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
+        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, 0])
+        df = df.at[idx, 0, 0, 0].set(g1, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
         return df
@@ -244,7 +248,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -262,7 +266,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -271,12 +275,13 @@ class MDKEZeta(lx.AbstractLinearOperator):
     _fd: Float[Array, "nz nz"]
     _bd: Float[Array, "nz nz"]
     _w: Float[Array, "na nt nz"]
+    _wpos: Bool[Array, "na nt nz"]
     _scale: Float[Array, ""]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -291,15 +296,17 @@ class MDKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        f1 = jnp.ones(field.nzeta)
         if field.nzeta > 1:
             assert field.nzeta > fd_coeffs[1][p1].size // 2
             assert field.nzeta > fd_coeffs[2][p2].size // 2
-            self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-            self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
         else:  # axisymmetric (tokamak): d/dzeta == 0
             self._fd = self._bd = jnp.zeros((1, 1))
         self._w = dkes_w_zeta(field, pitchgrid, self.erhohat)
+        # upwind sign mask; zeta is already the last (convolved) axis
+        self._wpos = self._w > 0
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
     @eqx.filter_jit
@@ -313,21 +320,11 @@ class MDKEZeta(lx.AbstractLinearOperator):
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
-        # convolved (zeta) axis is already last
-        fd_f = f @ self._fd.T
-        bd_f = f @ self._bd.T
-        w = self._w
-        df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
+        # convolved (zeta) axis already last; upwind by sign of w per node
+        df = self._w * jnp.where(self._wpos, f @ self._bd.T, f @ self._fd.T)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0].set(
-                self._scale * f[idx, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
-        )
+        gval = jnp.where(self.gauge, self._scale * f[idx, 0, 0], df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -343,13 +340,8 @@ class MDKEZeta(lx.AbstractLinearOperator):
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0].set(
-                self._scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
-        )
+        gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -372,14 +364,10 @@ class MDKEZeta(lx.AbstractLinearOperator):
         w = self._w[:, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idx, 0, 0, 0]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
+        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
+        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
+        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, 0])
+        df = df.at[idx, 0, 0, 0].set(g1, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
         return df
@@ -415,7 +403,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -433,7 +421,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -442,12 +430,13 @@ class MDKEPitch(lx.AbstractLinearOperator):
     _fd: Float[Array, "na na"]
     _bd: Float[Array, "na na"]
     _w: Float[Array, "na nt nz"]
+    _wpos: Bool[Array, "nt nz na"]
     _scale: Float[Array, ""]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -464,10 +453,12 @@ class MDKEPitch(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.nalpha
-        f1 = jnp.ones(pitchgrid.nalpha)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="symmetric")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
+        self._fd, self._bd = _advection_matrices(
+            pitchgrid.alpha, p1, bc_type="symmetric", domain=(0, np.pi)
+        )
         self._w = dkes_w_pitch(field, pitchgrid)
+        # upwind sign mask, stored in the convolved-axis-last layout used in mv
+        self._wpos = jnp.moveaxis(self._w > 0, 0, -1)
         self._scale = jnp.mean(jnp.abs(self._w)) / h
 
     @eqx.filter_jit
@@ -482,20 +473,13 @@ class MDKEPitch(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
         f1 = jnp.moveaxis(f, 0, -1)  # (nt, nz, na) - convolved axis last
-        fd_f = jnp.moveaxis(f1 @ self._fd.T, -1, 0)
-        bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 0)
-        w = self._w
-        df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
+        # upwind: pick backward/forward difference per node by sign of w, then
+        # move the convolved axis back into place (single transpose).
+        sel = jnp.where(self._wpos, f1 @ self._bd.T, f1 @ self._fd.T)
+        df = self._w * jnp.moveaxis(sel, -1, 0)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0].set(
-                self._scale * f[idx, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
-        )
+        gval = jnp.where(self.gauge, self._scale * f[idx, 0, 0], df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
@@ -511,13 +495,8 @@ class MDKEPitch(lx.AbstractLinearOperator):
         w = self._w
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0].set(
-                self._scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
-        )
+        gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
+        df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
@@ -538,14 +517,10 @@ class MDKEPitch(lx.AbstractLinearOperator):
         w = self._w[:, :, :, None]
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idx = self.pitchgrid.nalpha // 2
-        df = jnp.where(
-            self.gauge,
-            df.at[idx, 0, 0, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idx, 0, 0, idx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
+        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
+        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
+        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, idx])
+        df = df.at[idx, 0, 0, idx].set(g1, indices_are_sorted=True, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
         return df
@@ -581,7 +556,7 @@ class MDKE(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -599,7 +574,7 @@ class MDKE(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     erhohat: Float[Array, ""]
     nuhat: Float[Array, ""]
@@ -615,7 +590,7 @@ class MDKE(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -717,7 +692,7 @@ def _(operator):
 
 def sfincs_w_theta(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -734,7 +709,7 @@ def sfincs_w_theta(
 
 def sfincs_w_zeta(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -751,7 +726,7 @@ def sfincs_w_zeta(
 
 def sfincs_w_pitch(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -768,7 +743,7 @@ def sfincs_w_pitch(
 
 def sfincs_w_speed(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     x: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -786,7 +761,7 @@ class DKETheta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -806,7 +781,7 @@ class DKETheta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -818,12 +793,13 @@ class DKETheta(lx.AbstractLinearOperator):
     _fd: Float[Array, "nt nt"]
     _bd: Float[Array, "nt nt"]
     _w: Float[Array, "ns nx na nt nz"]
+    _wpos: Bool[Array, "ns nx na nz nt"]
     _scale: Float[Array, "ns nidx"]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -845,14 +821,16 @@ class DKETheta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
-        f1 = jnp.ones(field.ntheta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.theta, p1, bc_type="periodic", domain=(0, 2 * np.pi)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_theta(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
         )
         self._w = w
+        # upwind sign mask, stored in the convolved-axis-last layout used in mv
+        self._wpos = jnp.moveaxis(w > 0, 3, -1)
         idxx = speedgrid.gauge_idx
         self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
@@ -873,20 +851,19 @@ class DKETheta(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
         f1 = jnp.moveaxis(f, 3, -1)  # (ns, nx, na, nz, nt) - convolved axis last
-        fd_f = jnp.moveaxis(f1 @ self._fd.T, -1, 3)
-        bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 3)
-        w = self._w
-        df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
+        # upwind: pick backward/forward difference per node by sign of w, then
+        # move the convolved axis back into place (single transpose).
+        sel = jnp.where(self._wpos, f1 @ self._bd.T, f1 @ self._fd.T)
+        df = self._w * jnp.moveaxis(sel, -1, 3)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        df = jnp.where(
+        gval = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                self._scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
+            self._scale * f[:, idxx, idxa, 0, 0],
+            df[:, idxx, idxa, 0, 0],
+        )
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
@@ -909,12 +886,9 @@ class DKETheta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                self._scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
+        gval = jnp.where(self.gauge, self._scale, df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
@@ -976,12 +950,13 @@ class DKETheta(lx.AbstractLinearOperator):
         idxa_mesh = idxa[:, None]
         bands_mesh = bands[None, :]
         cols_mesh = cols[None, :]
-        df = jnp.where(
+        gval = jnp.where(
             self.gauge,
-            df.at[:, idxx_mesh, idxa_mesh, 0, bands_mesh, cols_mesh].set(
-                vals, unique_indices=True
-            ),
-            df,
+            vals,
+            df[:, idxx_mesh, idxa_mesh, 0, bands_mesh, cols_mesh],
+        )
+        df = df.at[:, idxx_mesh, idxa_mesh, 0, bands_mesh, cols_mesh].set(
+            gval, unique_indices=True
         )
         df = jnp.moveaxis(df, 4, 3)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
@@ -1085,7 +1060,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1105,7 +1080,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1117,12 +1092,13 @@ class DKEZeta(lx.AbstractLinearOperator):
     _fd: Float[Array, "nz nz"]
     _bd: Float[Array, "nz nz"]
     _w: Float[Array, "ns nx na nt nz"]
+    _wpos: Bool[Array, "ns nx na nt nz"]
     _scale: Float[Array, "ns nidx"]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1142,12 +1118,12 @@ class DKEZeta(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        f1 = jnp.ones(field.nzeta)
         if field.nzeta > 1:
             assert field.nzeta > fd_coeffs[1][p1].size // 2
             assert field.nzeta > fd_coeffs[2][p2].size // 2
-            self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-            self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
         else:  # axisymmetric (tokamak): d/dzeta == 0
             self._fd = self._bd = jnp.zeros((1, 1))
         vth = jnp.array([s.v_thermal for s in species])
@@ -1155,6 +1131,8 @@ class DKEZeta(lx.AbstractLinearOperator):
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
         )
         self._w = w
+        # upwind sign mask; zeta is already the last (convolved) axis
+        self._wpos = w > 0
         idxx = speedgrid.gauge_idx
         self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
@@ -1174,21 +1152,17 @@ class DKEZeta(lx.AbstractLinearOperator):
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
-        # convolved (zeta) axis already last
-        fd_f = f @ self._fd.T
-        bd_f = f @ self._bd.T
-        w = self._w
-        df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
+        # convolved (zeta) axis already last; upwind by sign of w per node
+        df = self._w * jnp.where(self._wpos, f @ self._bd.T, f @ self._fd.T)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        df = jnp.where(
+        gval = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                self._scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
+            self._scale * f[:, idxx, idxa, 0, 0],
+            df[:, idxx, idxa, 0, 0],
+        )
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
@@ -1211,12 +1185,9 @@ class DKEZeta(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                self._scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
+        gval = jnp.where(self.gauge, self._scale, df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
@@ -1278,12 +1249,13 @@ class DKEZeta(lx.AbstractLinearOperator):
         idxa_mesh = idxa[:, None]
         bands_mesh = bands[None, :]
         cols_mesh = cols[None, :]
-        df = jnp.where(
+        gval = jnp.where(
             self.gauge,
-            df.at[:, idxx_mesh, idxa_mesh, 0, bands_mesh, cols_mesh].set(
-                vals, unique_indices=True
-            ),
-            df,
+            vals,
+            df[:, idxx_mesh, idxa_mesh, 0, bands_mesh, cols_mesh],
+        )
+        df = df.at[:, idxx_mesh, idxa_mesh, 0, bands_mesh, cols_mesh].set(
+            gval, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, 2 * bw + 1, self.field.nzeta))
@@ -1386,7 +1358,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1406,7 +1378,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1418,12 +1390,13 @@ class DKEPitch(lx.AbstractLinearOperator):
     _fd: Float[Array, "na na"]
     _bd: Float[Array, "na na"]
     _w: Float[Array, "ns nx na nt nz"]
+    _wpos: Bool[Array, "ns nx nt nz na"]
     _scale: Float[Array, "ns nidx"]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1445,14 +1418,16 @@ class DKEPitch(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.nalpha
-        f1 = jnp.ones(pitchgrid.nalpha)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="symmetric")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
+        self._fd, self._bd = _advection_matrices(
+            pitchgrid.alpha, p1, bc_type="symmetric", domain=(0, np.pi)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_pitch(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
         )
         self._w = w
+        # upwind sign mask, stored in the convolved-axis-last layout used in mv
+        self._wpos = jnp.moveaxis(w > 0, 2, -1)
         idxx = speedgrid.gauge_idx
         self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / h
 
@@ -1473,20 +1448,19 @@ class DKEPitch(lx.AbstractLinearOperator):
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
         f1 = jnp.moveaxis(f, 2, -1)  # (ns, nx, nt, nz, na) - convolved axis last
-        fd_f = jnp.moveaxis(f1 @ self._fd.T, -1, 2)
-        bd_f = jnp.moveaxis(f1 @ self._bd.T, -1, 2)
-        w = self._w
-        df = w * ((w > 0) * bd_f + (w <= 0) * fd_f)
+        # upwind: pick backward/forward difference per node by sign of w, then
+        # move the convolved axis back into place (single transpose).
+        sel = jnp.where(self._wpos, f1 @ self._bd.T, f1 @ self._fd.T)
+        df = self._w * jnp.moveaxis(sel, -1, 2)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        df = jnp.where(
+        gval = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                self._scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
+            self._scale * f[:, idxx, idxa, 0, 0],
+            df[:, idxx, idxa, 0, 0],
+        )
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
@@ -1509,12 +1483,9 @@ class DKEPitch(lx.AbstractLinearOperator):
         df = w * ((w > 0) * bd + (w <= 0) * fd)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                self._scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
+        gval = jnp.where(self.gauge, self._scale, df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
@@ -1574,11 +1545,8 @@ class DKEPitch(lx.AbstractLinearOperator):
         vals = self._scale[:, :, None] * basis[None, None, :]
         idxx_mesh = idxx[:, None]
         bands_mesh = bands[None, :]
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx_mesh, 0, 0, bands_mesh, cols].set(vals, unique_indices=True),
-            df,
-        )
+        gval = jnp.where(self.gauge, vals, df[:, idxx_mesh, 0, 0, bands_mesh, cols])
+        df = df.at[:, idxx_mesh, 0, 0, bands_mesh, cols].set(gval, unique_indices=True)
         df = jnp.moveaxis(df, 4, 2)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
@@ -1681,7 +1649,7 @@ class DKESpeed(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1694,17 +1662,19 @@ class DKESpeed(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
+    _w: Float[Array, "ns nx na nt nz"]
+    _scale: Float[Array, "ns nidx"]
 
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1719,6 +1689,18 @@ class DKESpeed(lx.AbstractLinearOperator):
         self.Erho = jnp.array(Erho)
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
+        # wind and gauge scale are independent of the vector; precompute once
+        w = sfincs_w_speed(
+            field,
+            pitchgrid,
+            self.Erho,
+            speedgrid.x[None, :] * jnp.ones(len(species))[:, None],
+        )
+        self._w = w
+        idxx = speedgrid.gauge_idx
+        self._scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
+            speedgrid.wx
+        )
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.mv")
@@ -1736,27 +1718,17 @@ class DKESpeed(lx.AbstractLinearOperator):
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
-        w = sfincs_w_speed(
-            self.field,
-            self.pitchgrid,
-            self.Erho,
-            self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
-        )
         df = jnp.einsum("yx,sxatz->syatz", self.speedgrid.Dx_pseudospectral, f)
-        df = w * df
+        df = self._w * df
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
-        scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
-            self.speedgrid.wx
-        )
-        df = jnp.where(
+        gval = jnp.where(
             self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                scale * f[:, idxx, idxa, 0, 0],
-                indices_are_sorted=True,
-                unique_indices=True,
-            ),
-            df,
+            self._scale * f[:, idxx, idxa, 0, 0],
+            df[:, idxx, idxa, 0, 0],
+        )
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
@@ -1786,12 +1758,9 @@ class DKESpeed(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
             self.speedgrid.wx
         )
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0].set(
-                scale, indices_are_sorted=True, unique_indices=True
-            ),
-            df,
+        gval = jnp.where(self.gauge, scale, df[:, idxx, idxa, 0, 0])
+        df = df.at[:, idxx, idxa, 0, 0].set(
+            gval, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
@@ -1848,13 +1817,13 @@ class DKESpeed(lx.AbstractLinearOperator):
         scale = jnp.mean(jnp.abs(w), axis=(2, 3, 4))[:, idxx] / jnp.mean(
             self.speedgrid.wx
         )
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[:, idxx, idxa, 0, 0, idxx]
-            .set(scale, indices_are_sorted=True, unique_indices=True),
-            df,
+        g0 = jnp.where(self.gauge, 0.0, df[:, idxx, idxa, 0, 0, :])
+        df = df.at[:, idxx, idxa, 0, 0, :].set(
+            g0, indices_are_sorted=True, unique_indices=True
+        )
+        g1 = jnp.where(self.gauge, scale, df[:, idxx, idxa, 0, 0, idxx])
+        df = df.at[:, idxx, idxa, 0, 0, idxx].set(
+            g1, indices_are_sorted=True, unique_indices=True
         )
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         df = df.reshape((-1, self.speedgrid.nx, self.speedgrid.nx))
@@ -1922,7 +1891,7 @@ class DKE(lx.AbstractLinearOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
@@ -1944,7 +1913,7 @@ class DKE(lx.AbstractLinearOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1964,7 +1933,7 @@ class DKE(lx.AbstractLinearOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
