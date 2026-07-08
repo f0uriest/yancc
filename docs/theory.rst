@@ -119,7 +119,7 @@ Where the particle trajectories are given by:
 .. math::
     :label: sfincs_trajectories
 
-    \begin{align}
+    \begin{aligned}
     \dot{\theta} &= -\frac{v_{th,s} x_s \cos{(\alpha)} B^\theta}{B} + \frac{B_\zeta}{B^2\sqrt{g}}E_\rho \\
     \dot{\zeta} &= -\frac{v_{th,s} x_s \cos{(\alpha)} B^\zeta}{B} - \frac{B_\theta}{B^2\sqrt{g}}E_\rho \\
     \dot{\alpha} &= - \frac{\sin{(\alpha)}}{2 B^2} v_{th,s} x_s \Bigg( B^\theta \frac{\partial B}{\partial \theta}
@@ -127,32 +127,32 @@ Where the particle trajectories are given by:
     + \cos{(\alpha)} \sin{(\alpha)} \frac{1}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta}
     - B_\theta \frac{\partial B}{\partial \zeta} \Bigg) \\
     \dot{x}_s &= (1 + \cos^2{\alpha}) \frac{x_s}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta} - B_\theta \frac{\partial B}{\partial \zeta} \Bigg)
-    \end{align}
+    \end{aligned}
 
 And the collision operator terms are:
 
 .. math::
     :label: fp_collision_operator
 
-    \begin{align}
+    \begin{aligned}
     C_{L,ss'} &= \frac{\nu_{D,ss'}}{2 \sin \alpha} \frac{\partial}{\partial \alpha} \Bigg[\sin{\alpha} \frac{\partial f_{1,s}}{\partial \alpha}\Bigg] \\
     C_{E,ss'} &= \nu_{||,ss'}\Big[ \frac{v^2}{2} \frac{\partial^2 f_{1,s}}{\partial v^2} - \frac{v^2}{v_{th,s'}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) v \frac{\partial f_{1,s}}{\partial v}\Big] + \nu_{D,ss'} v \frac{\partial f_{1,s}}{\partial v} + 4\pi \Gamma_{ss'}\frac{m_s}{m_s'} F_{M,s'} f_{1,s} \\
     C_{F,ss'} &= \Gamma_{ss'} F_{M,s} \Big[\frac{2v^2}{v_{th,s}^4} \frac{\partial^2 G_{s'}}{\partial v^2} - \frac{2v}{v_{th,s}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) \frac{\partial H_{s'}}{\partial v} - \frac{2}{v_{th,s}^2} H_{s'} + 4\pi \frac{m_s}{m_{s'}} f_{1,s'} \Big] \\
     \nabla^2_v H_{s'} &= -4 \pi f_{s'} \\
     \nabla^2_v G_{s'} &= 2 H_{s'} \\
-    \end{align}
+    \end{aligned}
 
 The collision frequencies are given by:
 
 .. math::
     :label: collisionalities
 
-    \begin{align}
+    \begin{aligned}
     \nu_{D,ss'} &= \frac{\Gamma_{ss'} n_{s'}}{v^3} [\mathrm{erf}(v/v_{th,s'}) - \Psi(v/v_{th,s'})] \\
     \nu_{||,ss'} &= 2 \frac{\Gamma_{ss'} n_{s'}}{v^3} \Psi(v/v_{th,s'}) \\
     \Gamma_{ss'} &= \frac{4\pi q_s^2 q_{s'}^2 \ln \Lambda_{ss'}}{(4\pi \epsilon_0)^2 m_s^2} \\
     \Psi(x) &= \frac{1}{2x^2}\Big[\mathrm{erf}(x) - \frac{2x}{\sqrt{\pi}} \exp(-x^2) \Big]
-    \end{align}
+    \end{aligned}
 
 where :math:`\ln \Lambda_{ss'}` is the Coulomb logarithm.
 

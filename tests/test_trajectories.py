@@ -15,8 +15,10 @@ from yancc.collisions import (
     FokkerPlanckLandau,
     MDKEPitchAngleScattering,
     PitchAngleScattering,
+    RosenbluthPotentials,
 )
 from yancc.linalg import banded_to_dense
+from yancc.species import Electron, Estar, GlobalMaxwellian, Hydrogen, nustar
 
 
 def extract_blocks(a, m):
@@ -420,6 +422,106 @@ def test_diagonals_dke_full(
     np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
+def _species_at_density(n0):
+    """Two-species (H, e) set with peak density ``n0`` [m^-3]."""
+    return [
+        GlobalMaxwellian(
+            Hydrogen,
+            lambda x: 6.60e4 * (1 - x**2),
+            lambda x, n0=n0: n0 * (1 - x**4),
+        ).localize(0.5),
+        GlobalMaxwellian(
+            Electron,
+            lambda x: 2.00e4 * (1 - x**2),
+            lambda x, n0=n0: n0 * (1 - x**4),
+        ).localize(0.5),
+    ]
+
+
+@pytest.mark.parametrize("axorder", ["sxatz", "tzasx", "atzsx"])
+@pytest.mark.parametrize("op_attr", ["_opx", "_opa", "_opt", "_opz"])
+def test_abs_row_sum_trajectory_exact(
+    op_attr, axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    """Each derivative operator's abs_row_sum matches |A| @ 1 exactly, any axorder."""
+    Erho = np.array(1e3)
+    dke = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        p1="2d",
+        p2=4,
+        axorder=axorder,
+    )
+    op = getattr(dke, op_attr)
+    A = np.asarray(op.as_matrix())
+    exact = np.abs(A).sum(axis=1)
+    np.testing.assert_allclose(op.abs_row_sum(), exact, rtol=1e-10, atol=1e-8)
+
+
+@pytest.mark.parametrize("axorder", ["sxatz", "tzasx", "atzsx", "xatzs"])
+def test_abs_row_sum_collision_exact(
+    axorder, field, pitchgrid, speedgrid, species2, potentials2
+):
+    """FokkerPlanckLandau.abs_row_sum matches |C| @ 1 exactly, for any axorder."""
+    C = FokkerPlanckLandau(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        [],
+        potentials2,
+        4,
+        axorder,
+        operator_weights=jnp.array([1.0, 2.0, 3.0]),
+    )
+    A = np.asarray(C.as_matrix())
+    exact = np.abs(A).sum(axis=1)
+    np.testing.assert_allclose(C.abs_row_sum(), exact, rtol=1e-9, atol=1e-7)
+
+
+# Span regimes where advection (~Erho) and collisions (~density) dominate in turn,
+# so the upper bound is exercised when terms are both balanced and lopsided.
+@pytest.mark.parametrize("axorder", ["sxatz", "tzasx"])
+@pytest.mark.parametrize("Erho", [1e1, 1e3, 1e5])
+@pytest.mark.parametrize("n0", [5e18, 5e20])
+def test_abs_row_sum_dke_upper_bound(Erho, n0, axorder, field, pitchgrid, speedgrid):
+    """DKE.abs_row_sum is a valid (and reasonably tight) upper bound on |A| @ 1."""
+    species = _species_at_density(n0)
+    potentials = RosenbluthPotentials(speedgrid, species)
+    dke = trajectories.DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        np.array(Erho),
+        potentials=potentials,
+        p1="2d",
+        p2=4,
+        axorder=axorder,
+        operator_weights=jnp.linspace(1, 5, 8),
+    )
+    A = np.asarray(dke.as_matrix())
+    exact = np.abs(A).sum(axis=1)
+    ub = np.asarray(dke.abs_row_sum())
+
+    # it must actually be an upper bound (allow tiny fp slack)
+    np.testing.assert_array_less(exact * (1 - 1e-7), ub)
+
+    estars = [Estar(spec, field, Erho) for spec in species]
+    nustars = [nustar(spec, field) for spec in species]
+
+    ratio = ub / np.where(exact == 0, 1.0, exact)
+    print(
+        f"\n{axorder} E*={estars} nu*={nustars}  tightness: "
+        f"max {ratio.max():.3f}x, mean {ratio.mean():.3f}x  (N={exact.size})"
+    )
+    np.testing.assert_allclose(ratio, 1, atol=0.05)
+
+
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("p1", ["2d", "4d"])
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
@@ -540,6 +642,53 @@ def test_diagonals_mdke_full(gauge, axorder, field, pitchgrid):
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
+@pytest.mark.parametrize("op_attr", ["_opa", "_opt", "_opz", "_opp"])
+def test_abs_row_sum_mdke_op_exact(op_attr, axorder, gauge, field, pitchgrid):
+    """Each MDKE leaf operator's abs_row_sum matches |A| @ 1 exactly, any axorder."""
+    erhohat = np.array(1e3)
+    nuhat = np.array(1e-3)
+    mdke = trajectories.MDKE(
+        field, pitchgrid, erhohat, nuhat, p1="2d", p2=4, axorder=axorder, gauge=gauge
+    )
+    op = getattr(mdke, op_attr)
+    A = np.asarray(op.as_matrix())
+    exact = np.abs(A).sum(axis=1)
+    np.testing.assert_allclose(op.abs_row_sum(), exact, rtol=1e-10, atol=1e-8)
+
+
+@pytest.mark.parametrize("gauge", [True, False])
+@pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
+@pytest.mark.parametrize("erhohat", [0, 1e-3, 1e-1])
+@pytest.mark.parametrize("nuhat", [1e-5, 1e-3, 1e-1, 1e1])
+def test_abs_row_sum_mdke_upper_bound(erhohat, nuhat, axorder, gauge, field, pitchgrid):
+    """MDKE.abs_row_sum is a valid (and reasonably tight) upper bound on |A| @ 1."""
+    mdke = trajectories.MDKE(
+        field,
+        pitchgrid,
+        np.array(erhohat),
+        np.array(nuhat),
+        p1="2d",
+        p2=4,
+        axorder=axorder,
+        gauge=gauge,
+    )
+    A = np.asarray(mdke.as_matrix())
+    exact = np.abs(A).sum(axis=1)
+    ub = np.asarray(mdke.abs_row_sum())
+
+    # it must actually be an upper bound (allow tiny fp slack)
+    np.testing.assert_array_less(exact * (1 - 1e-7), ub)
+
+    ratio = ub / np.where(exact == 0, 1.0, exact)
+    print(
+        f"\n{axorder} erhohat={erhohat:.0e} nuhat={nuhat:.0e}  tightness: "
+        f"max {ratio.max():.3f}x, mean {ratio.mean():.3f}x  (N={exact.size})"
+    )
+    np.testing.assert_allclose(ratio, 1, atol=0.05)
 
 
 @pytest.mark.parametrize("gauge", [True, False])

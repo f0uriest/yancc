@@ -229,8 +229,45 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
     return x_final, h_final
 
 
+def _solution_increment(flexible, V, Z, y: Array, count, rpsolve, lv=0, outer_v=None):
+    """Reconstruct the solution-space increment ``Z y``.
+
+    Used both for the end-of-solve update in the gcrotmk/lgmres callers and for a
+    stabilization residual computed mid-Arnoldi inside ``_fgmres`` (so that the
+    residual corresponds to the update that would actually be applied). ``count``
+    is the number of completed Arnoldi steps (filled basis vectors).
+
+    ``outer_v``/``lv`` describe LGMRES-style augmentation vectors prepended to the
+    Krylov basis; pass ``outer_v=None`` (the gcrotmk case) when there is no
+    augmentation.
+    """
+    if flexible:
+        return tree_map(lambda x: _dot(x, y), Z)
+    # flexible=False: Z was never stored. Columns [0, lv) of the Krylov basis come
+    # from outer_v directly; column lv is the special v0 step rpsolve(V[:, 0]);
+    # columns (lv, count) are rpsolve(V[:, j]). By linearity of rpsolve the inner
+    # part folds into a single rpsolve call.
+    size = y.shape[0]
+    js = jnp.arange(size)
+    filled = js < count
+    v_basis_idx = jnp.where(js == lv, 0, js)
+    V_basis = tree_map(lambda x: x[..., v_basis_idx], V)
+    y_inner = jnp.where(filled & (js >= lv), y, jnp.zeros_like(y))
+    inner_part = rpsolve(tree_map(lambda x: _dot(x, y_inner), V_basis))
+    if outer_v is None:
+        return inner_part
+
+    lv_pad = tree_leaves(outer_v)[0].shape[-1]
+    js_pad = jnp.arange(lv_pad)
+    y_outer = jnp.where(
+        (js_pad < lv) & (js_pad < count), y[:lv_pad], jnp.zeros_like(y[:lv_pad])
+    )
+    outer_part = tree_map(lambda x: _dot(x, y_outer), outer_v)
+    return _add(outer_part, inner_part)
+
+
 @eqx.filter_jit
-def _fgmres(
+def _fgmres(  # noqa: C901
     matvec: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]],
     v0: PyTree[ArrayLike],
     m: int,
@@ -248,6 +285,7 @@ def _fgmres(
     print_every: ArrayLike = jnp.array(1),
     gs_method: str = "cgs2",
     flexible: bool = True,
+    stabilize_every: ArrayLike = jnp.array(10),
 ) -> tuple[
     Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
 ]:
@@ -288,6 +326,13 @@ def _fgmres(
         and the caller is responsible for reconstructing the update via
         ``rpsolve(V @ y)`` (plus any augmentation contributions). Saves
         ``O(N * (m+k))`` memory.
+    stabilize_every : int, jax.Array
+        Period for refreshing the residual norm with its genuine value. If > 0
+        (default 10), every ``stabilize_every`` Arnoldi steps recompute
+        ``||v0 - (I - C Cᴴ) L A R (Z y)||`` with one extra preconditioned mat-vec
+        and use it for the stopping test and the reported residual. The cheap
+        recursively-updated Givens residual can drift below the true residual once
+        the Hessenberg becomes ill-conditioned, causing a false early exit.
 
     Returns
     -------
@@ -311,6 +356,7 @@ def _fgmres(
     nmv = 0
     atol = jnp.asarray(atol)
     print_every = jnp.asarray(print_every)
+    stabilize_every = jnp.asarray(stabilize_every)
 
     if lpsolve is None:
         lpsolve = _identity
@@ -321,8 +367,8 @@ def _fgmres(
     if outer_v is None:
         assert lv is None, "if outer_v is None, lv must also be None"
         assert outer_Av is None, "if outer_v is None, outer_Av must also be None"
-        outer_v = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
-        outer_Av = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
+        outer_v = tree_map(lambda x: jnp.zeros((*x.shape, 1), dtype=x.dtype), v0)
+        outer_Av = tree_map(lambda x: jnp.zeros((*x.shape, 1), dtype=x.dtype), v0)
         lv = 0
 
     if lv is None:
@@ -336,7 +382,7 @@ def _fgmres(
 
     if C is None:
         assert lc is None, "if C is None, lc must also be None"
-        C = tree_map(lambda x: jnp.empty((*x.shape, 1), dtype=x.dtype), v0)
+        C = tree_map(lambda x: jnp.zeros((*x.shape, 1), dtype=x.dtype), v0)
         lc = 0
     else:
         C = tree_map(jnp.asarray, C)
@@ -430,6 +476,19 @@ def _fgmres(
         R = R.at[j, :].set(R_row)
         beta_vec = _rotate_vectors(beta_vec, j, *givens[j, :])
         res = abs(beta_vec[j + 1])
+
+        # Periodically replace the cheap recursive residual norm with the genuine one
+        def _true_res(res, nmv):
+            y_cur = jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
+            dx = _solution_increment(flexible, V, Z, y_cur, j + 1, rpsolve, lv, outer_v)
+            w, _ = _gram_schmidt(C, lpsolve(matvec(dx)), lc, gs_method)
+            return _norm(_sub(v0, w)), nmv + 1
+
+        do_stab = (stabilize_every > 0) & (
+            jnp.mod(j + 1, jnp.maximum(stabilize_every, 1)) == 0
+        )
+        res, nmv = lax.cond(do_stab, _true_res, lambda res, nmv: (res, nmv), res, nmv)
+
         res_arr = res_arr.at[j + 1].set(res)
 
         if verbose:
@@ -472,6 +531,7 @@ def gcrotmk(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
+    stabilize_every: ArrayLike = 10,
     throw: bool = False,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
@@ -529,6 +589,13 @@ def gcrotmk(
         nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
         ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
         cutting inner-iteration storage roughly in half.
+    stabilize_every : int, optional
+        Period for refreshing the inner-FGMRES residual norm with its genuine
+        value. Every ``stabilize_every`` Arnoldi steps the true residual is
+        recomputed (one extra mat-vec) and used for the inner stopping test,
+        guarding against the cheap Givens residual drifting below ``b - A x`` on
+        an ill-conditioned Hessenberg (a false early exit). The Krylov subspace is
+        untouched. Default: 10; set to 0 to disable.
     throw : bool, optional
         If True, raise an error if the solver does not converge. Default: False.
 
@@ -592,6 +659,7 @@ def gcrotmk(
             print_every_inner,
             refine,
             flexible,
+            stabilize_every,
         )
         if throw:
             xsol = eqx.error_if(xsol, ~success, "GCROT forward solve did not converge")
@@ -616,6 +684,7 @@ def gcrotmk(
             print_every_inner,
             refine,
             flexible,
+            stabilize_every,
         )
         if throw:
             xsol = eqx.error_if(xsol, ~success, "GCROT tangent solve did not converge")
@@ -702,6 +771,7 @@ def _gcrotmk_solve(
     print_every_inner,
     refine,
     flexible,
+    stabilize_every,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -751,6 +821,7 @@ def _gcrotmk_solve(
             verbose=verbose,
             print_every=print_every_inner,
             flexible=flexible,
+            stabilize_every=stabilize_every,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -762,18 +833,9 @@ def _gcrotmk_solve(
             jnp.maximum(eps, 0.25 * ptol_max_factor),
         )
 
-        # u := (Z - U B) y
-        if flexible:
-            Zy = tree_map(lambda x: _dot(x, y), Z)
-        else:
-            # gcrotmk passes no outer_v, so lv=0 inside _fgmres and
-            # Z[:, j] = M_R(V[:, j]) for every iteration that ran. V has
-            # j_inner+1 filled columns but only j_inner of them correspond to
-            # nonzero Z columns, so zero out y[j_inner:] before combining.
-            size = y.shape[0]
-            y_masked = jnp.where(jnp.arange(size) < j_inner, y, jnp.zeros_like(y))
-            Vy = tree_map(lambda x: _dot(x[..., :-1], y_masked), V)
-            Zy = rpsolve(Vy)
+        # u := (Z - U B) y. gcrotmk passes no outer_v, so lv=0 inside _fgmres and
+        # Z[:, j] = M_R(V[:, j]) for every iteration that ran.
+        Zy = _solution_increment(flexible, V, Z, y, j_inner, rpsolve)
         By = B @ y
         UBy = tree_map(lambda x: _dot(x, By), U)
         u = _sub(Zy, UBy)
@@ -857,6 +919,7 @@ def lgmres(
     print_every_inner: ArrayLike = jnp.array(1),
     refine: bool = True,
     flexible: bool = True,
+    stabilize_every: ArrayLike = 10,
     throw: bool = False,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
@@ -921,6 +984,13 @@ def lgmres(
         nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
         ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
         cutting inner-iteration storage roughly in half.
+    stabilize_every : int, optional
+        Period for refreshing the inner-FGMRES residual norm with its genuine
+        value. Every ``stabilize_every`` Arnoldi steps the true residual is
+        recomputed (one extra mat-vec) and used for the inner stopping test,
+        guarding against the cheap Givens residual drifting below ``b - A x`` on
+        an ill-conditioned Hessenberg (a false early exit). The Krylov subspace is
+        untouched. Default: 10; set to 0 to disable.
     throw : bool, optional
         If True, raise an error if the solver does not converge. Default: False.
 
@@ -995,6 +1065,7 @@ def lgmres(
             print_every_inner,
             refine,
             flexible,
+            stabilize_every,
         )
         if throw:
             xsol = eqx.error_if(xsol, ~success, "LGMRES forward solve did not converge")
@@ -1019,6 +1090,7 @@ def lgmres(
             print_every_inner,
             refine,
             flexible,
+            stabilize_every,
         )
         if throw:
             xsol = eqx.error_if(xsol, ~success, "LGMRES tangent solve did not converge")
@@ -1048,6 +1120,7 @@ def _lgmres_solve(
     print_every_inner,
     refine,
     flexible,
+    stabilize_every,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -1108,6 +1181,7 @@ def _lgmres_solve(
             verbose=verbose,
             print_every=print_every_inner,
             flexible=flexible,
+            stabilize_every=stabilize_every,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -1121,33 +1195,7 @@ def _lgmres_solve(
 
         # -- GMRES terminated: eval solution
         # dx = Z y
-        if flexible:
-            dx = tree_map(lambda x: _dot(x, y), Z)
-        else:
-            # Reconstruct dx = Z y without storing Z. Z columns at indices [0, lv)
-            # come from outer_v directly; column lv corresponds to M_R(V[:, 0])
-            # (the special v0 step in the Arnoldi loop); columns (lv, j_inner)
-            # come from M_R(V[:, j]); columns past j_inner are zero. By linearity
-            # of M_R the inner part folds into a single rpsolve call.
-            size = y.shape[0]
-            js = jnp.arange(size)
-            filled = js < j_inner
-            v_basis_idx = jnp.where(js == lv, 0, js)
-            V_basis = tree_map(lambda x: x[..., v_basis_idx], V)
-            y_inner = jnp.where(filled & (js >= lv), y, jnp.zeros_like(y))
-            inner_combo = tree_map(lambda x: _dot(x, y_inner), V_basis)
-            inner_part = rpsolve(inner_combo)
-
-            lv_pad = tree_leaves(outer_v)[0].shape[-1]
-            js_pad = jnp.arange(lv_pad)
-            y_outer = jnp.where(
-                (js_pad < lv) & (js_pad < j_inner),
-                y[:lv_pad],
-                jnp.zeros_like(y[:lv_pad]),
-            )
-            outer_part = tree_map(lambda x: _dot(x, y_outer), outer_v)
-
-            dx = _add(outer_part, inner_part)
+        dx = _solution_increment(flexible, V, Z, y, j_inner, rpsolve, lv, outer_v)
         # ax = V H y
         ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
 

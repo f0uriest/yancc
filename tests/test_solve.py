@@ -195,9 +195,11 @@ def test_solve_dke_ncsx_2species(idx):
     # dT/dr = -2.0 keV/m
     # full Fokker-Planck collision operator with full trajectories.
     # The collisionality was set using ln(Lambda) = 17.
-    nt = 15
-    nz = 31
-    na = 61
+    # NOTE: na/nt/nz are deliberately even here to regression-test that even
+    # angular/pitch resolutions are supported (odd is not required).
+    nt = 16
+    nz = 30
+    na = 62
     nx = 6
     field = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
     pitchgrid = UniformPitchAngleGrid(na)
@@ -242,7 +244,7 @@ def test_solve_dke_ncsx_2species(idx):
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
         coulomb_log=17,
-        verbose=3,
+        verbose=2,
         rtol=1e-5,
         multigrid_options={"max_grids": 3, "coarse_N": 2000},
     )
@@ -337,7 +339,7 @@ def test_solve_dke_ncsx_1species(idx):
         species,
         Erho=Er * field.a_minor * 1000,  # Er in kV/m
         coulomb_log=17,
-        verbose=3,
+        verbose=2,
         rtol=1e-5,
         multigrid_options={"max_grids": 3, "coarse_N": 2000},
     )
@@ -665,7 +667,9 @@ def test_solve_dke_tokamak_axisymmetric():
             Erho=0.0,
             operator_weights=operator_weights,
             rtol=1e-6,
-            multigrid_options={"max_grids": 3, "coarse_N": 2000},
+            # coarse_N > N_total for nzeta=1 tests 1 level case (direct solve, no mg)
+            multigrid_options={"max_grids": 3, "coarse_N": 3000},
+            verbose=2,
         )
         fluxes = np.array(
             [

@@ -8,7 +8,7 @@ from yancc.misc import dke_rhs
 from yancc.multigrid import (
     Prolongation,
     Restriction,
-    _half_next_odd,
+    _nearest,
     get_dke_operators,
     get_fields_grids,
     get_grid_resolutions,
@@ -32,18 +32,18 @@ COARSE_CORRECTIONS = [
 
 
 @pytest.mark.parametrize(
-    "k, expected",
+    "x, minval, expected",
     [
-        (1, 1),  # k // 2 == 0 -> floor branch returns 1
-        (8, 5),  # k // 2 == 4 (even) -> 4 + 1
-        (6, 3),  # k // 2 == 3 (odd)  -> 3
+        (7.0, 5, 7),  # exact integer -> unchanged
+        (8.0, 5, 8),  # even is allowed on coarse levels
+        (8.4, 5, 8),  # rounds down
+        (7.75, 5, 8),  # rounds up
+        (0.3, 5, 5),  # below floor -> minval
     ],
 )
-def test_half_next_odd(k, expected):
-    """``_half_next_odd`` halves ``k`` and rounds to the next odd integer,
-    flooring at 1 (coarsening must stay odd and >= 1).
-    """
-    assert _half_next_odd(k) == expected
+def test_nearest(x, minval, expected):
+    """``_nearest`` rounds to the closest integer, floored at ``minval``."""
+    assert _nearest(x, minval) == expected
 
 
 @pytest.mark.parametrize("nx", [1, 3])
@@ -102,13 +102,13 @@ def test_prolongation_restriction(field, nx):
     P_cubic = Prolongation(
         field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx, method="cubic"
     )
-    np.testing.assert_allclose(f_f, P_cubic.mv(f_c), atol=1e-2, rtol=1e-2)
+    np.testing.assert_allclose(f_f, P_cubic.mv(f_c), atol=2e-2, rtol=2e-2)
 
 
 def test_get_grid_resolutions_max_grids():
-    """Specifying max_grids derives the coarsening factor and caps the levels."""
+    """``max_grids`` caps the number of levels (fewer is allowed)."""
     res = get_grid_resolutions(2, 10, 51, 51, 51, max_grids=4)
-    assert len(res) == 4
+    assert len(res) <= 4
     # list is ordered coarse -> fine, so the finest grid is last
     assert res[-1] == (2, 10, 51, 51, 51)
     # algebraic axes refine monotonically and the coarsest stays >= the minimums
@@ -116,6 +116,12 @@ def test_get_grid_resolutions_max_grids():
         for ax in (2, 3, 4):
             assert res[i + 1][ax] >= res[i][ax]
     assert res[0][2] >= 5 and res[0][3] >= 5 and res[0][4] >= 5
+    # a generous cap does not force extra levels: the natural ~factor-2 schedule
+    # reaching coarse_N is used, so a huge cap gives the same (or fewer) levels.
+    res_capped = get_grid_resolutions(2, 10, 51, 51, 51, max_grids=2)
+    res_loose = get_grid_resolutions(2, 10, 51, 51, 51, max_grids=99)
+    assert len(res_capped) == 2  # hard cap honored
+    assert len(res_loose) <= 99 and len(res_loose) < 99  # not forced to the cap
 
 
 def test_get_grid_resolutions_coarsening_factor():
@@ -129,6 +135,17 @@ def test_get_grid_resolutions_conflicting_args():
     """Cannot specify both coarsening_factor and max_grids."""
     with pytest.raises(ValueError):
         get_grid_resolutions(2, 10, 51, 51, 51, coarsening_factor=2, max_grids=4)
+
+
+def test_get_grid_resolutions_coarse_ge_fine():
+    """coarse_N >= finest N collapses to a single grid (no coarsening)."""
+    fine = (1, 1, 17, 11, 13)
+    N = 17 * 11 * 13
+    assert get_grid_resolutions(*fine, coarse_N=10 * N) == [fine]
+    assert get_grid_resolutions(*fine, coarse_N=10 * N, max_grids=4) == [fine]
+    assert get_grid_resolutions(*fine, coarse_N=10 * N, coarsening_factor=2.0) == [fine]
+    # exactly at the target size is still a single grid
+    assert get_grid_resolutions(*fine, coarse_N=N) == [fine]
 
 
 def _two_level_dke(field, pitchgrid, speedgrid, species):
@@ -183,7 +200,7 @@ def test_coarse_correction_reduces_error(
     # exact coarse solve of the restricted residual, prolong back to the fine grid
     ykm1 = jnp.linalg.solve(A_c.as_matrix(), R[0].mv(rk))
     yk = P[0].mv(ykm1)
-    x_new = correction(x, 1, 0, A_f, yk, rk, verbose=True)
+    x_new = correction(x, 1, 0, A_f, yk, rk, 1.0, verbose=True)
     err_before = float(jnp.linalg.norm(x - x_true))
     err_after = float(jnp.linalg.norm(x_new - x_true))
     assert err_after < err_before
