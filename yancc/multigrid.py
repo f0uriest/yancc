@@ -1104,12 +1104,7 @@ def _multigrid_cycle_recursive(
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
 def standard_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose):
-    """Apply coarse grid correction with standard weighting.
-
-    ``coarse_weight`` is a fixed (linear) damping/over-relaxation scalar on the
-    prolonged coarse correction: 1.0 is the textbook correction, <1 under-relaxes
-    and >1 over-relaxes. Being a constant it keeps the preconditioner linear.
-    """
+    """Apply coarse grid correction with standard weighting."""
     alpha = coarse_weight
     dx = alpha * yk
 

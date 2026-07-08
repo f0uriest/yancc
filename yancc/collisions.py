@@ -136,12 +136,7 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("MDKEPitchAngleScattering.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        The operator is the diffusion stencil ``_D`` applied along the pitch
-        axis and identical at every (theta, zeta), so the row L1 norm is the
-        abs row sum of ``_D`` broadcast over the spatial grid.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
@@ -2220,14 +2215,12 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("FieldParticleScattering.mv")
     def mv(self, vector):
-        """Matrix vector product.
-
-        The Rosenbluth G and H pieces share an identical nodal<->modal-pitch
-        pipeline differing only in the potential tensor, so they are fused into a
-        single tensor ``_GHhat`` (one nodal->modal pitch transform, one tensor
-        apply, one modal->nodal). The diagonal-in-pitch CD piece acts directly in
-        speed space and is added in as one extra einsum.
-        """
+        """Matrix vector product."""
+        # The Rosenbluth G and H pieces share an identical nodal<->modal-pitch
+        # pipeline differing only in the potential tensor, so they are fused into a
+        # single tensor ``_GHhat`` (one nodal->modal pitch transform, one tensor
+        # apply, one modal->nodal). The diagonal-in-pitch CD piece acts directly in
+        # speed space and is added in as one extra einsum.
         f0 = vector
         shp = f0.shape
         shape, caxorder = _parse_axorder_shape_4d(
@@ -2458,20 +2451,18 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        # The collision operator is local in (theta, zeta) and its velocity-space
+        # block is identical at every spatial point, so the row L1 norm depends
+        # only on the (species, speed, pitch) coordinates.  We build that single
+        # ``(ns*nx*na, ns*nx*na)`` block once, take its abs row sum, and broadcast
+        # the result across the spatial grid (axorder-agnostic).  CL/CE/CF are
+        # summed *before* taking absolute values so entries they share (e.g. CF
+        # overlaps CL in pitch and CE in speed) are not double counted.
 
-        The collision operator is local in (theta, zeta) and its velocity-space
-        block is identical at every spatial point, so the row L1 norm depends
-        only on the (species, speed, pitch) coordinates.  We build that single
-        ``(ns*nx*na, ns*nx*na)`` block once, take its abs row sum, and broadcast
-        the result across the spatial grid (axorder-agnostic).  CL/CE/CF are
-        summed *before* taking absolute values so entries they share (e.g. CF
-        overlaps CL in pitch and CE in speed) are not double counted.
-
-        The gauge row (a single modified row per species, at one spatial point)
-        is not special-cased here; this uses the generic interior block, which
-        is exact when ``gauge`` is False.
-        """
+        # The gauge row (a single modified row per species, at one spatial point)
+        # is not special-cased here; this uses the generic interior block, which
+        # is exact when ``gauge`` is False.
         ns = len(self.species)
         nx = self.speedgrid.nx
         na = self.pitchgrid.nalpha

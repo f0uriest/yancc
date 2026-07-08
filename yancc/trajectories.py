@@ -176,12 +176,7 @@ class MDKETheta(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual stencil row sums (not assuming a circulant
-        operator), so it stays correct if the difference operator is
-        generalized to be node-dependent.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
@@ -353,12 +348,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual stencil row sums (not assuming a circulant
-        operator), so it stays correct if the difference operator is
-        generalized to be node-dependent.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
@@ -530,12 +520,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual stencil row sums (not assuming a circulant
-        operator), so it stays correct if the difference operator is
-        generalized to be node-dependent.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
@@ -689,10 +674,10 @@ class MDKE(lx.AbstractLinearOperator):
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """Upper bound on the L1 norm of each row, sum_j |A_ij|, as a 1d array.
 
-        Each operator's exact row L1 norm is summed.  This is *exact* where the
-        operators' sparsity patterns are disjoint -- the theta/zeta derivative
-        off-diagonals live at different strides and never overlap -- and an
-        *upper bound* (via the triangle inequality) where they share entries:
+        Each operator's exact row L1 norm is summed.  This is exact where the
+        operators' sparsity patterns are disjoint - the theta/zeta derivative
+        off-diagonals live at different strides and never overlap - and an
+        upper bound (via the triangle inequality) where they share entries:
         the main diagonal carried by every term, and the pitch coupling shared
         between the pitch advection and pitch-angle-scattering operators.
         """
@@ -963,12 +948,7 @@ class DKETheta(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("DKETheta.abs_row_sum")
     def abs_row_sum(self):
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual stencil row sums (not assuming a circulant
-        operator), so it stays correct if the difference operator is
-        generalized to be node-dependent.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
@@ -1292,12 +1272,7 @@ class DKEZeta(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.abs_row_sum")
     def abs_row_sum(self):
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual stencil row sums (not assuming a circulant
-        operator), so it stays correct if the difference operator is
-        generalized to be node-dependent.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
@@ -1620,12 +1595,7 @@ class DKEPitch(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.abs_row_sum")
     def abs_row_sum(self):
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual stencil row sums (not assuming a circulant
-        operator), so it stays correct if the difference operator is
-        generalized to be node-dependent.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
@@ -1925,11 +1895,7 @@ class DKESpeed(lx.AbstractLinearOperator):
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.abs_row_sum")
     def abs_row_sum(self):
-        """L1 norm of each row, sum_j |A_ij|, as a 1d array.
-
-        Computed from the actual (dense, pseudospectral) differentiation
-        matrix row sums rather than just the diagonal entry.
-        """
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
             self.field.nzeta,
@@ -2235,16 +2201,12 @@ class DKE(lx.AbstractLinearOperator):
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """Upper bound on the L1 norm of each row, sum_j |A_ij|, as a 1d array.
 
-        Each operator's exact row L1 norm is summed.  This is *exact* where the
-        operators' sparsity patterns are disjoint -- the theta/zeta derivative
-        off-diagonals live at different strides and never overlap -- and an
-        *upper bound* (via the triangle inequality) where they share entries:
+        Each operator's exact row L1 norm is summed.  This is exact where the
+        operators' sparsity patterns are disjoint - the theta/zeta derivative
+        off-diagonals live at different strides and never overlap - and an
+        upper bound (via the triangle inequality) where they share entries:
         the main diagonal carried by every term, and the speed/pitch couplings
         shared between the advection operators and the collision operator.
-
-        The collision contribution is exact (CL/CE/CF combined before the
-        absolute value) and computed from a single velocity-space block, so this
-        works for any ``axorder``.
         """
         size = (
             len(self.species)
