@@ -199,9 +199,13 @@ def get_dke_jacobi2_smoothers(
     return smoothers
 
 
-def _nearest(x: float, minval: int) -> int:
-    """Round x to the nearest integer, floored at minval"""
-    return max(int(round(x)), minval)
+def _half_next_odd(k: int, m: int | float = 2):
+    if int(k // m) == 0:
+        return 1
+    elif int(k // m) % 2 == 0:
+        return int(k // m + 1)
+    else:
+        return int(k // m)
 
 
 def get_grid_resolutions(
@@ -219,23 +223,6 @@ def get_grid_resolutions(
 ) -> list[tuple]:
     """Determine resolutions for multigrid scheme.
 
-    Every coarse level scales all of ``na, nt, nz`` by the same factor, so the
-    coarse grids keep (approximately) the finest grid's aspect ratio, subject to
-    the per-axis floors ``min_na, min_nt, min_nz`` that keep the finite-difference
-    stencil resolvable. The coarsening is chosen so the coarsest grid lands close
-    to ``coarse_N``.
-
-    The number of levels and the coarsening factor are two views of the same
-    schedule, so at most one may be specified:
-
-    - ``max_grids`` given: coarsen by ~2 per axis per level, but never use more
-      than ``max_grids`` levels; if that cap is hit, coarsen harder per level so
-      the coarsest grid still lands on ``coarse_N`` (compile time grows with the
-      number of levels, so fewer levels is allowed and preferred).
-    - ``coarsening_factor`` given: use that factor and pick the number of levels
-      so the coarsest grid lands as close to ``coarse_N`` as possible.
-    - neither given: coarsen by ~2 per axis per level, landing on ``coarse_N``.
-
     Parameters
     ----------
     ns, nx, na, nt, nz: int
@@ -245,61 +232,48 @@ def get_grid_resolutions(
     min_na, min_nt, min_nz : int
         Minimum resolution in each coordinate.
     max_grids : int
-        Maximum number of grids in the multigrid scheme. Mutually exclusive with
-        ``coarsening_factor``.
+        Maximum number of grids in the multigrid scheme.
     coarsening_factor : int, float
-        How much to coarsen each coordinate at each level. Mutually exclusive
-        with ``max_grids``.
+        How much to coarsen the grid in each coordinate at each level. Defaults to 2.
 
     Returns
     -------
     resolutions : list of tuple of int
         Each list element is a tuple of resolutions at a given grid level, each
-        tuple is the resolution (ns, nx, na, nt, nz), ordered coarse -> fine.
+        tuple is the resolution (ns, nx, na, nt, nz)
     """
-    if coarsening_factor is not None and max_grids is not None:
-        raise ValueError("Cannot specify both coarsening_factor and max_grids")
-
     coarse_N = max(coarse_N, ns * nx * min_na * min_nt * min_nz)
     N = ns * nx * na * nt * nz
     dim = 2 if nz == 1 else 3  # tokamak vs stellarator
 
-    finest = (ns, nx, na, nt, nz)
-    # Finest grid already at/below the target coarse size: one grid is enough.
-    if N <= coarse_N:
-        return [finest]
-
-    # total finest/coarsest size ratio, spread over ``dim`` coarsened axes.
-    R = N / coarse_N
-    if coarsening_factor is not None:
-        # honor the requested factor; choose the number of levels that lands the
-        # coarsest grid closest to coarse_N.
-        factor = float(coarsening_factor)
-        nsteps = max(round(np.log(R) / (dim * np.log(factor))), 1)
-    else:
-        # ~factor-2 coarsening per axis, landing on coarse_N. max_grids only
-        # caps this: if the natural schedule already fits, use it as-is;
-        # otherwise coarsen harder so the coarsest still lands on coarse_N.
-        nsteps = max(round(np.log(R) / (dim * np.log(2))), 1)
-        if max_grids is not None:
-            nsteps = min(nsteps, max(int(max_grids) - 1, 1))
-        factor = R ** (1 / (dim * nsteps))
-
-    # Build fine -> coarse by uniform geometric scaling of every axis (which
-    # preserves the finest grid's aspect ratio) with a per-axis floor. Skip a
-    # level if integer rounding makes it identical to the previous one.
-    resolutions = [finest]
-    for i in range(1, nsteps + 1):
-        s = factor**i
-        res = (
-            ns,
-            nx,
-            _nearest(na / s, min_na),
-            _nearest(nt / s, min_nt),
-            _nearest(nz / s, min_nz),
+    if coarsening_factor is not None and max_grids is not None:
+        raise ValueError("Cannot specify both coarsening_factor and max_grids")
+    elif coarsening_factor is None and max_grids is None:
+        coarsening_factor = 2.5
+        max_grids = int(
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**dim) + 1)
         )
-        if res != resolutions[-1]:
-            resolutions.append(res)
+    elif coarsening_factor is None:
+        assert isinstance(max_grids, int)
+        coarsening_factor = float((N / coarse_N) ** (1 / (dim * (max_grids - 1))))
+        coarsening_factor = max(2, coarsening_factor)
+    elif max_grids is None:
+        max_grids = int(
+            np.ceil(np.log(N / coarse_N) / np.log(coarsening_factor**dim) + 1)
+        )
+
+    resolutions = [(ns, nx, na, nt, nz)]
+    na = max(_half_next_odd(na, coarsening_factor), min_na)
+    nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
+    nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
+    N = ns * nx * na * nt * nz
+    while N > coarse_N and len(resolutions) < max_grids - 1:
+        resolutions.append((ns, nx, na, nt, nz))
+        na = max(_half_next_odd(na, coarsening_factor), min_na)
+        nt = max(_half_next_odd(nt, coarsening_factor), min_nt)
+        nz = max(_half_next_odd(nz, coarsening_factor), min_nz)
+        N = ns * nx * na * nt * nz
+    resolutions.append((ns, nx, na, nt, nz))
     return resolutions[::-1]
 
 
@@ -1325,10 +1299,6 @@ class MultigridOperator(lx.AbstractLinearOperator):
     @jax.named_scope("MultigridOperator.mv")
     def mv(self, vector):
         """Matrix vector product."""
-        # A single grid (e.g. coarse_N >= finest N) has no coarse levels to
-        # correct against, so the cycle degenerates to the direct coarse solve.
-        if len(self.operators) == 1:
-            return self.coarse_opinv.mv(vector)
         x0 = jnp.zeros_like(vector)
         x = _multigrid_cycle_recursive(
             cycle_index=self.cycle_index,

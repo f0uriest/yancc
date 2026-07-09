@@ -109,6 +109,9 @@ class Field(eqx.Module):
         self.Bmag = jnp.asarray(Bmag)
         self.ntheta = self.sqrtg.shape[0]
         self.nzeta = self.sqrtg.shape[1]
+        assert (self.ntheta % 2 == 1) and (self.nzeta % 2 == 1), (
+            "ntheta and nzeta must be odd"
+        )
         if dBdt is None:
             dBdt = self._dfdt(self.Bmag)
         if dBdz is None:
@@ -157,7 +160,10 @@ class Field(eqx.Module):
             Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
+            Both must be odd.
         """
+        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
+
         from desc.grid import LinearGrid  # pyright: ignore[reportMissingImports]
 
         grid = LinearGrid(rho=rho, theta=ntheta, zeta=nzeta, endpoint=False, NFP=eq.NFP)
@@ -217,6 +223,7 @@ class Field(eqx.Module):
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         """
+        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
         s = rho**2
@@ -315,6 +322,7 @@ class Field(eqx.Module):
         cutoff : float
             Modes with abs(b_mn) < cutoff * abs(b_00) will be excluded.
         """
+        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
         s = rho**2
@@ -411,6 +419,8 @@ class Field(eqx.Module):
         cutoff : float
             Modes with abs(b_mn) < cutoff * abs(b_00) will be excluded.
         """
+        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
+
         s = rho**2
         data = read_bc(path)
         nfp = data["nfp"]

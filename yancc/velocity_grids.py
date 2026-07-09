@@ -323,6 +323,7 @@ class UniformPitchAngleGrid(eqx.Module):
     wxi: jax.Array
 
     def __init__(self, nalpha):
+        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
         self.nalpha = nalpha
         alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False)
         alpha += jnp.pi / (2 * nalpha)
