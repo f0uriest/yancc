@@ -5,6 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import yancc.linalg
+from yancc.field import Field
 from yancc.misc import dke_rhs
 from yancc.multigrid import (
     adpative_smooth,
@@ -21,13 +23,14 @@ from yancc.smoothers import (
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
+    _pitch_cond_gate,
     optimal_smoothing_parameter_3d,
     optimal_smoothing_parameter_4d,
     permute_f_3d,
 )
-from yancc.species import GlobalMaxwellian, Hydrogen
+from yancc.species import Electron, GlobalMaxwellian, Hydrogen, LocalMaxwellian
 from yancc.trajectories import DKE, MDKE
-from yancc.velocity_grids import MaxwellSpeedGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def test_permutations_mdke(field, pitchgrid):
@@ -411,4 +414,172 @@ def test_dke_jacobi2_smoother_banded_not_implemented(
             Erho,
             potentials=potentials2,
             smooth_solver="banded",
+        )
+
+
+# ---------------------------------------------------------------------------
+# pitch condition-number gate: drops the off-diagonals of ill-conditioned
+# pitch blocks. Verified via the smoother's spectral properties
+# ---------------------------------------------------------------------------
+
+
+def _dense_pitch_blocks(field, pg, sg, species, Erho):
+    """The raw (ungated) pitch block-diagonal the smoother would invert."""
+    ow = jnp.ones(8).at[-1].set(0)
+    return np.asarray(
+        DKE(
+            field,
+            pg,
+            sg,
+            species,
+            Erho,
+            background=[],
+            potentials=None,
+            p1="2d",
+            p2=2,
+            axorder="tzsxa",
+            gauge=True,
+            operator_weights=ow,
+            coulomb_log=17.0,
+        ).block_diagonal("dense", 4)
+    )
+
+
+def test_pitch_cond_gate_tames_blowup():
+    """On a pitch smoother blow-up case (NCSX 2-species, nu*~1e-1) the
+    absolute C*na**2 gate flags the electron-lowest-speed pitch blocks, and the smoother
+    stores point Jacobi (the diagonal inverse) for exactly those while keeping the full
+    block inverse everywhere else.
+    """
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 15, 31)
+    am = float(field.a_minor)
+    pg = UniformPitchAngleGrid(61)
+    sg = MaxwellSpeedGrid(6)
+    n = 4.09e21
+    species = [
+        LocalMaxwellian(Electron, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+        LocalMaxwellian(Hydrogen, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+    ]
+    Erho = 4.0 * am * 1000.0
+
+    sm = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder="tzsxa",
+        smooth_solver="dense",
+        coulomb_log=17.0,
+    )
+    assert sm.bandwidth == 4
+    gated = np.asarray(sm.mats)  # stored block inverses (flagged -> point Jacobi)
+
+    mats = _dense_pitch_blocks(field, pg, sg, species, Erho)
+    # reproduce the flag the dense path computes internally (same jnp inverse + 1-norm)
+    ungated = np.asarray(jnp.linalg.inv(jnp.asarray(mats)))
+    cond = np.asarray(
+        yancc.linalg.matrix_1norm(jnp.asarray(mats))
+        * yancc.linalg.matrix_1norm(jnp.asarray(ungated))
+    )
+    flag = np.asarray(_pitch_cond_gate(jnp.asarray(cond), pg.nalpha))
+    assert 0 < flag.sum() < flag.size  # gate fires on the blow-up, but not everywhere
+    # flagged <=> cond above C*na**2 (guards the threshold constant and na**2 scaling)
+    assert cond[flag].min() > 150 * pg.nalpha**2
+    assert cond[~flag].max() < 150 * pg.nalpha**2
+
+    # the gate contract: point Jacobi (diagonal inverse) where flagged, full inverse
+    # elsewhere. Checked directly on the stored blocks
+    diag = np.diagonal(mats, axis1=-2, axis2=-1)
+    point_jacobi = (1.0 / diag)[:, None, :] * np.eye(pg.nalpha)
+    expected = np.where(flag[:, None, None], point_jacobi, ungated)
+    np.testing.assert_allclose(gated, expected, rtol=1e-6, atol=1e-8)
+
+    # not a no-op: at least one flagged block has real off-diagonal coupling that point
+    # Jacobi removes (an off-diagonal-driven blow-up block, distinct from the inverse).
+    changed = [not np.allclose(gated[b], ungated[b]) for b in np.where(flag)[0]]
+    assert any(changed)
+
+
+def test_pitch_cond_gate_no_op_when_well_conditioned():
+    """High collisionality -> every pitch block sits below the absolute C*na**2
+    threshold, so the gate flags nothing and every stored block inverse equals the raw
+    inverse (nothing dropped).
+    """
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 11, 11)
+    am = float(field.a_minor)
+    pg = UniformPitchAngleGrid(25)
+    sg = MaxwellSpeedGrid(4)
+    n = 1.5e20  # collisional enough that every block stays under C*na**2
+    species = [
+        LocalMaxwellian(Electron, 0.8e3, n, -2e3 * am, -0.4e20 * am),
+        LocalMaxwellian(Hydrogen, 0.8e3, n, -2e3 * am, -0.4e20 * am),
+    ]
+    Erho = 4.0 * am * 1000.0
+    sm = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder="tzsxa",
+        smooth_solver="dense",
+        coulomb_log=17.0,
+    )
+    mats = _dense_pitch_blocks(field, pg, sg, species, Erho)
+    np.testing.assert_allclose(np.asarray(sm.mats), np.linalg.inv(mats), atol=1e-10)
+
+
+def test_pitch_cond_gate_banded_matches_dense():
+    """The pitch smoother uses the banded solver by default when nalpha > 6*bw+1 (na=61
+    here), so the banded gate path is what actually runs in production. On a
+    gate-firing blow-up case it must act identically to the dense path (which stores
+    diag(1/diag)). Compared via matvecs; the full operator is too large for as_matrix.
+    """
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 15, 31)
+    am = float(field.a_minor)
+    pg = UniformPitchAngleGrid(61)
+    sg = MaxwellSpeedGrid(6)
+    n = 4.09e21
+    species = [
+        LocalMaxwellian(Electron, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+        LocalMaxwellian(Hydrogen, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+    ]
+    Erho = 4.0 * am * 1000.0
+
+    dense = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder="tzsxa",
+        smooth_solver="dense",
+        coulomb_log=17.0,
+    )
+    banded = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder="tzsxa",
+        smooth_solver="banded",
+        coulomb_log=17.0,
+    )
+
+    # the gate must actually fire, else the comparison is vacuous. A flagged block is
+    # stored (dense) as diag(1/diag(A)) -> exactly-zero off-diagonals.
+    md = np.asarray(dense.mats)
+    offdiag = (
+        np.abs(md - md * np.eye(md.shape[-1])).reshape(md.shape[0], -1).max(axis=1)
+    )
+    assert (offdiag == 0.0).any()
+
+    n_state = pg.nalpha * field.ntheta * field.nzeta * len(species) * sg.nx
+    rng = np.random.default_rng(0)
+    for _ in range(3):
+        x = jnp.asarray(rng.standard_normal(n_state))
+        np.testing.assert_allclose(
+            np.asarray(banded.mv(x)), np.asarray(dense.mv(x)), rtol=1e-6, atol=1e-8
         )

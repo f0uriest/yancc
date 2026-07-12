@@ -2,6 +2,7 @@
 
 import itertools
 import warnings
+from typing import Any
 
 import equinox as eqx
 import interpax
@@ -16,9 +17,13 @@ from .field import Field
 from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
+    cond_1norm_banded,
     dense_to_banded,
+    lu_factor_banded,
     lu_factor_banded_periodic,
+    lu_solve_banded,
     lu_solve_banded_periodic,
+    matrix_1norm,
 )
 from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
@@ -355,6 +360,29 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+# We've found empirically that for certain cases, some blocks of the pitch line smoother
+# amplify error significantly rather than smoothing it, causing the multigrid
+# preconditioner to return garbage and stalling krylov. The problematic cases seem to
+# always be 2 species, thermal collisionality ~1e-1. The problematic blocks seem to
+# correspond to the slowest electrons, and the modes that get amplified tend to live
+# near the turning points (b*gradB ~= 0), but gating purely based on electron speed
+# or turning points doesn't seem to catch them, since its a very specific resonance.
+# The best filter I've come up with is just based on the condition number of the
+# smoother blocks. The condition number naturally scales with na^2 from the finite
+# difference matrices, so we normalize by that. Healthy blocks usually have
+# cond/na^2 ~ 1-10, asymptoting to ~40 at high collisionality. The blocks that amplify
+# error are usually around cond/na^2 ~ 400, so we set a threshold at 150. Anything
+# above this we switch from block jacobi to point jacobi which seems to avoid the
+# blowup and stalling. Zeroing the weight for the flagged blocks also fixes it but
+# point jacobi seems to do marginally better in some cases.
+_PITCH_COND_GATE = 150.0
+
+
+def _pitch_cond_gate(cond, na):
+    """Flag pitch blocks with 1-norm cond above ``_PITCH_COND_GATE * na**2``."""
+    return cond > _PITCH_COND_GATE * na**2
+
+
 class DKEJacobiSmoother(lx.AbstractLinearOperator):
     """Block diagonal smoother for DKE.
 
@@ -377,7 +405,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     p2 : int
         Order of approximation for second derivatives.
     axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
+        Ordering for variables in f, eg how the 5d array is flattened. The last axis
+        denotes which direction the smoother is applied.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
     smooth_solver : {"banded", "dense"}
@@ -401,7 +430,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     axorder: str = eqx.field(static=True)
     bandwidth: int = eqx.field(static=True)
     smooth_solver: str = eqx.field(static=True)
-    mats: jax.Array
+    mats: Any
     weight: jax.Array
 
     def __init__(
@@ -422,7 +451,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert len(axorder) == 5 and set(axorder) == set("sxatz")
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -497,16 +526,53 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             coulomb_log=coulomb_log,
         ).block_diagonal(self.smooth_solver, self.bandwidth)
 
-        if self.smooth_solver == "banded":
+        # The pitch line smoother (convolved axis "a") is the only case with a
+        # non-periodic band and the only one prone to blowing up, so it gets the
+        # standard banded factor/solve plus a condition-number gate replacing ill-
+        # conditioned blocks with point Jacobi (drop off-diagonals).
+        pitch = self.axorder[-1] == "a"
+        pivot_tol = jnp.finfo(mats.dtype).eps ** (1 / 2)
+        if self.smooth_solver == "banded" and not pitch:
             self.mats = lu_factor_banded_periodic(
                 self.bandwidth,
                 self.bandwidth,
                 mats,
                 equilibrate=True,
-                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                pivot_tol=pivot_tol,
                 # unroll has little effect on CPU but ~2x faster on GPU
                 unroll=4,
             )
+        elif self.smooth_solver == "banded":
+            lu, s = lu_factor_banded(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibrate=True,
+                pivot_tol=pivot_tol,
+                unroll=4,
+            )
+            cond = cond_1norm_banded(self.bandwidth, self.bandwidth, mats, (lu, s))
+            flag = _pitch_cond_gate(cond, self.pitchgrid.nalpha)
+            # point Jacobi: LU of diag(A) is L = I (zero bands), U = diag(A); s = 1
+            lu_pj = (
+                jnp.zeros_like(lu)
+                .at[:, self.bandwidth, :]
+                .set(mats[:, self.bandwidth, :])
+            )
+            lu = jnp.where(flag[:, None, None], lu_pj, lu)
+            s = jnp.where(flag[:, None], jnp.ones_like(s), s)
+            self.mats = (lu, s)
+        elif pitch:
+            # dense pitch: same gate, but blocks are stored as inverses.
+            anorm = matrix_1norm(mats)
+            inv = jnp.linalg.inv(mats)
+            cond = anorm * matrix_1norm(inv)
+            na = mats.shape[-1]
+            flag = _pitch_cond_gate(cond, na)
+            pj = (1.0 / jnp.diagonal(mats, axis1=-2, axis2=-1))[:, None, :] * jnp.eye(
+                na, dtype=mats.dtype
+            )
+            self.mats = jnp.where(flag[:, None, None], pj, inv)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -526,14 +592,21 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             if self.smooth_solver == "banded":
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
-                b = lu_solve_banded_periodic(
-                    self.bandwidth,
-                    self.bandwidth,
-                    self.mats,
-                    x,
-                    # unroll here has little effect on GPU but modest gain on CPU
-                    unroll=8,
-                )
+                # pitch ("...a") is non-periodic -> standard banded solve; periodic axes
+                # (theta/zeta line smoothers) keep the wrap-aware periodic solve.
+                if self.axorder[-1] == "a":
+                    b = lu_solve_banded(
+                        self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    )
+                else:
+                    b = lu_solve_banded_periodic(
+                        self.bandwidth,
+                        self.bandwidth,
+                        self.mats,
+                        x,
+                        # unroll here has little effect on GPU but modest gain on CPU
+                        unroll=8,
+                    )
             else:
                 size, N, M = self.mats.shape
                 x = x.reshape(size, M)
