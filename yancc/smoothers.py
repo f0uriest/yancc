@@ -126,20 +126,25 @@ OPTIMAL_SMOOTHING_COEFFS_3D = {
 }
 
 
+# the full DKE spans many orders of magnitude in collisionality. We could allow for
+# collisionality dependent weights but it seems sensitive and can lead to divergence
+# if not tuned carefully, and tuning carefully for all possible problems is a nightmare
+# simpler to just set a constant weight for each axis. In the future could make this
+# depend on the thermal collisionality maybe (not local)?
 OPTIMAL_SMOOTHING_COEFFS_4D = {
     "2d": {
-        "z": jnp.array([0.3503, 0.7894, 0.6710, 0.8939, 0.7280, 0.6392, 0.5938]),
-        "t": jnp.array([0.6291, 0.5176, 0.5524, 0.5782, 0.6513, 0.6728, 0.5910]),
-        "a": jnp.array([0.8500, 0.8500, 0.8700, 0.9000, 0.9000, 0.7000, 0.5000]),
-        "x": jnp.array([0.5641, 0.5275, 0.5330, 0.5623, 0.6604, 0.6867, 0.5982]),
-        "s": jnp.array([0.5797, 0.5254, 0.5435, 0.5641, 0.6617, 0.6698, 0.5938]),
+        "z": jnp.array([0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70]),
+        "t": jnp.array([0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70]),
+        "a": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "x": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "s": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
     },
     "4d": {
-        "z": jnp.array([0.3503, 0.4894, 0.3710, 0.5939, 0.7280, 0.6392, 0.5938]),
-        "t": jnp.array([0.6291, 0.6676, 0.7024, 0.5782, 0.6513, 0.6728, 0.5910]),
-        "a": jnp.array([0.8500, 0.7000, 0.7200, 0.6000, 0.9000, 0.7000, 0.5000]),
-        "x": jnp.array([0.5641, 0.5275, 0.5330, 0.5623, 0.6604, 0.6867, 0.5982]),
-        "s": jnp.array([0.5797, 0.5254, 0.5435, 0.5641, 0.6617, 0.6698, 0.5938]),
+        "z": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "t": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "a": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "x": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "s": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
     },
 }
 
@@ -909,7 +914,7 @@ def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
 def optimal_smoothing_parameter_4d(p1, p2, nustar, ax):
     """Approximate best relaxation parameter for block jacobi smoother for DKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
-    nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
+    nus = jnp.array([-8, -6, -4, -2, 0, 2, 4, 6, 8])
     nu = jnp.log10(nustar)
     if method not in OPTIMAL_SMOOTHING_COEFFS_4D:
         warnings.warn(
