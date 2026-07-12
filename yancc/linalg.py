@@ -504,13 +504,39 @@ def lu_factor_banded(p, q, A, *, unroll=None, pivot_tol=0.0, equilibrate=False):
     return A_padded[:, :n], s
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
-@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, "unroll"))
-def _lu_solve_banded(p, q, lu, b, *, unroll=None):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "trans"))
+@functools.partial(
+    jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, "unroll", "trans")
+)
+def _lu_solve_banded(p, q, lu, b, *, unroll=None, trans=False):
     n = lu.shape[1]
     assert p <= n
     assert q <= n
     assert lu.shape[0] == (p + q + 1)
+
+    if trans:
+        # forward: U^T y = b  (pad left by q so row a-q stays in range)
+        b_padded = jnp.pad(b, (q, 0))
+
+        def utT_forward(a, acc):
+            window = jax.lax.dynamic_slice_in_dim(acc, a, q, axis=0)  # rows a-q .. a-1
+            ya = (acc[a + q] - jnp.sum(lu[0:q, a] * window)) / lu[q, a]
+            return acc.at[a + q].set(ya)
+
+        y = jax.lax.fori_loop(0, n, utT_forward, b_padded, unroll=unroll)[q:]
+
+        # backward: L^T x = y  (pad right by p so row a+p stays in range)
+        y_padded = jnp.pad(y, (0, p))
+
+        def ltT_backward(k, acc):
+            a = n - 1 - k
+            window = jax.lax.dynamic_slice_in_dim(
+                acc, a + 1, p, axis=0
+            )  # rows a+1 .. a+p
+            xa = acc[a] - jnp.sum(lu[q + 1 : q + 1 + p, a] * window)
+            return acc.at[a].set(xa)
+
+        return jax.lax.fori_loop(0, n, ltT_backward, y_padded, unroll=unroll)[:n]
 
     # ==========================================
     # 1. Forward Substitution: Ly = b
@@ -559,7 +585,7 @@ def _lu_solve_banded(p, q, lu, b, *, unroll=None):
     return x_padded[q:]
 
 
-def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
+def lu_solve_banded(p, q, lu_factors, b, *, unroll=None, trans=False):
     """Solve a linear system with a pre-factored banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -573,6 +599,8 @@ def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
         in the tuple is applied to ``b`` automatically.
     b : jax.Array, shape(...,N)
         RHS vector.
+    trans : bool
+        If True, solve ``A^T x = b`` instead of ``A x = b`` using the same factors.
 
     Returns
     -------
@@ -580,6 +608,10 @@ def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
         Solution to linear system.
     """
     lu, s = lu_factors
+    if trans:
+        # A = S^-1 A_scaled (S = diag(s) is the row equilibration), so
+        # A^-T b = S (A_scaled^-T b): scale the output by s, not the input.
+        return s * _lu_solve_banded(p, q, lu, b, unroll=unroll, trans=True)
     return _lu_solve_banded(p, q, lu, s * b, unroll=unroll)
 
 
@@ -961,3 +993,89 @@ def banded_transpose(p, q, A):
 
     # Gather elements using advanced indexing
     return A[r_A, c_A], q, p
+
+
+def matrix_1norm(A):
+    """1-norm ``||A||_1`` (max absolute column sum), per block.
+
+    Works for dense storage ``(..., n, n)`` and banded storage ``(..., p+q+1, n)``:
+    in both, matrix column ``j`` is ``A[..., :, j]`` (for banded, the entries of column
+    ``j`` are the stored diagonals at column ``j``), so summing ``|.|`` over axis ``-2``
+    and maxing over axis ``-1`` gives the maximum absolute column sum.
+    """
+    return jnp.max(jnp.sum(jnp.abs(A), axis=-2), axis=-1)
+
+
+def _hager_1norm_est(apply_B, apply_BT, n, lead, dtype, iters):
+    """Hager/Higham lower-bound estimate of ``||B||_1`` in a fixed number of iterations.
+
+    Parameters
+    ----------
+    apply_B, apply_BT : callable
+        Map ``(lead..., n) -> (lead..., n)``, applying ``B`` and ``B^T`` per block.
+    n : int
+        Block dimension.
+    lead : tuple
+        Batch (block) shape.
+    dtype : jnp.dtype
+    iters : int
+        Number of iterations (LAPACK uses <= 5).
+    """
+    x = jnp.full(lead + (n,), 1.0 / n, dtype=dtype)
+
+    def body(carry, _):
+        x, est = carry
+        y = apply_B(x)
+        est = jnp.maximum(est, jnp.sum(jnp.abs(y), axis=-1))
+        xi = jnp.where(y >= 0, 1.0, -1.0).astype(dtype)
+        z = apply_BT(xi)
+        j = jnp.argmax(jnp.abs(z), axis=-1)
+        x = jax.nn.one_hot(j, n, dtype=dtype)
+        return (x, est), None
+
+    (x, est), _ = jax.lax.scan(body, (x, jnp.zeros(lead, dtype)), None, length=iters)
+
+    # b_i = (-1)^i (1 + i/(n-1)) probes cancellation the unit vectors miss
+    i = jnp.arange(n, dtype=dtype)
+    b = (1.0 + i / max(n - 1, 1)) * (1.0 - 2.0 * (i % 2))
+    y = apply_B(jnp.broadcast_to(b, lead + (n,)))
+    alt = 2.0 * jnp.sum(jnp.abs(y), axis=-1) / (3.0 * n)
+    return jnp.maximum(est, alt)
+
+
+def cond_1norm_banded(p, q, A, lu_factors, *, iters=5, unroll=None):
+    """Per-block 1-norm condition estimate for a (non-periodic) banded operator.
+
+    ``||A||_1`` is exact from the banded storage; ``||A^{-1}||_1`` is estimated with a
+    fixed-iteration Hager/Higham scheme.
+
+    Parameters
+    ----------
+    p, q : int
+        Lower/upper bandwidth of ``A``.
+    A : jax.Array, shape ``(..., p+q+1, n)``
+        Original banded-storage matrix (pre-factorization), batched over leading axes.
+    lu_factors : tuple
+        Factors ``(lu, s)`` from ``lu_factor_banded(p, q, A, ...)``.
+    iters : int
+        Fixed number of Hager iterations.
+    unroll : int or None
+        Loop unroll passed to the banded solves.
+
+    Returns
+    -------
+    cond : jax.Array, shape ``(...)``
+        Estimated ``kappa_1`` of each block.
+    """
+    lead = A.shape[:-2]
+    n = A.shape[-1]
+    a1 = matrix_1norm(A)
+
+    def apply_B(V):
+        return lu_solve_banded(p, q, lu_factors, V, unroll=unroll)
+
+    def apply_BT(V):
+        return lu_solve_banded(p, q, lu_factors, V, unroll=unroll, trans=True)
+
+    ainv1 = _hager_1norm_est(apply_B, apply_BT, n, lead, A.dtype, iters)
+    return a1 * ainv1

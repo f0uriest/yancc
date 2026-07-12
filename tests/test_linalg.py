@@ -253,3 +253,89 @@ def test_lu_factor_banded_pivot_tol():
     assert not np.all(np.isfinite(x_plain))  # unpivoted elimination blows up
     x_clamped = yancc.linalg.solve_banded(1, 1, a, b, pivot_tol=1e-8)
     assert np.all(np.isfinite(x_clamped))  # static pivoting keeps it finite
+
+
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [5, 10])  # need n > p + q for banded storage to be 1:1
+@pytest.mark.parametrize("periodic", [True, False])
+def test_matrix_1norm(p, q, n, periodic):
+    """matrix_1norm matches numpy's 1-norm for dense and banded storage."""
+    rng = np.random.default_rng(123)
+    A = _random_banded(p, q, n, rng, periodic)
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    # dense storage: reduces over the last two axes
+    np.testing.assert_allclose(
+        float(yancc.linalg.matrix_1norm(jnp.asarray(A))), np.linalg.norm(A, 1)
+    )
+    # banded storage: same max-abs-column-sum (wrap entries live in the band too)
+    np.testing.assert_allclose(
+        float(yancc.linalg.matrix_1norm(a)), np.linalg.norm(A, 1)
+    )
+
+
+@pytest.mark.parametrize("p", [0, 1, 2])
+@pytest.mark.parametrize("q", [0, 1, 2])
+@pytest.mark.parametrize("n", [2, 5, 10])  # need n > max(p, q)
+def test_lu_solve_banded_transpose(p, q, n):
+    """lu_solve_banded(trans=True) solves A^T x = b reusing the same factors."""
+    rng = np.random.default_rng(123)
+    A = _random_banded(p, q, n, rng, periodic=False)
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    b = rng.random(n)
+    fac = yancc.linalg.lu_factor_banded(p, q, a)
+    x = yancc.linalg.lu_solve_banded(p, q, fac, b, trans=True)
+    np.testing.assert_allclose(A.T @ x, b, atol=1e-10)
+    np.testing.assert_allclose(x, np.linalg.solve(A.T, b), atol=1e-10)
+
+
+@pytest.mark.parametrize("n", [4, 8])
+def test_cond_1norm_dense_matches_numpy(n):
+    """kappa_1 = ||A||_1 ||A^-1||_1 (via matrix_1norm) matches numpy (well & ill)."""
+    rng = np.random.default_rng(0)
+    A = rng.standard_normal((n, n)) + n * np.eye(n)  # well-conditioned
+    # ill-conditioned: shrink the last column heavily
+    B = A @ np.diag([1.0] * (n - 1) + [1e-8])
+    for M in (A, B):
+        kappa = float(
+            yancc.linalg.matrix_1norm(jnp.asarray(M))
+            * yancc.linalg.matrix_1norm(jnp.asarray(np.linalg.inv(M)))
+        )
+        np.testing.assert_allclose(kappa, np.linalg.cond(M, 1), rtol=1e-10)
+
+
+@pytest.mark.parametrize("p", [1, 2])
+@pytest.mark.parametrize("q", [1, 2])
+@pytest.mark.parametrize("n", [8, 15])
+def test_cond_1norm_banded_hager(p, q, n):
+    """Hager kappa_1 estimate is a tight lower bound of the true 1-norm condition."""
+    rng = np.random.default_rng(7)
+    A = _random_banded(p, q, n, rng, periodic=False)
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    fac = yancc.linalg.lu_factor_banded(p, q, a)
+    est = float(
+        yancc.linalg.cond_1norm_banded(p, q, a[None], (fac[0][None], fac[1][None]))[0]
+    )
+    true = np.linalg.cond(A, 1)
+    # Hager under-estimates by at most a small factor and never over by much.
+    assert 0.3 * true <= est <= 1.5 * true
+
+
+def test_cond_1norm_banded_tracks_illconditioning():
+    """A near-singular banded block is flagged as high-condition by the estimate."""
+    p = q = 2
+    n = 15
+    rng = np.random.default_rng(1)
+    A = _random_banded(p, q, n, rng, periodic=False)
+    # scale one column down hard -> near-singular (stays banded, still factorable)
+    D = np.ones(n)
+    D[n // 2] = 1e-5
+    A = A @ np.diag(D)
+    a = yancc.linalg.dense_to_banded(p, q, A)
+    fac = yancc.linalg.lu_factor_banded(p, q, a)
+    est = float(
+        yancc.linalg.cond_1norm_banded(p, q, a[None], (fac[0][None], fac[1][None]))[0]
+    )
+    true = np.linalg.cond(A, 1)
+    assert true > 1e3  # sanity: this construction really is ill-conditioned
+    np.testing.assert_allclose(est, true, rtol=0.5)
