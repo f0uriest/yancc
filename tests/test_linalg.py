@@ -339,3 +339,140 @@ def test_cond_1norm_banded_tracks_illconditioning():
     true = np.linalg.cond(A, 1)
     assert true > 1e3  # sanity: this construction really is ill-conditioned
     np.testing.assert_allclose(est, true, rtol=0.5)
+
+
+def _random_banded_batch(bw, n, B, rng, periodic):
+    """Stack of diagonally-dominant banded matrices, dense ``(B, n, n)``."""
+    return np.stack([_random_banded(bw, bw, n, rng, periodic) for _ in range(B)])
+
+
+@pytest.mark.parametrize("bw", [1, 2, 3])
+@pytest.mark.parametrize("n", [10, 11, 12])  # mix of multiples/non-multiples of bw
+@pytest.mark.parametrize("trans", [False, True])
+def test_cr_banded_solve(bw, n, trans):
+    """Cyclic-reduction solve of a non-periodic banded system matches dense."""
+    rng = np.random.default_rng(bw * 100 + n)
+    A = _random_banded_batch(bw, n, 3, rng, periodic=False)
+    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    b = rng.random((3, n))
+
+    fac = yancc.linalg.cr_banded_factor(Ab)
+    x = yancc.linalg.cr_banded_solve(fac, jnp.asarray(b), trans=trans)
+
+    ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[..., 0]
+    np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
+
+
+@pytest.mark.parametrize("bw", [1, 2, 3])
+@pytest.mark.parametrize("n", [10, 11, 12])
+@pytest.mark.parametrize("trans", [False, True])
+def test_cr_banded_periodic_solve(bw, n, trans):
+    """Cyclic-reduction solve of a periodic banded system (Woodbury) matches dense."""
+    rng = np.random.default_rng(bw * 100 + n + 7)
+    A = _random_banded_batch(bw, n, 3, rng, periodic=True)
+    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    b = rng.random((3, n))
+
+    fac = yancc.linalg.cr_banded_periodic_factor(Ab)
+    x = yancc.linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
+
+    ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[..., 0]
+    np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
+
+
+@pytest.mark.parametrize("bw", [2, 3, 4])
+@pytest.mark.parametrize("trans", [False, True])
+def test_cr_banded_periodic_small_n(bw, trans):
+    """N <= 2*bw is the degenerate regime where the Woodbury wrap split is invalid.
+
+    The factor falls back to a dense LU there (as lu_factor_banded_periodic does), so
+    the solve must still match a dense reference across the boundary N = 2*bw (dense
+    fallback) up to N = 2*bw + 1 (Woodbury), including the transpose solve.
+    """
+    rng = np.random.default_rng(bw * 17 + int(trans))
+    for n in range(bw + 1, 2 * bw + 2):  # spans the fallback and the first Woodbury N
+        A = _random_banded_batch(bw, n, 3, rng, periodic=True)
+        Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+        b = rng.random((3, n))
+        fac = yancc.linalg.cr_banded_periodic_factor(Ab, equilibrate=True)
+        x = yancc.linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
+        ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[
+            ..., 0
+        ]
+        np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
+
+
+@pytest.mark.parametrize("p, q", [(1, 3), (3, 1), (2, 4), (0, 3), (3, 0)])
+@pytest.mark.parametrize("n", [12, 13])  # multiple / non-multiple of block max(p,q)
+@pytest.mark.parametrize("periodic", [False, True])
+@pytest.mark.parametrize("trans", [False, True])
+def test_cr_banded_asymmetric(p, q, n, periodic, trans):
+    """CR handles unequal lower/upper bandwidth (block size b = max(p, q))."""
+    rng = np.random.default_rng(p * 1000 + q * 100 + n + int(periodic) + int(trans))
+    A = np.stack([_random_banded(p, q, n, rng, periodic) for _ in range(3)])
+    Ab = jnp.stack([yancc.linalg.dense_to_banded(p, q, M) for M in A])
+    b = rng.random((3, n))
+
+    if periodic:
+        fac = yancc.linalg.cr_banded_periodic_factor(Ab, p, q, equilibrate=True)
+        x = yancc.linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
+    else:
+        fac = yancc.linalg.cr_banded_factor(Ab, p, q, equilibrate=True)
+        x = yancc.linalg.cr_banded_solve(fac, jnp.asarray(b), trans=trans)
+
+    ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[..., 0]
+    np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
+
+
+def test_cr_banded_solve_unbatched():
+    """A single (unbatched) banded system round-trips through the CR solve."""
+    rng = np.random.default_rng(3)
+    A = _random_banded(2, 2, 12, rng, periodic=False)
+    Ab = yancc.linalg.dense_to_banded(2, 2, A)
+    b = rng.random(12)
+    x = yancc.linalg.cr_banded_solve(yancc.linalg.cr_banded_factor(Ab), jnp.asarray(b))
+    np.testing.assert_allclose(x, np.linalg.solve(A, b), rtol=1e-8, atol=1e-10)
+
+
+@pytest.mark.parametrize("periodic", [True, False])
+def test_cr_banded_equilibrate(periodic):
+    """Row equilibration must not change the CR solution (vs the unscaled path)."""
+    bw, n = 2, 12
+    rng = np.random.default_rng(11)
+    A = _random_banded_batch(bw, n, 3, rng, periodic)
+    # mildly poor row scaling so equilibration actually does something nontrivial
+    A = A * (10.0 ** rng.integers(-2, 3, size=(3, n, 1)))
+    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    b = jnp.asarray(rng.random((3, n)))
+    if periodic:
+        factor, solve = (
+            yancc.linalg.cr_banded_periodic_factor,
+            yancc.linalg.cr_banded_periodic_solve,
+        )
+    else:
+        factor, solve = yancc.linalg.cr_banded_factor, yancc.linalg.cr_banded_solve
+    x_ref = solve(factor(Ab), b)
+    x_eq = solve(factor(Ab, equilibrate=True), b)
+    np.testing.assert_allclose(x_eq, x_ref, rtol=1e-6, atol=1e-8)
+
+
+def test_cr_block_tridiag_solve():
+    """The block-tridiagonal level solves A x = b and A^T x = b."""
+    bw, n = 3, 12
+    rng = np.random.default_rng(5)
+    A = _random_banded_batch(bw, n, 4, rng, periodic=False)
+    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    D, L, U = yancc.linalg.banded_to_block_tridiag(Ab)
+    fac = yancc.linalg.cr_block_tridiag_factor(D, L, U)
+
+    b = rng.random((4, n))
+    # reshape RHS into blocks (B, m, b) to match the block-level API
+    m, blk = D.shape[1], D.shape[-1]
+    rhs = jnp.asarray(b).reshape(4, m, blk)
+    for trans in (False, True):
+        x = yancc.linalg.cr_block_tridiag_solve(fac, rhs, trans=trans)
+        x = np.asarray(x).reshape(4, n)
+        ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[
+            ..., 0
+        ]
+        np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)

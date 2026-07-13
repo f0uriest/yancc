@@ -100,7 +100,19 @@ def test_dke_banded_vs_dense_smoother(
         smooth_solver="banded",
         operator_weights=weights,
     ).as_matrix()
+    s3 = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        axorder=axorder,
+        smooth_solver="cr",
+        operator_weights=weights,
+    ).as_matrix()
     np.testing.assert_allclose(s1, s2)
+    np.testing.assert_allclose(s1, s3)
 
 
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
@@ -113,7 +125,11 @@ def test_mdke_banded_vs_dense_smoother(pitchgrid, field, axorder):
     s2 = MDKEJacobiSmoother(
         field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="banded"
     ).as_matrix()
+    s3 = MDKEJacobiSmoother(
+        field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="cr"
+    ).as_matrix()
     np.testing.assert_allclose(s1, s2)
+    np.testing.assert_allclose(s1, s3)
 
 
 @pytest.mark.parametrize("v", [1, 2, 3])
@@ -567,6 +583,16 @@ def test_pitch_cond_gate_banded_matches_dense():
         smooth_solver="banded",
         coulomb_log=17.0,
     )
+    cr = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder="tzsxa",
+        smooth_solver="cr",
+        coulomb_log=17.0,
+    )
 
     # the gate must actually fire, else the comparison is vacuous. A flagged block is
     # stored (dense) as diag(1/diag(A)) -> exactly-zero off-diagonals.
@@ -582,4 +608,69 @@ def test_pitch_cond_gate_banded_matches_dense():
         x = jnp.asarray(rng.standard_normal(n_state))
         np.testing.assert_allclose(
             np.asarray(banded.mv(x)), np.asarray(dense.mv(x)), rtol=1e-6, atol=1e-8
+        )
+        np.testing.assert_allclose(
+            np.asarray(cr.mv(x)), np.asarray(dense.mv(x)), rtol=1e-6, atol=1e-8
+        )
+
+
+# convolved axis last: "a" (pitch, non-periodic + gated), "t"/"z" (periodic lines).
+# The cyclic-reduction solver must reproduce the banded solver exactly (same factor,
+# a different -- log-depth -- elimination), including the pitch condition-number gate.
+@pytest.mark.parametrize("axorder", ["tzsxa", "azsxt", "atsxz"])
+def test_dke_cr_matches_banded(axorder):
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 11, 11)
+    am = float(field.a_minor)
+    pg = UniformPitchAngleGrid(25)
+    sg = MaxwellSpeedGrid(4)
+    n = 4.09e21
+    species = [
+        LocalMaxwellian(Electron, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+        LocalMaxwellian(Hydrogen, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+    ]
+    Erho = 4.0 * am * 1000.0
+    banded = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder=axorder,
+        smooth_solver="banded",
+        coulomb_log=17.0,
+    )
+    cr = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder=axorder,
+        smooth_solver="cr",
+        coulomb_log=17.0,
+    )
+
+    n_state = pg.nalpha * field.ntheta * field.nzeta * len(species) * sg.nx
+    rng = np.random.default_rng(0)
+    for _ in range(3):
+        x = jnp.asarray(rng.standard_normal(n_state))
+        np.testing.assert_allclose(
+            np.asarray(cr.mv(x)), np.asarray(banded.mv(x)), rtol=1e-7, atol=1e-9
+        )
+
+
+@pytest.mark.parametrize("axorder", ["atz", "tza", "zat"])
+def test_mdke_cr_matches_banded(axorder):
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 11, 11)
+    pg = UniformPitchAngleGrid(25)
+    banded = MDKEJacobiSmoother(
+        field, pg, 1e-3, 1e-3, axorder=axorder, smooth_solver="banded"
+    )
+    cr = MDKEJacobiSmoother(field, pg, 1e-3, 1e-3, axorder=axorder, smooth_solver="cr")
+    n_state = pg.nalpha * field.ntheta * field.nzeta
+    rng = np.random.default_rng(1)
+    for _ in range(3):
+        x = jnp.asarray(rng.standard_normal(n_state))
+        np.testing.assert_allclose(
+            np.asarray(cr.mv(x)), np.asarray(banded.mv(x)), rtol=1e-7, atol=1e-9
         )
