@@ -1455,6 +1455,7 @@ def banded_transpose(p, q, A):
     return A[r_A, c_A], q, p
 
 
+@jax.jit
 def matrix_1norm(A):
     """1-norm ``||A||_1`` (max absolute column sum), per block.
 
@@ -1503,6 +1504,7 @@ def _hager_1norm_est(apply_B, apply_BT, n, lead, dtype, iters):
     return jnp.maximum(est, alt)
 
 
+@functools.partial(jax.jit, static_argnames=["p", "q", "unroll"])
 def cond_1norm_banded(p, q, A, lu_factors, *, iters=5, unroll=None):
     """Per-block 1-norm condition estimate for a (non-periodic) banded operator.
 
@@ -1541,6 +1543,7 @@ def cond_1norm_banded(p, q, A, lu_factors, *, iters=5, unroll=None):
     return a1 * ainv1
 
 
+@jax.jit
 def cond_1norm_cr(A, cr_factors, *, iters=5):
     """Per-block 1-norm condition estimate for a (non-periodic) banded operator.
 
