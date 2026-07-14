@@ -286,6 +286,7 @@ def _fgmres(  # noqa: C901
     gs_method: str = "cgs2",
     flexible: bool = True,
     stabilize_every: ArrayLike = jnp.array(10),
+    res_scale: ArrayLike = jnp.array(1.0),
 ) -> tuple[
     Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
 ]:
@@ -333,6 +334,12 @@ def _fgmres(  # noqa: C901
         and use it for the stopping test and the reported residual. The cheap
         recursively-updated Givens residual can drift below the true residual once
         the Hessenberg becomes ill-conditioned, causing a false early exit.
+    res_scale : float, jax.Array
+        Factor multiplying the residual only in the verbose printout (default
+        1.0). Used so that the printed residual lines up with the residual tracked
+        by the outer loop (GCROT or LGMRES). Affects the printout only, never the
+        stopping test or the returned res/res_arr, which are always normalized to start
+        at 1.
 
     Returns
     -------
@@ -357,6 +364,7 @@ def _fgmres(  # noqa: C901
     atol = jnp.asarray(atol)
     print_every = jnp.asarray(print_every)
     stabilize_every = jnp.asarray(stabilize_every)
+    res_scale = jnp.asarray(res_scale)
 
     if lpsolve is None:
         lpsolve = _identity
@@ -495,7 +503,7 @@ def _fgmres(  # noqa: C901
             _maybe_print(
                 jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
                 j,
-                res,
+                res * res_scale,
                 pre="    FGMRES  ",
             )
         breakdown = H[j, j + 1] < eps * w_norm
@@ -822,6 +830,7 @@ def _gcrotmk_solve(
             print_every=print_every_inner,
             flexible=flexible,
             stabilize_every=stabilize_every,
+            res_scale=inner_res_0 / b_norm,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -1182,6 +1191,7 @@ def _lgmres_solve(
             print_every=print_every_inner,
             flexible=flexible,
             stabilize_every=stabilize_every,
+            res_scale=inner_res_0 / b_norm,
         )
         y *= inner_res_0
         nmv += nmv_inner
