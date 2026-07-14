@@ -50,14 +50,16 @@ class Field(eqx.Module):
     sqrtg : jax.Array, shape(ntheta, nzeta)
         Coordinate jacobian determinant from (rho, theta, zeta) to (R, phi, Z). Units
         of m^3
-    Psi : float
+    Psi : float, optional
         Total toroidal flux within the LCFS (in Webers, not divided by 2pi).
-    iota : float
-        Rotational transform.
-    R_major : float
-        Major radius.
-    a_minor : float
-        Minor radius.
+        If None, recovered from the field as π<sqrtg B^ζ>/rho.
+    iota : float, optional
+        Rotational transform. If None, recovered exactly as the flux-derivative ratio
+        <sqrtg B^θ>/<sqrtg B^ζ>.
+    R_major : float, optional
+        Major radius. If None, estimated as |G|/B0.
+    a_minor : float, optional
+        Minor radius. If None, estimated as sqrt(<sqrtg>/(R_major*rho)).
     NFP : int
         Number of field periods.
     dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
@@ -106,10 +108,10 @@ class Field(eqx.Module):
         B_sub_z: Float[ArrayLike, "ntheta nzeta"],
         Bmag: Float[ArrayLike, "ntheta nzeta"],
         sqrtg: Float[ArrayLike, "ntheta nzeta"],
-        Psi: Float[ArrayLike, ""],
-        iota: Float[ArrayLike, ""],
-        R_major: Float[ArrayLike, ""],
-        a_minor: Float[ArrayLike, ""],
+        Psi: Float[ArrayLike, ""] | None = None,
+        iota: Float[ArrayLike, ""] | None = None,
+        R_major: Float[ArrayLike, ""] | None = None,
+        a_minor: Float[ArrayLike, ""] | None = None,
         NFP: Int[ArrayLike, ""] = 1,
         *,
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
@@ -147,6 +149,25 @@ class Field(eqx.Module):
         self.B2mag_fsa = self.flux_surface_average(self.Bmag**2)
         self.I = self.flux_surface_average(self.B_sub_t)
         self.G = self.flux_surface_average(self.B_sub_z)
+        # Psi, iota, R_major and a_minor don't enter the solve (only diagnostics,
+        # printing and output scaling), so recover them from the field geometry
+        # when not supplied. Psi and iota come out (essentially) exactly since
+        # they are flux integrals of sqrtg·B^ζ, sqrtg·B^θ; R_major/a_minor are
+        # order-few-percent circular-torus estimates.
+        if Psi is None:
+            # π<sqrtg B^ζ>/rho: dΨ_tor/dρ = ∮ sqrtg B^ζ dθ with Ψ_tor(ρ) = Ψρ²
+            Psi = jnp.pi * (self.sqrtg * self.B_sup_z).mean() / self.rho
+        if iota is None:
+            # ι = Ψ_pol'/Ψ_tor' = <sqrtg B^θ>/<sqrtg B^ζ>
+            iota = (self.sqrtg * self.B_sup_t).mean() / (
+                self.sqrtg * self.B_sup_z
+            ).mean()
+        if R_major is None:
+            # <B_sub_z> = G ≈ R <B_tor>
+            R_major = jnp.abs(self.G) / self.B0
+        if a_minor is None:
+            # (ρ,θ,ζ) volume element dV = sqrtg dρ dθ dζ with V ≈ 2π²R (ρ a)²
+            a_minor = jnp.sqrt(jnp.abs(self.sqrtg).mean() / (R_major * self.rho))
         self.Psi = jnp.asarray(Psi)
         self.iota = jnp.asarray(iota)
         self.R_major = jnp.asarray(R_major)
@@ -491,8 +512,8 @@ class Field(eqx.Module):
         G: Float[ArrayLike, ""],
         iota: Float[ArrayLike, ""],
         Psi: Float[ArrayLike, ""],
-        R_major: Float[ArrayLike, ""],
-        a_minor: Float[ArrayLike, ""],
+        R_major: Float[ArrayLike, ""] | None = None,
+        a_minor: Float[ArrayLike, ""] | None = None,
         NFP: Int[ArrayLike, ""] = 1,
         *,
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
@@ -514,10 +535,10 @@ class Field(eqx.Module):
             Rotational transform.
         Psi : float
             Total flux through LCFS in webers.
-        R_major : float
-            Major radius.
-        a_minor : float
-            Minor radius.
+        R_major : float, optional
+            Major radius. If None, estimated as |G|/B0.
+        a_minor : float, optional
+            Minor radius. If None, estimated as sqrt(<sqrtg>/(R_major*rho)).
         NFP : int
             Number of field periods.
         dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
