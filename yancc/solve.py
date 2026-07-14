@@ -11,7 +11,7 @@ from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
 from .collisions import RosenbluthPotentials
-from .field import Field
+from .field import FIELD_SOURCE_NAMES, Field
 from .finite_diff import DEFAULT_P1A, DEFAULT_P2A
 from .krylov import gcrotmk
 from .linalg import BorderedOperator, InverseBorderedOperator
@@ -500,25 +500,51 @@ def _print_thermodynamic_forces(species, field, Erho, EparB):
     jax.debug.print(s, *forces[2], ordered=True)
 
 
+def _effective_trapped_fraction(field: Field, nlam: int = 64) -> Float[Any, ""]:
+    """Effective trapped-particle fraction f_t = 1 - f_c."""
+    Bmax = field.Bmag.max()
+    lam = jnp.linspace(0.0, 1.0 / Bmax, nlam)
+    denom: jax.Array = jax.vmap(
+        lambda l: field.flux_surface_average(
+            jnp.sqrt(jnp.maximum(1.0 - l * field.Bmag, 0.0))
+        )
+    )(lam)
+    integrand = jnp.where(denom > 0, lam / denom, jnp.array(0.0))
+    fc = 0.75 * field.B2mag_fsa * jnp.trapezoid(integrand, lam)
+    return 1.0 - fc
+
+
 def _print_field_summary(field: Field) -> None:
-    jax.debug.print(
-        "Field info:  "
-        + "ρ={rho: .2e}  "
-        + "<B>={Bavg: .2e} (T)  "
-        + "<|𝐛⋅∇B|>={bdotgradB: .2e} (T/m)  "
-        + "<|𝐁×∇ρ⋅∇B|>={BxgradrhodotgradB: .2e} (T²/m²)\n"
-        + " " * 13
-        + "ι={iota: .2e}  "
-        + "V'(ρ)={Vr: .2e} (m³)  "
-        + "I={I: .2e}  (T*m)  "
-        + "G={G: .2e}  (T*m)",
-        rho=field.rho,
-        iota=field.iota,
-        Bavg=field.Bmag_fsa,
-        Vr=field.sqrtg.mean(),
-        I=field.I,
-        G=field.G,
-        bdotgradB=field.flux_surface_average(jnp.abs(field.bdotgradB)),
-        BxgradrhodotgradB=field.flux_surface_average(jnp.abs(field.BxgradrhodotgradB)),
-        ordered=True,
+    # relative RMS variation of |B| on the surface: a ripple/trapping proxy
+    # that, unlike Bmax/Bmin, sees the whole |B| landscape rather than extremes
+    ripple = jnp.sqrt(field.B2mag_fsa / field.Bmag_fsa**2 - 1.0)
+    mirror = field.Bmag.max() / field.Bmag.min()
+    ftrap = _effective_trapped_fraction(field)
+    # source is an int-code enum leaf (jit/trace transparent); bake each label
+    # into its own format string and select with lax.switch so it renders
+    # whether the field is concrete or traced under an outer jit.
+    body = (
+        "):\n"
+        "    ρ         = {rho: .3f}              ι         = {iota: .3e}\n"
+        "    <B>       = {Bavg: .3e} T        δ_B       = {ripple: .3e}\n"
+        "    Bmax/Bmin = {mirror: .3e}          f_trapped = {ftrap: .3e}\n"
+        "    I         = {I: .3e} T·m      G         = {G: .3e} T·m"
+    )
+
+    def _printer(name: str):
+        return lambda: jax.debug.print(
+            "Field info (source: " + name + body,
+            rho=field.rho,
+            iota=field.iota,
+            Bavg=field.Bmag_fsa,
+            mirror=mirror,
+            ripple=ripple,
+            ftrap=ftrap,
+            I=field.I,
+            G=field.G,
+        )
+
+    jax.lax.switch(
+        field.source._value,
+        [_printer(name) for name in FIELD_SOURCE_NAMES],
     )

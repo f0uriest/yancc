@@ -10,6 +10,22 @@ from jaxtyping import Array, ArrayLike, Float, Int
 from scipy.constants import mu_0
 
 
+class FieldSource(eqx.Enumeration):
+    """Provenance of a Field's data (which constructor built it)."""
+
+    unknown = "unknown"
+    manual = "manual"
+    desc = "desc"
+    vmec = "vmec"
+    booz_xform = "booz_xform"
+    ipp_bc = "ipp_bc"
+    boozer = "boozer"
+
+
+# labels indexed by the integer code, for display of a (possibly traced) source
+FIELD_SOURCE_NAMES: tuple[str, ...] = tuple(FieldSource._index_to_message)
+
+
 class Field(eqx.Module):
     """Magnetic field on a flux surface.
 
@@ -79,6 +95,7 @@ class Field(eqx.Module):
     ntheta: int = eqx.field(static=True)
     nzeta: int = eqx.field(static=True)
     NFP: Int[Array, ""]
+    source: FieldSource
 
     def __init__(
         self,
@@ -98,7 +115,9 @@ class Field(eqx.Module):
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
+        source: FieldSource = FieldSource.manual,
     ):
+        self.source = source
         self.rho = jnp.asarray(rho)
         self.NFP = jnp.asarray(NFP)
         self.B_sup_t = jnp.asarray(B_sup_t)
@@ -202,6 +221,7 @@ class Field(eqx.Module):
             rho=rho,
             **data,
             NFP=eq.NFP,
+            source=FieldSource.desc,
         )
 
     @classmethod
@@ -291,7 +311,7 @@ class Field(eqx.Module):
         data["R_major"] = R_major
         data["a_minor"] = a_minor
 
-        return cls(rho=rho, **data, NFP=nfp)
+        return cls(rho=rho, **data, NFP=nfp, source=FieldSource.vmec)
 
     @classmethod
     def from_booz_xform(
@@ -387,6 +407,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
+            source=FieldSource.booz_xform,
         )
 
     @classmethod
@@ -458,6 +479,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
+            source=FieldSource.ipp_bc,
         )
 
     @classmethod
@@ -476,6 +498,7 @@ class Field(eqx.Module):
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
+        source: FieldSource = FieldSource.boozer,
     ):
         """Construct a field in Boozer coordinates.
 
@@ -518,7 +541,7 @@ class Field(eqx.Module):
         data["B0"] = B0
         data["R_major"] = R_major
         data["a_minor"] = a_minor
-        return cls(rho=rho, **data, NFP=NFP)
+        return cls(rho=rho, **data, NFP=NFP, source=source)
 
     @functools.partial(jnp.vectorize, signature="(m,n)->()", excluded=[0])
     def flux_surface_average(self, f: Float[Array, "ntheta nzeta"]) -> Float[Array, ""]:
@@ -568,6 +591,7 @@ class Field(eqx.Module):
             R_major=self.R_major,
             a_minor=self.a_minor,
             NFP=self.NFP,
+            source=self.source,
         )
 
 
