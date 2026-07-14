@@ -902,6 +902,8 @@
     "tests/test_species.py::test_perpendicular_collisionality_ee_nrl[slow]": 0.03774502803571522,
     "tests/test_species.py::test_perpendicular_collisionality_ii_nrl[fast]": 0.0019690440967679024,
     "tests/test_species.py::test_perpendicular_collisionality_ii_nrl[slow]": 0.0017918909434229136,
+    "tests/test_species.py::test_poloidal_mach_scales_inversely_with_x": 0.001,
+    "tests/test_species.py::test_poloidal_mach_matches_definition": 0.001,
     "tests/test_species.py::test_rhostar_scales_linearly_with_x": 0.0008647670038044453,
     "tests/test_species.py::test_species_charge_negative": 0.0005403861869126558,
     "tests/test_species.py::test_species_charge_units": 0.002819816814735532,

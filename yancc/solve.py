@@ -24,7 +24,7 @@ from .misc import (
 )
 from .preconditioner import DKEPreconditioner, MDKEPreconditioner
 from .solution import DKESolution, MDKESolution
-from .species import Estar, LocalMaxwellian, nustar
+from .species import Estar, LocalMaxwellian, nustar, poloidal_mach
 from .trajectories import DKE, MDKE
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -488,6 +488,9 @@ def _print_er_summary(species, field, Erho, EparB):
     erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
     s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *erstars, ordered=True)
+    machs = jnp.array([poloidal_mach(spec, field, Erho, 1.0) for spec in species])
+    s = "Mₚ (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
+    jax.debug.print(s, *machs, ordered=True)
 
 
 def _print_thermodynamic_forces(species, field, Erho, EparB):
