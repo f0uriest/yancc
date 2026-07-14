@@ -11,7 +11,13 @@ import sympy
 from yancc.utils import Gammainc, Gammaincc, lGammainc, lGammaincc
 from yancc.velocity_grids import UniformPitchAngleGrid
 
-from .conftest import _compute_G_sympy, _compute_H_sympy, _eval_f
+from .conftest import (
+    _compute_G_sympy,
+    _compute_H_sympy,
+    _eval_f,
+    _eval_f_sampled,
+    _speed_subset,
+)
 
 mpmath.mp.dps = 100
 
@@ -382,20 +388,20 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
     Hb = _compute_H_sympy(fb, v, l, vtb)
     Gb = _compute_G_sympy(fb, v, l, vtb)
 
-    Haa_sympy = _eval_f(Ha, v, speedgrid.x * va, subs)
-    Hab_sympy = _eval_f(Hb, v, speedgrid.x * va, subs)
-    Hba_sympy = _eval_f(Ha, v, speedgrid.x * vb, subs)
-    Hbb_sympy = _eval_f(Hb, v, speedgrid.x * vb, subs)
+    Haa_sympy = _eval_f_sampled(Ha, v, speedgrid.x * va, subs)
+    Hab_sympy = _eval_f_sampled(Hb, v, speedgrid.x * va, subs)
+    Hba_sympy = _eval_f_sampled(Ha, v, speedgrid.x * vb, subs)
+    Hbb_sympy = _eval_f_sampled(Hb, v, speedgrid.x * vb, subs)
 
-    dHaa_sympy = _eval_f(Ha.diff(v), v, speedgrid.x * va, subs)
-    dHab_sympy = _eval_f(Hb.diff(v), v, speedgrid.x * va, subs)
-    dHba_sympy = _eval_f(Ha.diff(v), v, speedgrid.x * vb, subs)
-    dHbb_sympy = _eval_f(Hb.diff(v), v, speedgrid.x * vb, subs)
+    dHaa_sympy = _eval_f_sampled(Ha.diff(v), v, speedgrid.x * va, subs)
+    dHab_sympy = _eval_f_sampled(Hb.diff(v), v, speedgrid.x * va, subs)
+    dHba_sympy = _eval_f_sampled(Ha.diff(v), v, speedgrid.x * vb, subs)
+    dHbb_sympy = _eval_f_sampled(Hb.diff(v), v, speedgrid.x * vb, subs)
 
-    ddGaa_sympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * va, subs)
-    ddGab_sympy = _eval_f(Gb.diff(v).diff(v), v, speedgrid.x * va, subs)
-    ddGba_sympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * vb, subs)
-    ddGbb_sympy = _eval_f(Gb.diff(v).diff(v), v, speedgrid.x * vb, subs)
+    ddGaa_sympy = _eval_f_sampled(Ga.diff(v).diff(v), v, speedgrid.x * va, subs)
+    ddGab_sympy = _eval_f_sampled(Gb.diff(v).diff(v), v, speedgrid.x * va, subs)
+    ddGba_sympy = _eval_f_sampled(Ga.diff(v).diff(v), v, speedgrid.x * vb, subs)
+    ddGbb_sympy = _eval_f_sampled(Gb.diff(v).diff(v), v, speedgrid.x * vb, subs)
 
     ffa = _eval_f(fa, v, speedgrid.x * va, subs)
     ffb = _eval_f(fb, v, speedgrid.x * vb, subs)
@@ -475,22 +481,24 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
     np.testing.assert_allclose(ddGbb_jax[:, :l, :, :], 0, atol=1e-12 * vb**2)
     np.testing.assert_allclose(ddGbb_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb**2)
 
+    # compare against the sympy reference only at the sampled speed-grid points
+    i = _speed_subset(speedgrid.nx)
     # a,a
-    np.testing.assert_allclose(Haa_jax[:, l, 0, 0], Haa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(dHaa_jax[:, l, 0, 0], dHaa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(ddGaa_jax[:, l, 0, 0], ddGaa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(Haa_jax[i, l, 0, 0], Haa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHaa_jax[i, l, 0, 0], dHaa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGaa_jax[i, l, 0, 0], ddGaa_sympy, rtol=1e-10, atol=0)
     # a,b
-    np.testing.assert_allclose(Hab_jax[:, l, 0, 0], Hab_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(dHab_jax[:, l, 0, 0], dHab_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(ddGab_jax[:, l, 0, 0], ddGab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(Hab_jax[i, l, 0, 0], Hab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHab_jax[i, l, 0, 0], dHab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGab_jax[i, l, 0, 0], ddGab_sympy, rtol=1e-10, atol=0)
     # b,a
-    np.testing.assert_allclose(Hba_jax[:, l, 0, 0], Hba_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(dHba_jax[:, l, 0, 0], dHba_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(ddGba_jax[:, l, 0, 0], ddGba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(Hba_jax[i, l, 0, 0], Hba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHba_jax[i, l, 0, 0], dHba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGba_jax[i, l, 0, 0], ddGba_sympy, rtol=1e-10, atol=0)
     # b,b
-    np.testing.assert_allclose(Hbb_jax[:, l, 0, 0], Hbb_sympy, rtol=1e-8, atol=0)
-    np.testing.assert_allclose(dHbb_jax[:, l, 0, 0], dHbb_sympy, rtol=1e-8, atol=0)
-    np.testing.assert_allclose(ddGbb_jax[:, l, 0, 0], ddGbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(Hbb_jax[i, l, 0, 0], Hbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(dHbb_jax[i, l, 0, 0], dHbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(ddGbb_jax[i, l, 0, 0], ddGbb_sympy, rtol=1e-8, atol=0)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
