@@ -15,7 +15,6 @@ from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
     get_dke_frozen_smoothers,
-    get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     get_dke_operators,
     get_fields_grids,
@@ -337,24 +336,6 @@ class DKEPreconditioner(MultigridOperator):
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
                 coulomb_log=coulomb_log,
-            )
-        elif smooth_type == 2:
-            smoothers = get_dke_jacobi2_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                coulomb_log=coulomb_log,
-                **options,
             )
         else:
             smoothers = get_dke_frozen_smoothers(

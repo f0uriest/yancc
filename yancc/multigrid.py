@@ -14,7 +14,6 @@ from .field import Field
 from .linalg import InverseLinearOperator, TransposedLinearOperator
 from .smoothers import (
     DKEFrozenPlaneSmoother,
-    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEFrozenPlaneSmoother,
@@ -200,51 +199,6 @@ def get_dke_jacobi_smoothers(
                 **options,
             )
             for order in ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"]
-        ]
-        smoothers.append(smooth)
-    return smoothers
-
-
-@eqx.filter_jit
-@jax.named_call
-def get_dke_jacobi2_smoothers(
-    fields,
-    pitchgrids,
-    speedgrid,
-    species,
-    Erho,
-    background,
-    potentials,
-    p1,
-    p2,
-    gauge,
-    smooth_solver,
-    weight,
-    coulomb_log=None,
-    **options,
-):
-    """Get multigrid smoothers for each field, pitchgrid."""
-    smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
-        smooth = [
-            DKEJacobi2Smoother(
-                field,
-                pitchgrid,
-                speedgrid,
-                species,
-                Erho,
-                background,
-                potentials,
-                p1=p1,
-                p2=p2,
-                axorder=order,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=weight,
-                coulomb_log=coulomb_log,
-                **options,
-            )
-            for order in ["atzsx", "tzasx", "zatsx"]
         ]
         smoothers.append(smooth)
     return smoothers

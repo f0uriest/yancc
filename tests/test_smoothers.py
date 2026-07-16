@@ -10,7 +10,6 @@ from yancc.field import Field
 from yancc.misc import dke_rhs
 from yancc.multigrid import (
     adpative_smooth,
-    get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     krylov1_smooth,
     krylov1s_smooth,
@@ -20,7 +19,6 @@ from yancc.multigrid import (
 )
 from yancc.smoothers import (
     DKEFrozenPlaneSmoother,
-    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEFrozenPlaneSmoother,
@@ -198,70 +196,6 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
     assert err < 1
 
 
-@pytest.mark.parametrize("v", [1, 2, 3])
-@pytest.mark.parametrize("n", [1e18, 1e20, 1e22])  # chosen for nustar ~ [1e-4, 1e-2, 1]
-@pytest.mark.parametrize(
-    "smooth_op",
-    [
-        standard_smooth,
-        adpative_smooth,
-        krylov1_smooth,
-        krylov1s_smooth,
-        krylov2_smooth,
-        krylov2s_smooth,
-    ],
-)
-def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
-    """Test smoothing with type 2 smoothers for DKE"""
-    speedgrid = MaxwellSpeedGrid(5)
-    species = [
-        GlobalMaxwellian(
-            Hydrogen,
-            lambda x: 3e3 * (1 - x**2),
-            lambda x: n * (1 - x**4),
-        ).localize(0.5),
-    ]
-    Erho = jnp.array(0.0)
-    operator_weights = jnp.ones(8).at[-2:].set(0)
-    A = DKE(
-        field,
-        pitchgrid,
-        speedgrid,
-        species,
-        Erho,
-        p1="2d",
-        p2=2,
-        gauge=True,
-        operator_weights=operator_weights,
-    )
-    b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
-    x_true = np.linalg.solve(A.as_matrix(), b)
-    potentials = A.potentials
-    smoothers = get_dke_jacobi2_smoothers(
-        [field],
-        [pitchgrid],
-        speedgrid,
-        species,
-        jnp.array(0.0),
-        [],
-        potentials,
-        "2d",
-        2,
-        True,
-        "dense",
-        None,
-        operator_weights=operator_weights,
-    )[0]
-    r = (x_true + b) / 2
-    x_smoothed, _ = smooth_op(
-        jnp.zeros_like(x_true), A, r, smoothers, nsteps=v, verbose=True
-    )
-    L = DKELaplacian(field, pitchgrid, speedgrid, species)
-    err = np.linalg.norm(L.mv(x_smoothed - x_true)) / np.linalg.norm(L.mv(x_true))
-    print("err=", err)
-    assert err < 1
-
-
 # ---------------------------------------------------------------------------
 # operator protocol sweep: out_structure / in_structure / transpose / as_matrix
 # ---------------------------------------------------------------------------
@@ -320,21 +254,6 @@ def test_dke_jacobi_banded_default_operator_weights(
         operator_weights=None,
     )
     assert op.smooth_solver == "banded"
-    _check_protocol(op)
-
-
-def test_smoother_protocol_dke_jacobi2(
-    field, pitchgrid, speedgrid, species2, potentials2
-):
-    op = DKEJacobi2Smoother(
-        field,
-        pitchgrid,
-        speedgrid,
-        species2,
-        jnp.array(1e3),
-        potentials=potentials2,
-        smooth_solver="dense",
-    )
     _check_protocol(op)
 
 
@@ -398,41 +317,6 @@ def test_dke_jacobi_smoother_default_operator_weights_explicit_weight(
     mat = s.as_matrix()
     assert mat.shape[0] == mat.shape[1]
     assert np.all(np.isfinite(mat))
-
-
-def test_dke_jacobi2_smoother_default_background(
-    pitchgrid, speedgrid, species2, field, potentials2
-):
-    """background=None default branch in DKEJacobi2Smoother."""
-    Erho = jnp.array(1e3)
-    s = DKEJacobi2Smoother(
-        field,
-        pitchgrid,
-        speedgrid,
-        species2,
-        Erho,
-        potentials=potentials2,
-        smooth_solver="dense",
-        # background omitted -> None -> [] branch
-    )
-    assert s.background == []
-
-
-def test_dke_jacobi2_smoother_banded_not_implemented(
-    pitchgrid, speedgrid, species2, field, potentials2
-):
-    """The banded solver path is not implemented for DKEJacobi2Smoother."""
-    Erho = jnp.array(1e3)
-    with pytest.raises(NotImplementedError):
-        DKEJacobi2Smoother(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            potentials=potentials2,
-            smooth_solver="banded",
-        )
 
 
 # ---------------------------------------------------------------------------

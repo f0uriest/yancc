@@ -216,9 +216,9 @@ DKE-only multigrid options
 
 ``smooth_type`` *(int, default 1)*
    Selects between two structurally different smoothers for the DKE
-   preconditioner. ``1`` is the default; ``2`` uses a different block
-   factorization that occasionally helps for multiple species at high collisionality,
-   at the cost of significantly more memory.
+   preconditioner. ``1`` (the default) uses the block-Jacobi smoother.
+   ``3`` adds the frozen (theta, zeta)-plane smoother, which can help for
+   stellarator geometries at the cost of more setup work.
 
 ``operator_weights``, ``smoother_weights``
    As above for the operator. The preconditioner defaults to the same
