@@ -13,9 +13,11 @@ from jaxtyping import Array, Float, Int
 from .field import Field
 from .linalg import InverseLinearOperator, TransposedLinearOperator
 from .smoothers import (
+    DKEFrozenPlaneSmoother,
     DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
+    MDKEFrozenPlaneSmoother,
     MDKEJacobiSmoother,
 )
 from .trajectories import DKE, MDKE
@@ -111,6 +113,55 @@ def get_mdke_jacobi_smoothers(
 
 @eqx.filter_jit
 @jax.named_call
+def get_mdke_frozen_smoothers(
+    fields,
+    pitchgrids,
+    erhohat,
+    nuhat,
+    p1,
+    p2,
+    gauge,
+    smooth_solver,
+    weight,
+    **options,
+):
+    """Get frozen plane + line multigrid smoothers for each field, pitchgrid."""
+    # a, t, z line relaxations: axorder whose last axis is the relaxed direction
+    line_orders = ["tza", "zat", "atz"]
+    smoothers = []
+    for field, pitchgrid in zip(fields, pitchgrids):
+        plane = MDKEFrozenPlaneSmoother(
+            field,
+            pitchgrid,
+            erhohat,
+            nuhat,
+            p1=p1,
+            p2=p2,
+            gauge=gauge,
+            weight=weight,
+        )
+        lines = [
+            MDKEJacobiSmoother(
+                field,
+                pitchgrid,
+                erhohat,
+                nuhat,
+                axorder=order,
+                p1=p1,
+                p2=p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=weight,
+                **options,
+            )
+            for order in line_orders
+        ]
+        smoothers.append([plane, *lines])
+    return smoothers
+
+
+@eqx.filter_jit
+@jax.named_call
 def get_dke_jacobi_smoothers(
     fields,
     pitchgrids,
@@ -196,6 +247,70 @@ def get_dke_jacobi2_smoothers(
             for order in ["atzsx", "tzasx", "zatsx"]
         ]
         smoothers.append(smooth)
+    return smoothers
+
+
+@eqx.filter_jit
+@jax.named_call
+def get_dke_frozen_smoothers(
+    fields,
+    pitchgrids,
+    speedgrid,
+    species,
+    Erho,
+    background,
+    potentials,
+    p1,
+    p2,
+    gauge,
+    smooth_solver,
+    weight,
+    operator_weights=None,
+    coulomb_log=None,
+    **options,
+):
+    """Get frozen plane + line multigrid smoothers for each field, pitchgrid."""
+    # x, a, s, z, t line relaxations: axorder whose last axis is the relaxed direction
+    line_orders = ["atzsx", "tzsxa", "xatzs", "sxatz", "zsxat"]
+    smoothers = []
+    for field, pitchgrid in zip(fields, pitchgrids):
+        plane = DKEFrozenPlaneSmoother(
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            Erho,
+            background,
+            potentials,
+            p1=p1,
+            p2=p2,
+            gauge=gauge,
+            weight=weight,
+            operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
+        )
+        lines = [
+            DKEJacobiSmoother(
+                field,
+                pitchgrid,
+                speedgrid,
+                species,
+                Erho,
+                background,
+                potentials,
+                p1=p1,
+                p2=p2,
+                axorder=order,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=weight,
+                operator_weights=operator_weights,
+                coulomb_log=coulomb_log,
+                **options,
+            )
+            for order in line_orders
+        ]
+        smoothers.append([plane, *lines])
     return smoothers
 
 

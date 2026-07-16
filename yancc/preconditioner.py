@@ -14,11 +14,13 @@ from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
 from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
+    get_dke_frozen_smoothers,
     get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     get_dke_operators,
     get_fields_grids,
     get_grid_resolutions,
+    get_mdke_frozen_smoothers,
     get_mdke_jacobi_smoothers,
     get_mdke_operators,
     get_prolongations,
@@ -92,6 +94,7 @@ class MDKEPreconditioner(MultigridOperator):
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
+        smooth_type = options.pop("smooth_type", 1)
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -133,17 +136,30 @@ class MDKEPreconditioner(MultigridOperator):
             p2=self.p2,
             gauge=gauge,
         )
-        smoothers = get_mdke_jacobi_smoothers(
-            fields=fields,
-            pitchgrids=grids,
-            erhohat=erhohat,
-            nuhat=nuhat,
-            p1=self.p1,
-            p2=self.p2,
-            gauge=gauge,
-            smooth_solver=smooth_solver,
-            weight=smooth_weights,
-        )
+        if smooth_type == 3:
+            smoothers = get_mdke_frozen_smoothers(
+                fields=fields,
+                pitchgrids=grids,
+                erhohat=erhohat,
+                nuhat=nuhat,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+            )
+        else:
+            smoothers = get_mdke_jacobi_smoothers(
+                fields=fields,
+                pitchgrids=grids,
+                erhohat=erhohat,
+                nuhat=nuhat,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+            )
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
         )
@@ -322,7 +338,7 @@ class DKEPreconditioner(MultigridOperator):
                 operator_weights=smoother_weights,
                 coulomb_log=coulomb_log,
             )
-        else:
+        elif smooth_type == 2:
             smoothers = get_dke_jacobi2_smoothers(
                 fields=fields,
                 pitchgrids=grids,
@@ -340,6 +356,24 @@ class DKEPreconditioner(MultigridOperator):
                 coulomb_log=coulomb_log,
                 **options,
             )
+        else:
+            smoothers = get_dke_frozen_smoothers(
+                fields=fields,
+                pitchgrids=grids,
+                speedgrid=speedgrid,
+                species=species,
+                Erho=Erho,
+                background=background,
+                potentials=potentials,
+                p1=self.p1,
+                p2=self.p2,
+                gauge=gauge,
+                smooth_solver=smooth_solver,
+                weight=smooth_weights,
+                operator_weights=smoother_weights,
+                coulomb_log=coulomb_log,
+            )
+
         coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(

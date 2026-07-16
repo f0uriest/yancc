@@ -896,6 +896,176 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+class DKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
+    """Frozen (theta, zeta)-plane smoother for DKE, applied via FFT.
+
+    The exact (theta, zeta) plane block couples the two angle directions through the
+    variable-coefficient streaming/ExB winds, giving distinct (nt*nz)^2 dense blocks per
+    (s, x, a), which is too expensive to store or invert at practical resolution.
+    This smoother freezes the winds to their flux-surface average c_theta, c_zeta so
+    the block becomes a single constant-coefficient operator
+    ``c_theta Dtheta + c_zeta Dzeta + d I`` shared across (theta, zeta). Because Dtheta,
+    Dzeta are periodic-circulant, it is diagonalized by the 2d FFT: only the
+    per-(s, x, a) inverse symbol 1/lambda(k_theta, k_zeta) is stored (O(N) memory) and
+    the solve is FFT2 / divide / IFFT2 (O(N log(nt*nz))). The collision part enters
+    exactly through the operator diagonal; only the geometry winds are frozen to their
+    mean. Pair with the exact angle lines (DKEJacobiSmoother), which damp the
+    frozen-approximation error the plane discards.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : MaxwellSpeedGrid
+        Grid of coordinates in speed.
+    species : list[LocalMaxwellian]
+        Species being considered.
+    Erho : float
+        Radial electric field, Erho = -d Phi / d rho, in Volts.
+    background : list[LocalMaxwellian]
+        Background species to include in the collision operator without solving for df.
+    potentials : RosenbluthPotentials, optional
+        Precomputed Rosenbluth potentials for the collision operator.
+    p1 : str
+        Stencil for first derivatives.
+    p2 : int
+        Order of approximation for second derivatives.
+    gauge : bool
+        Whether to impose the gauge constraint by fixing f at a single point.
+    weight : array-like, optional
+        Under-relaxation parameter, scalar. Defaults to 0.7
+    operator_weights : array-like, optional
+        Per-term weights for the DKE operator.
+    coulomb_log : float, optional
+        Coulomb logarithm for the collision operator.
+
+    """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    speedgrid: MaxwellSpeedGrid
+    species: list[LocalMaxwellian]
+    invsym: jax.Array
+    weight: jax.Array
+
+    # label used by the (verbose) multigrid smoothing loop
+    axorder = "plane"
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        speedgrid: MaxwellSpeedGrid,
+        species: list[LocalMaxwellian],
+        Erho: Float[ArrayLike, ""],
+        background: list[LocalMaxwellian] | None = None,
+        potentials: RosenbluthPotentials | None = None,
+        p1="2d",
+        p2=2,
+        gauge: Bool[ArrayLike, ""] = True,
+        weight: jax.Array | None = None,
+        operator_weights: jax.Array | None = None,
+        coulomb_log=None,
+    ):
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.speedgrid = speedgrid
+        self.species = species
+        if background is None:
+            background = []
+        if operator_weights is None:
+            operator_weights = jnp.ones(8).at[-1].set(0)
+        self.weight = jnp.asarray(0.7 if weight is None else weight)
+
+        op = DKE(
+            field,
+            pitchgrid,
+            speedgrid,
+            species,
+            Erho,
+            background=background,
+            potentials=potentials,
+            p1=p1,
+            p2=p2,
+            axorder="sxatz",
+            gauge=gauge,
+            operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
+        )
+
+        ns, nx, na = len(species), speedgrid.nx, pitchgrid.nalpha
+        nt, nz = field.ntheta, field.nzeta
+        # frozen winds: operator-weighted plane-average of the streaming/ExB coeffs,
+        # flattened to (ns*nx*na,) in (s, x, a) order (matching the sxatz plane layout)
+        cbar_t = (operator_weights[2] * op._opt._w).mean(axis=(3, 4)).reshape(-1)
+        cbar_z = (operator_weights[3] * op._opz._w).mean(axis=(3, 4)).reshape(-1)
+        # per-(s, x, a) plane mean of the full operator diagonal (collisions enter here)
+        fulldiag = (
+            op.diagonal().reshape(ns, nx, na, nt, nz).mean(axis=(3, 4)).reshape(-1)
+        )
+        # circulant symbols of the forward/backward upwind stencils (first column
+        # generates it); pick the upwind stencil per block by the frozen wind's sign
+        et_fd = jnp.fft.fft(op._opt._fd[:, 0])
+        et_bd = jnp.fft.fft(op._opt._bd[:, 0])
+        ez_fd = jnp.fft.fft(op._opz._fd[:, 0])
+        ez_bd = jnp.fft.fft(op._opz._bd[:, 0])
+        et = jnp.where((cbar_t > 0)[:, None], et_bd[None, :], et_fd[None, :])  # n1,nt
+        ez = jnp.where((cbar_z > 0)[:, None], ez_bd[None, :], ez_fd[None, :])  # n1,nz
+        # remove the frozen stencil's own diagonal so d matches the exact block mean
+        # diagonal without double counting the theta/zeta stencil diagonal
+        Dt00 = jnp.where(cbar_t > 0, op._opt._bd[0, 0], op._opt._fd[0, 0])
+        Dz00 = jnp.where(cbar_z > 0, op._opz._bd[0, 0], op._opz._fd[0, 0])
+        dbar = fulldiag - (cbar_t * Dt00 + cbar_z * Dz00)
+        lam = (
+            cbar_t[:, None, None] * et[:, :, None]
+            + cbar_z[:, None, None] * ez[:, None, :]
+            + dbar[:, None, None]
+        )
+        self.invsym = jnp.where(
+            jnp.abs(lam) > jnp.finfo(lam.real.dtype).eps, 1.0 / lam, 0.0
+        )
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix vector product."""
+        with jax.named_scope("DKEFrozenPlaneSmoother.mv"):
+            n1, nt, nz = self.invsym.shape
+            # native sxatz flatten -> (ns*nx*na, nt, nz); theta, zeta are inner axes
+            x = vector.reshape(n1, nt, nz)
+            y = jnp.fft.ifft2(
+                jnp.fft.fft2(x, axes=(1, 2)) * self.invsym, axes=(1, 2)
+            ).real
+            return (self.weight * y).reshape(-1)
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (
+                self.field.ntheta
+                * self.field.nzeta
+                * self.pitchgrid.nalpha
+                * self.speedgrid.nx
+                * len(self.species),
+            ),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return self.in_structure()
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
+
+
 class DKELaplacian(lx.AbstractLinearOperator):
     """Normalized Laplacian operator on 4d phase space."""
 
@@ -995,6 +1165,132 @@ class DKELaplacian(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+class MDKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
+    """Frozen (theta, zeta)-plane smoother for MDKE, applied via FFT.
+
+    The monoenergetic analog of :class:`DKEFrozenPlaneSmoother`. The exact
+    (theta, zeta) plane block couples the two angle directions through the
+    variable-coefficient streaming/ExB winds, giving distinct (nt*nz)^2 dense blocks
+    per pitch node, which is too expensive to store or invert at practical resolution.
+    This smoother freezes the winds to their flux-surface average c_theta, c_zeta so
+    the block becomes a single constant-coefficient operator
+    ``c_theta Dtheta + c_zeta Dzeta + d I`` shared across (theta, zeta). Because Dtheta,
+    Dzeta are periodic-circulant, it is diagonalized by the 2d FFT: only the per-pitch
+    inverse symbol 1/lambda(k_theta, k_zeta) is stored (O(N) memory) and the solve is
+    FFT2 / divide / IFFT2 (O(N log(nt*nz))). The pitch-angle scattering enters exactly
+    through the operator diagonal; only the geometry winds are frozen to their mean.
+    Pair with the exact angle lines (MDKEJacobiSmoother), which damp the
+    frozen-approximation error the plane discards.
+
+    Parameters
+    ----------
+    field : Field
+        Magnetic field data.
+    pitchgrid : PitchAngleGrid
+        Pitch angle grid data.
+    erhohat : float
+        Monoenergetic electric field, Erho/v in units of V*s/m.
+    nuhat : float
+        Monoenergetic collisionality, nu/v in units of 1/m.
+    p1 : str
+        Stencil for first derivatives.
+    p2 : int
+        Order of approximation for second derivatives.
+    gauge : bool
+        Whether to impose the gauge constraint by fixing f at a single point.
+    weight : array-like, optional
+        Under-relaxation parameter, scalar. Defaults to 0.7
+
+    """
+
+    field: Field
+    pitchgrid: UniformPitchAngleGrid
+    invsym: jax.Array
+    weight: jax.Array
+
+    # label used by the (verbose) multigrid smoothing loop
+    axorder = "plane"
+
+    def __init__(
+        self,
+        field: Field,
+        pitchgrid: UniformPitchAngleGrid,
+        erhohat: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
+        p1="2d",
+        p2=2,
+        gauge: Bool[ArrayLike, ""] = True,
+        weight: jax.Array | None = None,
+    ):
+        self.field = field
+        self.pitchgrid = pitchgrid
+        self.weight = jnp.asarray(0.7 if weight is None else weight)
+
+        op = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, "atz", gauge)
+
+        na = pitchgrid.nalpha
+        nt, nz = field.ntheta, field.nzeta
+        # frozen winds: plane-average of the streaming/ExB coeffs, one per pitch node
+        # (matching the atz plane layout, pitch outermost)
+        cbar_t = op._opt._w.mean(axis=(1, 2))  # (na,)
+        cbar_z = op._opz._w.mean(axis=(1, 2))  # (na,)
+        # per-pitch plane mean of the full operator diagonal (collisions enter here)
+        fulldiag = op.diagonal().reshape(na, nt, nz).mean(axis=(1, 2))  # (na,)
+        # circulant symbols of the forward/backward upwind stencils (first column
+        # generates it); pick the upwind stencil per block by the frozen wind's sign
+        et_fd = jnp.fft.fft(op._opt._fd[:, 0])
+        et_bd = jnp.fft.fft(op._opt._bd[:, 0])
+        ez_fd = jnp.fft.fft(op._opz._fd[:, 0])
+        ez_bd = jnp.fft.fft(op._opz._bd[:, 0])
+        et = jnp.where((cbar_t > 0)[:, None], et_bd[None, :], et_fd[None, :])  # na,nt
+        ez = jnp.where((cbar_z > 0)[:, None], ez_bd[None, :], ez_fd[None, :])  # na,nz
+        # remove the frozen stencil's own diagonal so d matches the exact block mean
+        # diagonal without double counting the theta/zeta stencil diagonal
+        Dt00 = jnp.where(cbar_t > 0, op._opt._bd[0, 0], op._opt._fd[0, 0])
+        Dz00 = jnp.where(cbar_z > 0, op._opz._bd[0, 0], op._opz._fd[0, 0])
+        dbar = fulldiag - (cbar_t * Dt00 + cbar_z * Dz00)
+        lam = (
+            cbar_t[:, None, None] * et[:, :, None]
+            + cbar_z[:, None, None] * ez[:, None, :]
+            + dbar[:, None, None]
+        )
+        self.invsym = jnp.where(
+            jnp.abs(lam) > jnp.finfo(lam.real.dtype).eps, 1.0 / lam, 0.0
+        )
+
+    @eqx.filter_jit
+    def mv(self, vector):
+        """Matrix vector product."""
+        with jax.named_scope("MDKEFrozenPlaneSmoother.mv"):
+            na, nt, nz = self.invsym.shape
+            # native atz flatten -> (na, nt, nz); theta, zeta are inner axes
+            x = vector.reshape(na, nt, nz)
+            y = jnp.fft.ifft2(
+                jnp.fft.fft2(x, axes=(1, 2)) * self.invsym, axes=(1, 2)
+            ).real
+            return (self.weight * y).reshape(-1)
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        x = jnp.eye(self.in_size())
+        return jax.vmap(self.mv)(x).T
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return jax.ShapeDtypeStruct(
+            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
+            dtype=self.field.Bmag.dtype,
+        )
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return self.in_structure()
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
+
+
 @lx.is_symmetric.register(DKELaplacian)
 @lx.is_diagonal.register(DKELaplacian)
 @lx.is_tridiagonal.register(DKELaplacian)
@@ -1007,6 +1303,12 @@ class DKELaplacian(lx.AbstractLinearOperator):
 @lx.is_symmetric.register(MDKEJacobiSmoother)
 @lx.is_diagonal.register(MDKEJacobiSmoother)
 @lx.is_tridiagonal.register(MDKEJacobiSmoother)
+@lx.is_symmetric.register(MDKEFrozenPlaneSmoother)
+@lx.is_diagonal.register(MDKEFrozenPlaneSmoother)
+@lx.is_tridiagonal.register(MDKEFrozenPlaneSmoother)
+@lx.is_symmetric.register(DKEFrozenPlaneSmoother)
+@lx.is_diagonal.register(DKEFrozenPlaneSmoother)
+@lx.is_tridiagonal.register(DKEFrozenPlaneSmoother)
 def _(operator):
     return False
 

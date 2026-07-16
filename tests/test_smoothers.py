@@ -19,9 +19,11 @@ from yancc.multigrid import (
     standard_smooth,
 )
 from yancc.smoothers import (
+    DKEFrozenPlaneSmoother,
     DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
+    MDKEFrozenPlaneSmoother,
     MDKEJacobiSmoother,
     _pitch_cond_gate,
     optimal_smoothing_parameter_3d,
@@ -674,3 +676,161 @@ def test_mdke_cr_matches_banded(axorder):
         np.testing.assert_allclose(
             np.asarray(cr.mv(x)), np.asarray(banded.mv(x)), rtol=1e-7, atol=1e-9
         )
+
+
+# ---------------------------------------------------------------------------
+# frozen (theta, zeta)-plane FFT smoothers (DKEFrozenPlaneSmoother /
+# MDKEFrozenPlaneSmoother)
+# ---------------------------------------------------------------------------
+
+
+def _constant_boozer_field(nt, nz):
+    """A Boozer-coordinate field with constant |B| over the surface.
+
+    Not physically real, just used for testing the frozen plane approximation.
+    """
+    Bmag = jnp.ones((nt, nz))
+    return Field.from_boozer(rho=0.5, Bmag=Bmag, I=0.1, G=1.0, iota=0.9, Psi=1.0, NFP=1)
+
+
+def test_frozen_plane_protocol_mdke(field, pitchgrid):
+    """out/in structure, transpose, and as_matrix agree (FFT-based mv transposes)."""
+    op = MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3)
+    _check_protocol(op)
+
+
+def test_frozen_plane_protocol_dke(field, pitchgrid, speedgrid, species2, potentials2):
+    op = DKEFrozenPlaneSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        background=[],  # explicit (non-None) background -> skips the default branch
+        potentials=potentials2,
+        operator_weights=jnp.ones(8).at[-2:].set(0),
+    )
+    _check_protocol(op)
+
+
+def test_frozen_plane_weight_linear_mdke(field, pitchgrid):
+    """Matvec is linear in the (scalar) under-relaxation weight; default is 0.7."""
+    s1 = MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3, weight=jnp.array(1.0))
+    sw = MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3, weight=jnp.array(0.3))
+    x = jnp.asarray(np.random.default_rng(0).standard_normal(s1.in_size()))
+    np.testing.assert_allclose(
+        np.asarray(sw.mv(x)), 0.3 * np.asarray(s1.mv(x)), rtol=1e-10, atol=1e-12
+    )
+    # default-weight branch (weight=None -> 0.7)
+    assert float(MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3).weight) == 0.7
+
+
+def test_frozen_plane_dke_default_args(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """background=None, operator_weights=None, weight=None default branches."""
+    s = DKEFrozenPlaneSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        # background / operator_weights / weight all omitted -> default branches
+    )
+    assert float(s.weight) == 0.7
+    mat = s.as_matrix()
+    assert mat.shape[0] == mat.shape[1] == s.in_size()
+    assert np.all(np.isfinite(mat))
+
+
+def test_frozen_plane_mdke_matches_dense_block(pitchgrid):
+    """On a constant-|B| field the winds are plane-constant so the frozen
+    approximation is exact, and each pitch block of the smoother must be
+    weight * inv of the true (theta, zeta) sub-block of the MDKE. Also confirms the
+    smoother is block-diagonal in pitch and that the plane block has genuine
+    off-diagonal (streaming) coupling for the FFT solve to invert.
+    """
+    nt, nz = 5, 7
+    cfield = _constant_boozer_field(nt, nz)
+    erhohat, nuhat, weight = 1e-3, 1e-2, 0.6
+    sm = MDKEFrozenPlaneSmoother(
+        cfield, pitchgrid, erhohat, nuhat, gauge=False, weight=jnp.array(weight)
+    )
+    # use the public MDKE.as_matrix (catches a change to the private op attributes
+    # the smoother reads).
+    A = np.asarray(
+        MDKE(cfield, pitchgrid, erhohat, nuhat, "2d", 2, "atz", False).as_matrix()
+    )
+    M = np.asarray(sm.as_matrix())
+
+    na, npl = pitchgrid.nalpha, nt * nz
+    eye = np.eye(npl)
+    for a in range(na):
+        idx = slice(a * npl, (a + 1) * npl)
+        plane = A[idx, idx]
+        # streaming actually couples the plane (not a trivially-diagonal block)
+        assert np.abs(plane - np.diag(np.diag(plane))).max() > 0
+        # off-pitch-block coupling is exactly zero (block diagonal in pitch)
+        off = M[idx].copy()
+        off[:, idx] = 0.0
+        np.testing.assert_allclose(off, 0.0, atol=1e-12)
+        # the block inverts its (exact) frozen operator, up to the weight
+        np.testing.assert_allclose(plane @ M[idx, idx], weight * eye, atol=1e-8)
+
+
+def test_frozen_plane_dke_matches_dense_block(speedgrid, species2, potentials2):
+    """DKE analog of the block-inverse check, on a constant-|B| Boozer field with 2
+    species (exercises the sxatz layout / per-(s, x, a) plane blocks).
+    """
+    nt, nz = 5, 5
+    cfield = _constant_boozer_field(nt, nz)
+    pg = UniformPitchAngleGrid(7)
+    Erho = jnp.array(1e3)
+    ow = jnp.ones(8).at[-1].set(0)
+    weight = 0.6
+    sm = DKEFrozenPlaneSmoother(
+        cfield,
+        pg,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        operator_weights=ow,
+        gauge=False,
+        weight=jnp.array(weight),
+    )
+    # Dense reference built from the public ``DKE.as_matrix``. (catches a change to
+    # the private op attributes the smoother reads).
+    A = np.asarray(
+        DKE(
+            cfield,
+            pg,
+            speedgrid,
+            species2,
+            Erho,
+            background=[],
+            potentials=potentials2,
+            p1="2d",
+            p2=2,
+            axorder="sxatz",
+            gauge=False,
+            operator_weights=ow,
+        ).as_matrix()
+    )
+    M = np.asarray(sm.as_matrix())
+
+    ns, nx, na = len(species2), speedgrid.nx, pg.nalpha
+    npl = nt * nz
+    eye = np.eye(npl)
+    nblock = ns * nx * na
+    saw_offdiag = False
+    for b in range(nblock):
+        idx = slice(b * npl, (b + 1) * npl)
+        plane = A[idx, idx]
+        saw_offdiag |= np.abs(plane - np.diag(np.diag(plane))).max() > 0
+        off = M[idx].copy()
+        off[:, idx] = 0.0
+        np.testing.assert_allclose(off, 0.0, atol=1e-12)
+        np.testing.assert_allclose(plane @ M[idx, idx], weight * eye, atol=1e-8)
+    assert saw_offdiag  # at least some blocks have real plane coupling to invert
