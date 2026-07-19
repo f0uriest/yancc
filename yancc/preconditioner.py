@@ -73,6 +73,9 @@ class MDKEPreconditioner(MultigridOperator):
         self.nuhat = jnp.asarray(nuhat)
         self.p1 = options.pop("p1", DEFAULT_P1M)
         self.p2 = options.pop("p2", DEFAULT_P2M)
+        # Smoother FD order, independent of the coarse-operator order (p1/p2);
+        smooth_p1 = options.pop("smooth_p1", self.p1)
+        smooth_p2 = options.pop("smooth_p2", self.p2)
         gauge = options.pop("gauge", True)
         resolutions = options.pop("resolutions", None)
         max_grids = options.pop("max_grids", None)
@@ -141,8 +144,8 @@ class MDKEPreconditioner(MultigridOperator):
                 pitchgrids=grids,
                 erhohat=erhohat,
                 nuhat=nuhat,
-                p1=self.p1,
-                p2=self.p2,
+                p1=smooth_p1,
+                p2=smooth_p2,
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
@@ -153,8 +156,8 @@ class MDKEPreconditioner(MultigridOperator):
                 pitchgrids=grids,
                 erhohat=erhohat,
                 nuhat=nuhat,
-                p1=self.p1,
-                p2=self.p2,
+                p1=smooth_p1,
+                p2=smooth_p2,
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
@@ -255,6 +258,9 @@ class DKEPreconditioner(MultigridOperator):
 
         self.p1 = options.pop("p1", DEFAULT_P1M)
         self.p2 = options.pop("p2", DEFAULT_P2M)
+        # Smoother FD order, independent of the coarse-operator order (p1/p2).
+        smooth_p1 = options.pop("smooth_p1", self.p1)
+        smooth_p2 = options.pop("smooth_p2", self.p2)
         gauge = options.pop("gauge", True)
         resolutions = options.pop("resolutions", None)
         coarsening_factor = options.pop("coarsening_factor", None)
@@ -329,8 +335,8 @@ class DKEPreconditioner(MultigridOperator):
                 Erho=Erho,
                 background=background,
                 potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
+                p1=smooth_p1,
+                p2=smooth_p2,
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
@@ -346,8 +352,8 @@ class DKEPreconditioner(MultigridOperator):
                 Erho=Erho,
                 background=background,
                 potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
+                p1=smooth_p1,
+                p2=smooth_p2,
                 gauge=gauge,
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
