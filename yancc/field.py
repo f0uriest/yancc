@@ -57,7 +57,7 @@ class Field(eqx.Module):
         Rotational transform. If None, recovered exactly as the flux-derivative ratio
         <sqrtg B^θ>/<sqrtg B^ζ>.
     R_major : float, optional
-        Major radius. If None, estimated as |G|/B0.
+        Major radius. If None, estimated as abs(G)/B0.
     a_minor : float, optional
         Minor radius. If None, estimated as sqrt(<sqrtg>/(R_major*rho)).
     NFP : int
@@ -536,7 +536,7 @@ class Field(eqx.Module):
         Psi : float
             Total flux through LCFS in webers.
         R_major : float, optional
-            Major radius. If None, estimated as |G|/B0.
+            Major radius. If None, estimated as abs(G)/B0.
         a_minor : float, optional
             Minor radius. If None, estimated as sqrt(<sqrtg>/(R_major*rho)).
         NFP : int
