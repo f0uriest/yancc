@@ -1,0 +1,4 @@
+#!/bin/bash -l
+srun /global/cfs/cdirs/mp217/mattland/sfincs/fortran/version3/sfincs -ksp_view -mat_mumps_icntl_7 3 -mat_mumps_cntl_1 1e-3
+
+# The -mat_mumps_cntl_1 1e-3 flag causes the problem to be solved with higher accuracy, at the cost of higher probability of a mumps workarray-too-small error.
