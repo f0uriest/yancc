@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use yancc in published work, please cite it as below."
+title: "yancc: Yet Another NeoClassical Code"
+abstract: >-
+  yancc is a pure-Python, JAX-based code for solving the drift kinetic equation
+  to compute neoclassical flows and transport fluxes in toroidal magnetic
+  confinement geometries, including both tokamaks and stellarators. It solves
+  the full (multi-species, energy-dependent) drift kinetic equation as well as
+  the monoenergetic approximation, using a matrix-free Krylov solver with a
+  geometric multigrid preconditioner. Being written in JAX, it is
+  differentiable and runs on both CPUs and GPUs.
+type: software
+authors:
+  - given-names: Rory
+    family-names: Conlin
+    email: mail@fouriest.net
+    affiliation: >-
+      Institute for Research in Electronics and Applied Physics,
+      University of Maryland, College Park
+    orcid: 'https://orcid.org/0000-0001-8366-2111'
+  - given-names: Matt
+    family-names: Landreman
+    affiliation: >-
+      Institute for Research in Electronics and Applied Physics,
+      University of Maryland, College Park
+    orcid: 'https://orcid.org/0000-0002-7233-577X'
+keywords:
+  - neoclassical transport
+  - drift kinetic equation
+  - stellarator
+  - tokamak
+  - plasma physics
+  - magnetic confinement fusion
+  - automatic differentiation
+  - JAX
+  - GPU
+url: "https://yancc.readthedocs.io/"
+repository-code: "https://github.com/f0uriest/yancc"
+repository-artifact: "https://pypi.org/project/yancc/"
+license: MIT
