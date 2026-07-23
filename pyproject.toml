@@ -53,7 +53,7 @@ dynamic = [ "version" ]
 dev = [
   # benchmarks and analytic test oracles
   "sympy",
-  "desc-opt <= 0.17.1",
+  "desc-opt <= 0.17.2",
   "mpmath",
   # building the docs
   "sphinx >= 3.0.0, <= 9.1",
