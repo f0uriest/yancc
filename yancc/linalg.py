@@ -1,12 +1,13 @@
 """Linear algebra helpers."""
 
 import functools
-from typing import Any
+from typing import Any, cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+import numpy as np
 
 
 def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
@@ -504,13 +505,39 @@ def lu_factor_banded(p, q, A, *, unroll=None, pivot_tol=0.0, equilibrate=False):
     return A_padded[:, :n], s
 
 
-@functools.partial(jax.jit, static_argnames=("p", "q", "unroll"))
-@functools.partial(jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, "unroll"))
-def _lu_solve_banded(p, q, lu, b, *, unroll=None):
+@functools.partial(jax.jit, static_argnames=("p", "q", "unroll", "trans"))
+@functools.partial(
+    jnp.vectorize, signature="(m,n),(n)->(n)", excluded=(0, 1, "unroll", "trans")
+)
+def _lu_solve_banded(p, q, lu, b, *, unroll=None, trans=False):
     n = lu.shape[1]
     assert p <= n
     assert q <= n
     assert lu.shape[0] == (p + q + 1)
+
+    if trans:
+        # forward: U^T y = b  (pad left by q so row a-q stays in range)
+        b_padded = jnp.pad(b, (q, 0))
+
+        def utT_forward(a, acc):
+            window = jax.lax.dynamic_slice_in_dim(acc, a, q, axis=0)  # rows a-q .. a-1
+            ya = (acc[a + q] - jnp.sum(lu[0:q, a] * window)) / lu[q, a]
+            return acc.at[a + q].set(ya)
+
+        y = jax.lax.fori_loop(0, n, utT_forward, b_padded, unroll=unroll)[q:]
+
+        # backward: L^T x = y  (pad right by p so row a+p stays in range)
+        y_padded = jnp.pad(y, (0, p))
+
+        def ltT_backward(k, acc):
+            a = n - 1 - k
+            window = jax.lax.dynamic_slice_in_dim(
+                acc, a + 1, p, axis=0
+            )  # rows a+1 .. a+p
+            xa = acc[a] - jnp.sum(lu[q + 1 : q + 1 + p, a] * window)
+            return acc.at[a].set(xa)
+
+        return jax.lax.fori_loop(0, n, ltT_backward, y_padded, unroll=unroll)[:n]
 
     # ==========================================
     # 1. Forward Substitution: Ly = b
@@ -559,7 +586,7 @@ def _lu_solve_banded(p, q, lu, b, *, unroll=None):
     return x_padded[q:]
 
 
-def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
+def lu_solve_banded(p, q, lu_factors, b, *, unroll=None, trans=False):
     """Solve a linear system with a pre-factored banded matrix in banded storage format.
 
     Note: does not use any pivoting so may be unstable unless A is diagonally dominant.
@@ -573,6 +600,8 @@ def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
         in the tuple is applied to ``b`` automatically.
     b : jax.Array, shape(...,N)
         RHS vector.
+    trans : bool
+        If True, solve ``A^T x = b`` instead of ``A x = b`` using the same factors.
 
     Returns
     -------
@@ -580,6 +609,10 @@ def lu_solve_banded(p, q, lu_factors, b, *, unroll=None):
         Solution to linear system.
     """
     lu, s = lu_factors
+    if trans:
+        # A = S^-1 A_scaled (S = diag(s) is the row equilibration), so
+        # A^-T b = S (A_scaled^-T b): scale the output by s, not the input.
+        return s * _lu_solve_banded(p, q, lu, b, unroll=unroll, trans=True)
     return _lu_solve_banded(p, q, lu, s * b, unroll=unroll)
 
 
@@ -822,6 +855,465 @@ def solve_banded_periodic(p, q, A, b, *, unroll=None):
     return lu_solve_banded_periodic(p, q, lu_schur_v, b, unroll=unroll)
 
 
+# ---------------------------------------------------------------------------
+# Block cyclic reduction (CR) for banded / block-tridiagonal systems
+# ---------------------------------------------------------------------------
+# An alternative to the banded LU solvers above. A banded matrix (lower bandwidth
+# ``p``, upper bandwidth ``q``) is reinterpreted as block-tridiagonal with block
+# size ``b = max(p, q)`` then factored by cyclic reduction.
+
+
+def _cr_mm(x, y):
+    return jnp.einsum("Bmij,Bmjk->Bmik", x, y)
+
+
+def _cr_mv(x, y):
+    return jnp.einsum("Bmij,Bmj->Bmi", x, y)
+
+
+def _cr_level_maps(M):
+    """Static (numpy) index maps for one CR reduction level of M blocks.
+
+    Eliminates odd-indexed blocks, keeps ceil(M/2) even survivors. When M is odd the
+    wrap pair (blocks 0 and M-1) become adjacent survivors, so that one coupling passes
+    through directly; all others get the Schur update.
+    """
+    surv = np.arange(0, M, 2)
+    elim = np.arange(1, M, 2)
+    lp = (surv - 1) % M
+    rp = (surv + 1) % M
+    left_is_e = lp % 2 == 1
+    right_is_e = rp % 2 == 1
+    left_epos = np.where(left_is_e, (lp - 1) // 2, 0)
+    right_epos = np.where(right_is_e, (rp - 1) // 2, 0)
+    sposL = ((elim - 1) % M) // 2
+    sposR = ((elim + 1) % M) // 2
+    return dict(
+        surv=surv,
+        elim=elim,
+        lp=lp,
+        rp=rp,
+        left_is_e=left_is_e,
+        right_is_e=right_is_e,
+        left_epos=left_epos,
+        right_epos=right_epos,
+        sposL=sposL,
+        sposR=sposR,
+    )
+
+
+def _cr_reduce(D, L, U):
+    """Core cyclic reduction of a batch of block-tridiagonal matrices.
+
+    D, L, U : (B, m, b, b) (L[:, 0], U[:, m-1] are the periodic wrap corners, zero for
+    a non-periodic system). Returns (levels, root_inv), where each level holds the
+    factors to reduce the rhs and back-substitute the eliminated blocks, and root_inv
+    inverts the final single block.
+    """
+    levels = []
+    M = D.shape[1]
+    while M > 1:
+        mp = _cr_level_maps(M)
+        surv, elim = mp["surv"], mp["elim"]
+        le = jnp.asarray(mp["left_is_e"])[None, :, None, None]
+        re = jnp.asarray(mp["right_is_e"])[None, :, None, None]
+        # gather along the block axis (axis 1); jnp.take keeps pyright happy
+        Dinv_E = jnp.linalg.inv(jnp.take(D, elim, axis=1))
+        D_p = jnp.take(D, surv, axis=1)
+        L_p, U_p = jnp.take(L, surv, axis=1), jnp.take(U, surv, axis=1)
+        L_lp, U_lp = jnp.take(L, mp["lp"], axis=1), jnp.take(U, mp["lp"], axis=1)
+        L_rp, U_rp = jnp.take(L, mp["rp"], axis=1), jnp.take(U, mp["rp"], axis=1)
+        Dinv_l = jnp.take(Dinv_E, mp["left_epos"], axis=1)
+        Dinv_r = jnp.take(Dinv_E, mp["right_epos"], axis=1)
+        # alpha/beta are zero where the neighbor is a survivor (wrap, odd M)
+        alpha = jnp.where(le, _cr_mm(L_p, Dinv_l), 0.0)
+        beta = jnp.where(re, _cr_mm(U_p, Dinv_r), 0.0)
+        D_new = D_p - _cr_mm(alpha, U_lp) - _cr_mm(beta, L_rp)
+        L_new = jnp.where(le, -_cr_mm(alpha, L_lp), L_p)
+        U_new = jnp.where(re, -_cr_mm(beta, U_rp), U_p)
+        L_E, U_E = jnp.take(L, elim, axis=1), jnp.take(U, elim, axis=1)
+        levels.append((alpha, beta, Dinv_E, L_E, U_E, mp))
+        D, L, U = D_new, L_new, U_new
+        M = len(surv)
+    root_inv = jnp.linalg.inv(D + L + U)
+    return levels, root_inv
+
+
+def _cr_forward_solve(levels, root_inv, rhs) -> jax.Array:
+    """Apply A^-1 to rhs : (B, m, b) given (levels, root_inv)."""
+    saved = []
+    b = rhs
+    for alpha, beta, _Dinv_E, _L_E, _U_E, mp in levels:
+        b_new = (
+            jnp.take(b, mp["surv"], axis=1)
+            - _cr_mv(alpha, jnp.take(b, mp["lp"], axis=1))
+            - _cr_mv(beta, jnp.take(b, mp["rp"], axis=1))
+        )
+        saved.append(jnp.take(b, mp["elim"], axis=1))
+        b = b_new
+    x = _cr_mv(root_inv, b)
+    for (_alpha, _beta, Dinv_E, L_E, U_E, mp), b_e in zip(
+        reversed(levels), reversed(saved)
+    ):
+        surv, elim = mp["surv"], mp["elim"]
+        M = len(surv) + len(elim)
+        x_elim = _cr_mv(
+            Dinv_E,
+            b_e
+            - _cr_mv(L_E, jnp.take(x, mp["sposL"], axis=1))
+            - _cr_mv(U_E, jnp.take(x, mp["sposR"], axis=1)),
+        )
+        # surv/elim are disjoint unique indices -> declare it so the scatter is
+        # linear-transposable (needed by the trans=True path)
+        full = jnp.zeros((x.shape[0], M) + x.shape[2:], x.dtype)
+        full = full.at[:, surv].set(x, unique_indices=True)
+        full = full.at[:, elim].set(x_elim, unique_indices=True)
+        x = full
+    return x
+
+
+def _cr_row_scale(D, L, U):
+    """Per-block-row max-magnitude reciprocal (row equilibration), (B, m, b)."""
+    rowmax = jnp.maximum(
+        jnp.max(jnp.abs(D), axis=-1),
+        jnp.maximum(jnp.max(jnp.abs(L), axis=-1), jnp.max(jnp.abs(U), axis=-1)),
+    )
+    return jnp.where(rowmax == 0, 1.0, 1.0 / rowmax)
+
+
+@functools.partial(jax.jit, static_argnames=("equilibrate",))
+def cr_block_tridiag_factor(D, L, U, *, equilibrate=False):
+    """Cyclic-reduction factorization of a batch of block-tridiagonal matrices.
+
+    Parameters
+    ----------
+    D, L, U : jax.Array, shape (B, m, b, b)
+        Diagonal, sub- and super-diagonal blocks. L[:, 0] and U[:, m-1] are
+        the periodic wrap corners (pass zeros for a non-periodic system).
+    equilibrate : bool
+        If True, scale each block row to unit max-magnitude before factoring.
+        Exact (row scaling does not change the solution), improves the unpivoted
+        elimination on poorly scaled systems. Stored in the factors and applied
+        by cr_block_tridiag_solve.
+
+    Returns
+    -------
+    factors : tuple (levels, root_inv, s)
+        levels and root_inv from the reduction; s is the row scaling (B, m, b)
+        (ones when equilibrate=False).
+    """
+    if equilibrate:
+        s = _cr_row_scale(D, L, U)
+        D, L, U = D * s[..., None], L * s[..., None], U * s[..., None]
+    else:
+        s = jnp.ones(D.shape[:-1], D.dtype)
+    levels, root_inv = _cr_reduce(D, L, U)
+    return levels, root_inv, s
+
+
+@functools.partial(jax.jit, static_argnames=("trans",))
+def cr_block_tridiag_solve(factors, b, *, trans=False) -> jax.Array:
+    """Solve A x = b (or A^T x = b if trans) from CR factors.
+
+    Parameters
+    ----------
+    factors : tuple
+        Output of cr_block_tridiag_factor.
+    b : jax.Array, shape (B, m, b)
+    trans : bool
+        If True, solve with A^T. Uses the same stored factors.
+
+    Returns
+    -------
+    x : jax.Array, shape (B, m, b)
+    """
+    levels, root_inv, s = factors
+    if trans:
+        # factors are of M = diag(s) A; A^T x = b  =>  x = s * (M^{-T} b)
+        (y,) = jax.linear_transpose(
+            lambda r: _cr_forward_solve(levels, root_inv, r), b
+        )(b)
+        return s * y
+    return _cr_forward_solve(levels, root_inv, s * b)
+
+
+def _banded_to_blocks(Ab, b, p, q):
+    """Non-periodic banded storage (B, p+q+1, N) -> blocks (B, m, b, b).
+
+    N must be a multiple of the block size b (which must be >= max(p, q) for the result
+    to be block-tridiagonal); wrap/out-of-range entries are zeroed so
+    L[:, 0] and U[:, m-1] come out zero.
+    """
+    N = Ab.shape[-1]
+    H = p + q
+    m = N // b
+    k = jnp.arange(m)[:, None, None]
+    a = jnp.arange(b)[None, :, None]
+    c = jnp.arange(b)[None, None, :]
+
+    def band_get(row, col) -> jax.Array:
+        r = row - col + q
+        valid = (r >= 0) & (r <= H) & (col >= 0) & (col < N) & (row >= 0) & (row < N)
+        val = cast(jax.Array, Ab[:, jnp.clip(r, 0, H), jnp.clip(col, 0, N - 1)])
+        return jnp.where(valid[None], val, 0.0)
+
+    row = k * b + a
+    D = band_get(row, k * b + c)  # (B, m, b, b), batch-first
+    L = band_get(row, (k - 1) * b + c)
+    U = band_get(row, (k + 1) * b + c)
+    return D, L, U
+
+
+def banded_to_block_tridiag(A_banded, p=None, q=None):
+    """Extract padded non-periodic block-tridiagonal blocks from banded storage.
+
+    Parameters
+    ----------
+    A_banded : jax.Array, shape (..., p+q+1, N)
+        Banded storage (scipy/LAPACK format). The block size is b = max(p, q), the
+        smallest that makes the matrix block-tridiagonal.
+    p, q : int, optional
+        Lower/upper bandwidth. When both are omitted they default to the symmetric
+        bw = (H - 1) // 2 inferred from the storage height H = p + q + 1.
+
+    Returns
+    -------
+    D, L, U : jax.Array, shape (B, m, b, b)
+        Block-tridiagonal blocks with B = prod(leading dims) and m = ceil(N / b). If N
+        is not a multiple of b the system is padded to m*b with decoupled identity rows
+        (exact; L[:, 0]=U[:, m-1]=0).
+    """
+    *lead, H, N = A_banded.shape
+    if p is None and q is None:
+        p = q = (H - 1) // 2
+    assert p is not None and q is not None, "pass both p and q, or neither"
+    assert H == p + q + 1, "storage height must equal p + q + 1"
+    b = max(p, q)
+    B = int(np.prod(lead)) if lead else 1
+    Ab = A_banded.reshape(B, H, N)
+    Npad = -(-N // b) * b
+    if Npad != N:
+        Ab = jnp.zeros((B, H, Npad), Ab.dtype).at[:, :, :N].set(Ab)
+        Ab = Ab.at[:, q, N:].set(1.0)  # appended rows are identity (diagonal at r=q)
+    return _banded_to_blocks(Ab, b, p, q)
+
+
+@functools.partial(jax.jit, static_argnames=("p", "q", "equilibrate"))
+def cr_banded_factor(A_banded, p=None, q=None, *, equilibrate=False):
+    """Cyclic-reduction factor of a non-periodic banded matrix.
+
+    Parameters
+    ----------
+    A_banded : jax.Array, shape (..., p+q+1, N)
+    p, q : int, optional
+        Lower/upper bandwidth. Default to the symmetric bw = (H - 1) // 2.
+    equilibrate : bool
+        Row-equilibrate before factoring (see cr_block_tridiag_factor).
+
+    Returns
+    -------
+    factors : tuple
+        (levels, root_inv, s) from cr_block_tridiag_factor. The block size and padding
+        are recovered from array shapes by cr_banded_solve.
+    """
+    D, L, U = banded_to_block_tridiag(A_banded, p, q)
+    return cr_block_tridiag_factor(D, L, U, equilibrate=equilibrate)
+
+
+@functools.partial(jax.jit, static_argnames=("trans",))
+def cr_banded_solve(factors, b, *, trans=False):
+    """Solve a non-periodic banded system from cr_banded_factor factors.
+
+    Parameters
+    ----------
+    factors : tuple
+        Output of cr_banded_factor.
+    b : jax.Array, shape (..., N)
+        RHS (original, unpadded size).
+    trans : bool
+        Solve with A^T if True.
+
+    Returns
+    -------
+    x : jax.Array, shape (..., N)
+    """
+    root_inv = factors[1]
+    blk = root_inv.shape[-1]  # block size b, static
+    *lead, Nin = b.shape
+    B = int(np.prod(lead)) if lead else 1
+    Npad = -(-Nin // blk) * blk
+    m = Npad // blk
+    rhs = b.reshape(B, Nin)
+    if Npad != Nin:
+        rhs = jnp.zeros((B, Npad), rhs.dtype).at[:, :Nin].set(rhs)
+    rhs = rhs.reshape(B, m, blk)  # (B, m, blk), batch-first
+    x = cr_block_tridiag_solve(factors, rhs, trans=trans)
+    x = cast(jax.Array, x).reshape(B, Npad)[:, :Nin]
+    return x.reshape(*lead, Nin) if lead else x.reshape(Nin)
+
+
+def _cr_wrap_lowrank(A, p, q):
+    """Isolate the strictly-banded part and build the wrap low-rank update.
+
+    Mirrors the construction in lu_factor_banded_periodic. A : (B, p+q+1, N) banded
+    storage. Returns A_band (wrap zeroed), U : (N, k) indicator, VT : (B, k, N) wrap
+    values, and the wrap_cols / wrap_rows index arrays (k = p + q), where
+    A_periodic = A_band + U @ VT per batch.
+    """
+    B, H, N = A.shape
+    dtype = A.dtype
+    r_idx = jnp.arange(H)[:, None]
+    j_idx = jnp.arange(N)[None, :]
+    i_linear = j_idx + r_idx - q
+    is_wrap = (i_linear < 0) | (i_linear >= N)
+    i_cyclic = i_linear % N
+
+    A_band = jnp.where(is_wrap[None], 0.0, A)
+
+    k_dim = p + q
+    U = jnp.zeros((N, k_dim), dtype)
+    U = U.at[N - q + jnp.arange(q), jnp.arange(q)].set(1.0)  # bottom-left rows
+    U = U.at[jnp.arange(p), q + jnp.arange(p)].set(1.0)  # top-right rows
+
+    k_map = jnp.where(i_cyclic >= N - q, i_cyclic - (N - q), q + i_cyclic)
+    safe_k = cast(jax.Array, jnp.where(is_wrap, k_map, 0)).reshape(-1)
+    safe_j = jnp.broadcast_to(j_idx, (H, N)).reshape(-1)
+    vals = cast(jax.Array, jnp.where(is_wrap[None], A, 0.0)).reshape(B, -1)
+    VT = jnp.zeros((B, k_dim, N), dtype).at[:, safe_k, safe_j].add(vals)
+
+    # rows carrying a 1 in U (in k-column order), for the transpose correction
+    wrap_rows = jnp.concatenate([N - q + jnp.arange(q), jnp.arange(p)])
+    # columns of VT that are nonzero (bottom-left cols 0..q-1, top-right N-p..N-1)
+    wrap_cols = jnp.concatenate([jnp.arange(q), N - p + jnp.arange(p)])
+    return A_band, U, VT, wrap_cols, wrap_rows
+
+
+def _cr_solve_columns(bf, M, trans=False):
+    """Apply A^{-1} (or A^{-T}) to each column of M : (B, N, k)."""
+    cols = jnp.moveaxis(M, -1, 0)  # (k, B, N)
+    out = jax.vmap(lambda col: cr_banded_solve(bf, col, trans=trans))(cols)
+    return jnp.moveaxis(out, 0, -1)  # (B, N, k)
+
+
+@functools.partial(jax.jit, static_argnames=("p", "q", "equilibrate"))
+def cr_banded_periodic_factor(A_banded, p=None, q=None, *, equilibrate=False):
+    """Cyclic-reduction factor of a periodic banded matrix.
+
+    Parameters
+    ----------
+    A_banded : jax.Array, shape (..., p+q+1, N)
+    p, q : int, optional
+        Lower/upper bandwidth. Default to the symmetric bw = (H - 1) // 2.
+    equilibrate : bool
+        Row-equilibrate the full periodic system before factoring.
+
+    Returns
+    -------
+    factors : tuple
+        For N > p + q, the 8-tuple (sub, Z_U, Y, Z_Vt, Yt, s, wrap_cols, wrap_rows)
+        the non-periodic sub-factors plus the forward/transpose capacitance pieces.
+        For N <= p + q (where the wrap corners overlap and the low-rank split is
+        invalid) the 2-tuple (lu, piv) of a batched dense LU; cr_banded_periodic_solve
+        dispatches on the tuple length.
+    """
+    *lead, H, N = A_banded.shape
+    if p is None and q is None:
+        p = q = (H - 1) // 2
+    assert p is not None and q is not None, "pass both p and q, or neither"
+    assert H == p + q + 1, "storage height must equal p + q + 1"
+    B = int(np.prod(lead)) if lead else 1
+    A = A_banded.reshape(B, H, N)
+    dtype = A.dtype
+
+    if N <= p + q:
+        # The rank-(p+q) wrap update needs disjoint top-right and bottom-left
+        # indicator rows; they overlap once N <= p + q and the Woodbury correction
+        # is then wrong. Fall back to a dense LU exactly as lu_factor_banded_periodic
+        # does for n <= p+q. The 2-tuple return signals the dense path to
+        # cr_banded_periodic_solve. (N is static, so this is a compile-time branch
+        # and large-N factors never carry the dense matrix.)
+        A_dense = jax.vmap(lambda M: banded_to_dense(p, q, M))(A)  # (B, N, N)
+        return jax.vmap(jax.scipy.linalg.lu_factor)(A_dense)  # (lu, piv)
+
+    # row equilibration of the full periodic system (scales A_band and U alike)
+    if equilibrate:
+        s = jax.vmap(lambda M: _banded_row_scale(p, q, M, periodic=True))(A)  # (B,N)
+    else:
+        s = jnp.ones((B, N), dtype)
+
+    A_band, U, VT, wrap_cols, wrap_rows = _cr_wrap_lowrank(A, p, q)
+    A_band = jax.vmap(lambda M, sc: _scale_banded_rows(p, q, M, sc, periodic=False))(
+        A_band, s
+    )
+    Us = s[:, :, None] * U[None]  # (B, N, k), row-scaled indicator
+
+    sub = cr_banded_factor(A_band, p, q, equilibrate=False)
+
+    # forward capacitance: C = I + VT @ (M^-1 Us),  Y = C^-1 VT[:, wrap_cols].
+    # VT is nonzero only in wrap_cols, so contracting Y against Binvb[wrap_cols]
+    # reproduces the full C^-1 VT Binvb (see lu_solve_banded_periodic).
+    Z_U = _cr_solve_columns(sub, Us)  # (B, N, k)
+    C = jnp.eye(p + q, dtype=dtype)[None] + jnp.einsum("bkn,bnl->bkl", VT, Z_U)
+    Y = jnp.linalg.solve(C, VT[:, :, wrap_cols])  # (B, k, len(wrap_cols))
+
+    # transpose capacitance: (diag(s) A_periodic)^T = M^T + V @ Us^T (V = VT^T).
+    # The Us wrap values are folded into sel at solve time, so Yt is plain Ct^{-1}.
+    V = jnp.swapaxes(VT, -1, -2)  # (B, N, k)
+    Z_Vt = _cr_solve_columns(sub, V, trans=True)  # M^{-T} V, (B, N, k)
+    Ct = jnp.eye(p + q, dtype=dtype)[None] + jnp.einsum("bnk,bnl->bkl", Us, Z_Vt)
+    Yt = jnp.linalg.inv(Ct)  # (B, k, k)
+
+    return sub, Z_U, Y, Z_Vt, Yt, s, wrap_cols, wrap_rows
+
+
+@functools.partial(jax.jit, static_argnames=("trans",))
+def cr_banded_periodic_solve(factors, b, *, trans=False):
+    """Solve a periodic banded system from cr_banded_periodic_factor factors.
+
+    Parameters
+    ----------
+    factors : tuple
+        Output of cr_banded_periodic_factor.
+    b : jax.Array, shape (..., N)
+    trans : bool
+        Solve with A^T if True.
+
+    Returns
+    -------
+    x : jax.Array, shape (..., N)
+    """
+    *lead, Nin = b.shape
+    B = int(np.prod(lead)) if lead else 1
+    bflat = b.reshape(B, Nin)
+
+    if len(factors) == 2:
+        # dense fallback from cr_banded_periodic_factor (N <= 2*bw); len is static
+        lu, piv = factors
+        tr = 1 if trans else 0
+        x = jax.vmap(lambda a, p_, r: jax.scipy.linalg.lu_solve((a, p_), r, trans=tr))(
+            lu, piv, bflat
+        )
+        return x.reshape(*lead, Nin) if lead else x.reshape(Nin)
+
+    sub, Z_U, Y, Z_Vt, Yt, s, wrap_cols, wrap_rows = factors
+
+    if trans:
+        # A^T x = b  =>  x = s * (S^-T b), S = diag(s) A_periodic = M + Us VT
+        Mtb = cr_banded_solve(sub, bflat, trans=True).reshape(B, Nin)  # M^-T b
+        sel = (s * Mtb)[:, wrap_rows]  # Us^T (M^-T b)
+        corr = jnp.einsum("bnk,bk->bn", Z_Vt, jnp.einsum("bkl,bl->bk", Yt, sel))
+        x = s * (Mtb - corr)
+    else:
+        # A x = b  =>  S x = diag(s) b,  x = M^-1(sb) - Z_U (Y (M^-1(sb))[wrap])
+        Minvsb = cr_banded_solve(sub, s * bflat).reshape(B, Nin)
+        corr = jnp.einsum(
+            "bnk,bk->bn", Z_U, jnp.einsum("bkl,bl->bk", Y, Minvsb[:, wrap_cols])
+        )
+        x = Minvsb - corr
+
+    return x.reshape(*lead, Nin) if lead else x.reshape(Nin)
+
+
 @functools.partial(jax.jit, static_argnames=("p", "q"))
 @functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1))
 def banded_mv(p, q, A, x):
@@ -961,3 +1453,127 @@ def banded_transpose(p, q, A):
 
     # Gather elements using advanced indexing
     return A[r_A, c_A], q, p
+
+
+@jax.jit
+def matrix_1norm(A):
+    """1-norm ``||A||_1`` (max absolute column sum), per block.
+
+    Works for dense storage ``(..., n, n)`` and banded storage ``(..., p+q+1, n)``:
+    in both, matrix column ``j`` is ``A[..., :, j]`` (for banded, the entries of column
+    ``j`` are the stored diagonals at column ``j``), so summing ``|.|`` over axis ``-2``
+    and maxing over axis ``-1`` gives the maximum absolute column sum.
+    """
+    return jnp.max(jnp.sum(jnp.abs(A), axis=-2), axis=-1)
+
+
+def _hager_1norm_est(apply_B, apply_BT, n, lead, dtype, iters):
+    """Hager/Higham lower-bound estimate of ``||B||_1`` in a fixed number of iterations.
+
+    Parameters
+    ----------
+    apply_B, apply_BT : callable
+        Map ``(lead..., n) -> (lead..., n)``, applying ``B`` and ``B^T`` per block.
+    n : int
+        Block dimension.
+    lead : tuple
+        Batch (block) shape.
+    dtype : jnp.dtype
+    iters : int
+        Number of iterations (LAPACK uses <= 5).
+    """
+    x = jnp.full(lead + (n,), 1.0 / n, dtype=dtype)
+
+    def body(carry, _):
+        x, est = carry
+        y = apply_B(x)
+        est = jnp.maximum(est, jnp.sum(jnp.abs(y), axis=-1))
+        xi = jnp.where(y >= 0, 1.0, -1.0).astype(dtype)
+        z = apply_BT(xi)
+        j = jnp.argmax(jnp.abs(z), axis=-1)
+        x = jax.nn.one_hot(j, n, dtype=dtype)
+        return (x, est), None
+
+    (x, est), _ = jax.lax.scan(body, (x, jnp.zeros(lead, dtype)), None, length=iters)
+
+    # b_i = (-1)^i (1 + i/(n-1)) probes cancellation the unit vectors miss
+    i = jnp.arange(n, dtype=dtype)
+    b = (1.0 + i / max(n - 1, 1)) * (1.0 - 2.0 * (i % 2))
+    y = apply_B(jnp.broadcast_to(b, lead + (n,)))
+    alt = 2.0 * jnp.sum(jnp.abs(y), axis=-1) / (3.0 * n)
+    return jnp.maximum(est, alt)
+
+
+@functools.partial(jax.jit, static_argnames=["p", "q", "unroll"])
+def cond_1norm_banded(p, q, A, lu_factors, *, iters=5, unroll=None):
+    """Per-block 1-norm condition estimate for a (non-periodic) banded operator.
+
+    ``||A||_1`` is exact from the banded storage; ``||A^{-1}||_1`` is estimated with a
+    fixed-iteration Hager/Higham scheme.
+
+    Parameters
+    ----------
+    p, q : int
+        Lower/upper bandwidth of ``A``.
+    A : jax.Array, shape ``(..., p+q+1, n)``
+        Original banded-storage matrix (pre-factorization), batched over leading axes.
+    lu_factors : tuple
+        Factors ``(lu, s)`` from ``lu_factor_banded(p, q, A, ...)``.
+    iters : int
+        Fixed number of Hager iterations.
+    unroll : int or None
+        Loop unroll passed to the banded solves.
+
+    Returns
+    -------
+    cond : jax.Array, shape ``(...)``
+        Estimated ``kappa_1`` of each block.
+    """
+    lead = A.shape[:-2]
+    n = A.shape[-1]
+    a1 = matrix_1norm(A)
+
+    def apply_B(V):
+        return lu_solve_banded(p, q, lu_factors, V, unroll=unroll)
+
+    def apply_BT(V):
+        return lu_solve_banded(p, q, lu_factors, V, unroll=unroll, trans=True)
+
+    ainv1 = _hager_1norm_est(apply_B, apply_BT, n, lead, A.dtype, iters)
+    return a1 * ainv1
+
+
+@jax.jit
+def cond_1norm_cr(A, cr_factors, *, iters=5):
+    """Per-block 1-norm condition estimate for a (non-periodic) banded operator.
+
+    Identical to cond_1norm_banded but drives the Hager/Higham ||A^-1||_1 estimate with
+    the cyclic-reduction solves cr_banded_solve instead of the banded LU. ||A||_1
+    is exact from the banded storage.
+
+    Parameters
+    ----------
+    A : jax.Array, shape (..., 2*bw+1, n)
+        Original banded-storage matrix (pre-factorization), batched over leading axes.
+    cr_factors : tuple
+        Factors from cr_banded_factor(A, ...).
+    iters : int
+        Fixed number of Hager iterations.
+
+    Returns
+    -------
+    cond : jax.Array, shape (...)
+        Estimated ``kappa_1`` of each block.
+    """
+    lead = A.shape[:-2]
+    n = A.shape[-1]
+    a1 = matrix_1norm(A)
+
+    def apply_B(V):
+        return cr_banded_solve(cr_factors, V)
+
+    def apply_BT(V):
+        return cr_banded_solve(cr_factors, V, trans=True)
+
+    ainv1 = _hager_1norm_est(apply_B, apply_BT, n, lead, A.dtype, iters)
+    return a1 * ainv1

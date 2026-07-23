@@ -413,6 +413,42 @@ def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike 
     return Er / v / field.Bmag_fsa
 
 
+def poloidal_mach(
+    species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0
+):
+    """Poloidal Mach number M_p = ω_E /ω_transit.
+
+    Ratio of the E×B poloidal rotation frequency to the parallel-streaming
+    poloidal transit frequency,
+
+        ω_E       = E_r /(<B> a)              (E×B poloidal rotation rate)
+        ω_transit = v <b·∇θ> = v <B^θ /|B|>   (poloidal transit rate)
+
+    Er-induced resonances of the streaming operator v∥ b·∇ + V_E·∇ occur where
+    these two frequencies become commensurate, i.e. where |M_p| passes through
+    order-unity /rational values. Such resonances produce near-null modes that
+    can stall the solver, so M_p is a proximity diagnostic for that failure.
+
+    - M_p(x=1) ~ O(1) → resonance lands in the thermal bulk → most dangerous
+    - M_p(x=1) ≫ 1 → x_res ≫ 1, resonance pushed into the sparsely-populated tail.
+    - M_p(x=1) ≪ 1 → x_res ≪ 1, only slow (collisionally damped) particles resonate.
+
+    Parameters
+    ----------
+    species: LocalMaxwellian
+        Species being considered.
+    field: Field
+        Magnetic field information.
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    x : float
+        Normalized speed being considered. x=v/vth
+    """
+    # <b·∇θ> = <B^θ /|B|>, the exact flux-surface-averaged poloidal transit rate
+    bdotgradtheta = field.flux_surface_average(field.B_sup_t / field.Bmag)
+    return Estar(species, field, Erho, x) / (field.a_minor * jnp.abs(bdotgradtheta))
+
+
 def nustar(
     species: LocalMaxwellian,
     field: Field,

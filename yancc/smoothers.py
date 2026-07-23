@@ -2,6 +2,7 @@
 
 import itertools
 import warnings
+from typing import Any
 
 import equinox as eqx
 import interpax
@@ -16,9 +17,18 @@ from .field import Field
 from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
+    cond_1norm_banded,
+    cond_1norm_cr,
+    cr_banded_factor,
+    cr_banded_periodic_factor,
+    cr_banded_periodic_solve,
+    cr_banded_solve,
     dense_to_banded,
+    lu_factor_banded,
     lu_factor_banded_periodic,
+    lu_solve_banded,
     lu_solve_banded_periodic,
+    matrix_1norm,
 )
 from .species import LocalMaxwellian, nustar
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
@@ -126,20 +136,25 @@ OPTIMAL_SMOOTHING_COEFFS_3D = {
 }
 
 
+# the full DKE spans many orders of magnitude in collisionality. We could allow for
+# collisionality dependent weights but it seems sensitive and can lead to divergence
+# if not tuned carefully, and tuning carefully for all possible problems is a nightmare
+# simpler to just set a constant weight for each axis. In the future could make this
+# depend on the thermal collisionality maybe (not local)?
 OPTIMAL_SMOOTHING_COEFFS_4D = {
     "2d": {
-        "z": jnp.array([0.3503, 0.7894, 0.6710, 0.8939, 0.7280, 0.6392, 0.5938]),
-        "t": jnp.array([0.6291, 0.5176, 0.5524, 0.5782, 0.6513, 0.6728, 0.5910]),
-        "a": jnp.array([0.8500, 0.8500, 0.8700, 0.9000, 0.9000, 0.7000, 0.5000]),
-        "x": jnp.array([0.5641, 0.5275, 0.5330, 0.5623, 0.6604, 0.6867, 0.5982]),
-        "s": jnp.array([0.5797, 0.5254, 0.5435, 0.5641, 0.6617, 0.6698, 0.5938]),
+        "z": jnp.array([0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70]),
+        "t": jnp.array([0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70, 0.70]),
+        "a": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "x": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "s": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
     },
     "4d": {
-        "z": jnp.array([0.3503, 0.4894, 0.3710, 0.5939, 0.7280, 0.6392, 0.5938]),
-        "t": jnp.array([0.6291, 0.6676, 0.7024, 0.5782, 0.6513, 0.6728, 0.5910]),
-        "a": jnp.array([0.8500, 0.7000, 0.7200, 0.6000, 0.9000, 0.7000, 0.5000]),
-        "x": jnp.array([0.5641, 0.5275, 0.5330, 0.5623, 0.6604, 0.6867, 0.5982]),
-        "s": jnp.array([0.5797, 0.5254, 0.5435, 0.5641, 0.6617, 0.6698, 0.5938]),
+        "z": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "t": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "a": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "x": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
+        "s": jnp.array([0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60, 0.60]),
     },
 }
 
@@ -222,10 +237,12 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         Ordering for variables in f, eg how the 3d array is flattened
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
-    smooth_solver : {"banded", "dense"}
-        Solver to use for inverting the smoother. "banded" is significantly faster in
-        most cases but may be numerically unstable in some edge cases. "dense" is
-        slower but more robust.
+    smooth_solver : {None, "banded", "cr", "dense"}
+        Solver to use for inverting the smoother. "banded" uses the least memory but
+        can be the slowest on GPU. "dense" uses the most memory but is often the fastest
+        on GPU, and competitive on CPU at moderate resolution. "cr" uses ~2x more
+        memory than banded but is significantly faster on both CPU and GPU. None
+        selects "cr" for large matrices or "dense" when the memory savings are small.
     weight : array-like, optional
         Under-relaxation parameter.
 
@@ -239,7 +256,7 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
     bandwidth: int = eqx.field(static=True)
     smooth_solver: str = eqx.field(static=True)
     weight: jax.Array
-    mats: jax.Array
+    mats: Any
 
     def __init__(
         self,
@@ -262,19 +279,17 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.bandwidth = max(
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
-        assert smooth_solver in {None, "banded", "dense"}
+        assert smooth_solver in {None, "banded", "cr", "dense"}
         if smooth_solver is None:
             sizes = {
                 "a": self.pitchgrid.nalpha,
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver once it actually saves memory: dense stores N*n
-            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
-            # when the convolved axis is longer than the storage crossover. For
-            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            # use cr solver once it actually saves memory. For the s/x axes bw = dim//2,
+            # so 6*bw+1 >= dim keeps them dense.
             if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
-                smooth_solver = "banded"
+                smooth_solver = "cr"
             else:
                 smooth_solver = "dense"
         self.smooth_solver = smooth_solver
@@ -298,6 +313,9 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                 # unroll has little effect on CPU but ~2x faster on GPU
                 unroll=4,
             )
+        elif self.smooth_solver == "cr":
+            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+            self.mats = cr_banded_periodic_factor(mats, equilibrate=True)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -318,6 +336,14 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                     # unroll here has little effect on GPU but modest gain on CPU
                     unroll=8,
                 )
+            elif self.smooth_solver == "cr":
+                M = {
+                    "a": self.pitchgrid.nalpha,
+                    "t": self.field.ntheta,
+                    "z": self.field.nzeta,
+                }[self.axorder[-1]]
+                x = x.reshape(-1, M)
+                b = cr_banded_periodic_solve(self.mats, x)
             else:
                 size, N, M = self.mats.shape
                 x = x.reshape(size, M)
@@ -350,6 +376,29 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+# We've found empirically that for certain cases, some blocks of the pitch line smoother
+# amplify error significantly rather than smoothing it, causing the multigrid
+# preconditioner to return garbage and stalling krylov. The problematic cases seem to
+# always be 2 species, thermal collisionality ~1e-1. The problematic blocks seem to
+# correspond to the slowest electrons, and the modes that get amplified tend to live
+# near the turning points (b*gradB ~= 0), but gating purely based on electron speed
+# or turning points doesn't seem to catch them, since its a very specific resonance.
+# The best filter I've come up with is just based on the condition number of the
+# smoother blocks. The condition number naturally scales with na^2 from the finite
+# difference matrices, so we normalize by that. Healthy blocks usually have
+# cond/na^2 ~ 1-10, asymptoting to ~40 at high collisionality. The blocks that amplify
+# error are usually around cond/na^2 ~ 400, so we set a threshold at 150. Anything
+# above this we switch from block jacobi to point jacobi which seems to avoid the
+# blowup and stalling. Zeroing the weight for the flagged blocks also fixes it but
+# point jacobi seems to do marginally better in some cases.
+_PITCH_COND_GATE = 150.0
+
+
+def _pitch_cond_gate(cond, na):
+    """Flag pitch blocks with 1-norm cond above ``_PITCH_COND_GATE * na**2``."""
+    return cond > _PITCH_COND_GATE * na**2
+
+
 class DKEJacobiSmoother(lx.AbstractLinearOperator):
     """Block diagonal smoother for DKE.
 
@@ -372,13 +421,16 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     p2 : int
         Order of approximation for second derivatives.
     axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
+        Ordering for variables in f, eg how the 5d array is flattened. The last axis
+        denotes which direction the smoother is applied.
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
-    smooth_solver : {"banded", "dense"}
-        Solver to use for inverting the smoother. "banded" is significantly faster in
-        most cases but may be numerically unstable in some edge cases. "dense" is
-        slower but more robust.
+    smooth_solver : {None, "banded", "cr", "dense"}
+        Solver to use for inverting the smoother. "banded" uses the least memory but
+        can be the slowest on GPU. "dense" uses the most memory but is often the fastest
+        on GPU, and competitive on CPU at moderate resolution. "cr" uses ~2x more
+        memory than banded but is significantly faster on both CPU and GPU. None
+        selects "cr" for large matrices or "dense" when the memory savings are small.
     weight : array-like, optional
         Under-relaxation parameter.
     operator_weights : array-like, optional
@@ -396,7 +448,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
     axorder: str = eqx.field(static=True)
     bandwidth: int = eqx.field(static=True)
     smooth_solver: str = eqx.field(static=True)
-    mats: jax.Array
+    mats: Any
     weight: jax.Array
 
     def __init__(
@@ -417,7 +469,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
     ):
-        assert axorder in {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
+        assert len(axorder) == 5 and set(axorder) == set("sxatz")
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -436,7 +488,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             self.bandwidth = max(
                 fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
             )
-        assert smooth_solver in {None, "banded", "dense"}
+        assert smooth_solver in {None, "banded", "cr", "dense"}
         if smooth_solver is None:
             sizes = {
                 "s": len(self.species),
@@ -445,12 +497,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            # use banded solver once it actually saves memory: dense stores N*n
-            # per block, banded stores ~N*(6*bw+1) (lu + Z_U + Y), so banded wins
-            # when the convolved axis is longer than the storage crossover. For
-            # the s/x axes bw = dim//2, so 6*bw+1 >= dim keeps them dense.
+            # use cr solver once it actually saves memory. For the s/x axes bw = dim//2,
+            # so 6*bw+1 >= dim keeps them dense.
             if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
-                smooth_solver = "banded"
+                smooth_solver = "cr"
             else:
                 smooth_solver = "dense"
         if operator_weights is None:
@@ -476,6 +526,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             _weight = weight
         self.weight = jnp.asarray(_weight).flatten()
 
+        # "cr" consumes the same banded storage as "banded"
+        bd_fmt = "banded" if self.smooth_solver in ("banded", "cr") else "dense"
         mats = DKE(
             field,
             pitchgrid,
@@ -490,18 +542,69 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             gauge=gauge,
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
-        ).block_diagonal(self.smooth_solver, self.bandwidth)
+        ).block_diagonal(bd_fmt, self.bandwidth)
 
-        if self.smooth_solver == "banded":
+        # The pitch line smoother (convolved axis "a") is the only case with a
+        # non-periodic band and the only one prone to blowing up, so it gets the
+        # standard banded factor/solve plus a condition-number gate replacing ill-
+        # conditioned blocks with point Jacobi (drop off-diagonals).
+        pitch = self.axorder[-1] == "a"
+        pivot_tol = jnp.finfo(mats.dtype).eps ** (1 / 2)
+        if self.smooth_solver == "banded" and not pitch:
             self.mats = lu_factor_banded_periodic(
                 self.bandwidth,
                 self.bandwidth,
                 mats,
                 equilibrate=True,
-                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                pivot_tol=pivot_tol,
                 # unroll has little effect on CPU but ~2x faster on GPU
                 unroll=4,
             )
+        elif self.smooth_solver == "banded":
+            lu, s = lu_factor_banded(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibrate=True,
+                pivot_tol=pivot_tol,
+                unroll=4,
+            )
+            cond = cond_1norm_banded(self.bandwidth, self.bandwidth, mats, (lu, s))
+            flag = _pitch_cond_gate(cond, self.pitchgrid.nalpha)
+            # point Jacobi: LU of diag(A) is L = I (zero bands), U = diag(A); s = 1
+            lu_pj = (
+                jnp.zeros_like(lu)
+                .at[:, self.bandwidth, :]
+                .set(mats[:, self.bandwidth, :])
+            )
+            lu = jnp.where(flag[:, None, None], lu_pj, lu)
+            s = jnp.where(flag[:, None], jnp.ones_like(s), s)
+            self.mats = (lu, s)
+        elif self.smooth_solver == "cr" and not pitch:
+            self.mats = cr_banded_periodic_factor(mats, equilibrate=True)
+        elif self.smooth_solver == "cr":
+            # Unlike banded LU (point Jacobi = zero the off-diagonal bands) or the dense
+            # inverse (point Jacobi = diag(1/diag)), the CR factor is a multi-level
+            # reduction tree with no local point-Jacobi form, so we can't splice the
+            # gate into it without a second factorization. Instead we keep the single
+            # full-matrix factor plus the per-block flag and diagonal, and apply point
+            # Jacobi (x/diag) for flagged blocks directly in `mv`.
+            factors = cr_banded_factor(mats, equilibrate=True)
+            cond = cond_1norm_cr(mats, factors)
+            flag = _pitch_cond_gate(cond, self.pitchgrid.nalpha)
+            diag = mats[:, self.bandwidth, :]
+            self.mats = (factors, flag, diag)
+        elif pitch:
+            # dense pitch: same gate, but blocks are stored as inverses.
+            anorm = matrix_1norm(mats)
+            inv = jnp.linalg.inv(mats)
+            cond = anorm * matrix_1norm(inv)
+            na = mats.shape[-1]
+            flag = _pitch_cond_gate(cond, na)
+            pj = (1.0 / jnp.diagonal(mats, axis1=-2, axis2=-1))[:, None, :] * jnp.eye(
+                na, dtype=mats.dtype
+            )
+            self.mats = jnp.where(flag[:, None, None], pj, inv)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -521,14 +624,38 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             if self.smooth_solver == "banded":
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
-                b = lu_solve_banded_periodic(
-                    self.bandwidth,
-                    self.bandwidth,
-                    self.mats,
-                    x,
-                    # unroll here has little effect on GPU but modest gain on CPU
-                    unroll=8,
-                )
+                # pitch ("...a") is non-periodic -> standard banded solve; periodic axes
+                # (theta/zeta line smoothers) keep the wrap-aware periodic solve.
+                if self.axorder[-1] == "a":
+                    b = lu_solve_banded(
+                        self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    )
+                else:
+                    b = lu_solve_banded_periodic(
+                        self.bandwidth,
+                        self.bandwidth,
+                        self.mats,
+                        x,
+                        # unroll here has little effect on GPU but modest gain on CPU
+                        unroll=8,
+                    )
+            elif self.smooth_solver == "cr":
+                sizes = {
+                    "s": len(self.species),
+                    "x": self.speedgrid.nx,
+                    "a": self.pitchgrid.nalpha,
+                    "t": self.field.ntheta,
+                    "z": self.field.nzeta,
+                }
+                M = sizes[self.axorder[-1]]
+                x = x.reshape(-1, M)
+                # pitch ("...a") is non-periodic; theta/zeta are periodic line smoothers
+                if self.axorder[-1] == "a":
+                    # gate flagged (ill-conditioned) blocks to point Jacobi (x/diag)
+                    factors, flag, diag = self.mats
+                    b = jnp.where(flag[:, None], x / diag, cr_banded_solve(factors, x))
+                else:
+                    b = cr_banded_periodic_solve(self.mats, x)
             else:
                 size, N, M = self.mats.shape
                 x = x.reshape(size, M)
@@ -909,7 +1036,7 @@ def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
 def optimal_smoothing_parameter_4d(p1, p2, nustar, ax):
     """Approximate best relaxation parameter for block jacobi smoother for DKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
-    nus = jnp.array([-8, -6, -4, -2, 0, 2, 4])
+    nus = jnp.array([-8, -6, -4, -2, 0, 2, 4, 6, 8])
     nu = jnp.log10(nustar)
     if method not in OPTIMAL_SMOOTHING_COEFFS_4D:
         warnings.warn(
