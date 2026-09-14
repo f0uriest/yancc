@@ -410,6 +410,15 @@ def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
     ]
 
 
+def _smoother_branches(smoothers):
+    """Smoother applications as branches for jax.lax.switch."""
+    # Smoothing loops iterate over the smoother index with a switch instead of
+    # unrolling the smoothers in Python, so the operator mv between smoothers has a
+    # single call site. Each call site is compiled separately, and for a multigrid
+    # cycle every copy is repeated at every level, which dominates compile time.
+    return [lambda r, Mi=Mi: Mi.mv(r) for Mi in smoothers]
+
+
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
 def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
@@ -423,24 +432,32 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
-    def body(k, state):
+    # Loop over (step, smoother) pairs so operator.mv has a single call site.
+    nsmoothers = len(smoothers)
+    branches = _smoother_branches(smoothers)
+    axorders = [Mi.axorder for Mi in smoothers]
+
+    def body(n, state):
         x, r = state
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
-            x = x + dx
-            r = rhs - operator.mv(x)
-            if verbose:
-                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
-                jax.debug.print(
-                    "v={k} after {a} err: {err:.3e}",
-                    err=err,
-                    k=k,
-                    a=Mi.axorder,
-                    ordered=True,
-                )
+        i = n % nsmoothers
+        dx = jax.lax.switch(i, branches, r)
+        x = x + dx
+        r = rhs - operator.mv(x)
+        if verbose:
+            err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+            jax.debug.callback(
+                lambda n, i, err: print(
+                    f"v={int(n) // nsmoothers} after {axorders[int(i)]} "
+                    f"err: {float(err):.3e}"
+                ),
+                n,
+                i,
+                err,
+                ordered=True,
+            )
         return x, r
 
-    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    x, r = jax.lax.fori_loop(0, nsteps * nsmoothers, body, (x, r0))
     return x, r
 
 
@@ -464,21 +481,31 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
         # preconditioner with GMRES.
         return (k < jnp.abs(nsteps)) & (res1 <= res0)
 
+    branches = _smoother_branches(smoothers)
+    axorders = [Mi.axorder for Mi in smoothers]
+
     def body(state):
         k, x, r, res0, res1 = state
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
+
+        def sweep(i, xr):
+            x, r = xr
+            dx = jax.lax.switch(i, branches, r)
             x = x + dx
             r = rhs - operator.mv(x)
             if verbose:
                 err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
-                jax.debug.print(
-                    "v={k} after {a} err: {err:.3e}",
-                    err=err,
-                    k=k,
-                    a=Mi.axorder,
+                jax.debug.callback(
+                    lambda k, i, err: print(
+                        f"v={int(k)} after {axorders[int(i)]} err: {float(err):.3e}"
+                    ),
+                    k,
+                    i,
+                    err,
                     ordered=True,
                 )
+            return x, r
+
+        x, r = jax.lax.fori_loop(0, len(smoothers), sweep, (x, r))
         res0 = res1
         res1 = jnp.linalg.norm(r)
         return k + 1, x, r, res0, res1
@@ -498,19 +525,22 @@ def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
+    branches = _smoother_branches(smoothers)
+
+    def sweep(i, state):
+        x, r, rs, dxs = state
+        rs = rs.at[i].set(r)
+        dx = jax.lax.switch(i, branches, r)
+        dxs = dxs.at[i].set(dx)
+        x = x + dx
+        r = rhs - operator.mv(x)
+        return x, r, rs, dxs
+
     def body(k, state):
         x0, r = state
         rs = jnp.empty((len(smoothers) + 1, rhs.size))
         dxs = jnp.empty((len(smoothers), rhs.size))
-        x = x0
-
-        for i, Mi in enumerate(smoothers):
-            rs = rs.at[i].set(r)
-            dx = Mi.mv(r)
-            dxs = dxs.at[i].set(dx)
-            x = x + dx
-            r = rhs - operator.mv(x)
-
+        _, r, rs, dxs = jax.lax.fori_loop(0, len(smoothers), sweep, (x0, r, rs, dxs))
         rs = rs.at[-1].set(r)
 
         rb = rs[0]
@@ -552,20 +582,31 @@ def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
+    branches = _smoother_branches(smoothers)
+    nsmoothers = len(smoothers)
+
+    def sweep(i, state):
+        x, r, rs, dxs = state
+        dx = jax.lax.switch(i, branches, r)
+        dxs = dxs.at[i].set(dx)
+        x = x + dx
+
+        # the residual after the last smoother isn't needed
+        def update(x, r, rs):
+            r = rhs - operator.mv(x)
+            return r, rs.at[i + 1].set(r)
+
+        r, rs = jax.lax.cond(
+            i + 1 < nsmoothers, update, lambda x, r, rs: (r, rs), x, r, rs
+        )
+        return x, r, rs, dxs
+
     def body(k, state):
         x0, r = state
-        rs = jnp.empty((len(smoothers), rhs.size))
-        dxs = jnp.empty((len(smoothers), rhs.size))
-        x = x0
+        rs = jnp.empty((nsmoothers, rhs.size))
+        dxs = jnp.empty((nsmoothers, rhs.size))
         rs = rs.at[0].set(r)
-
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
-            dxs = dxs.at[i].set(dx)
-            x = x + dx
-            if i + 1 < len(smoothers):
-                r = rhs - operator.mv(x)
-                rs = rs.at[i + 1].set(r)
+        _, r, rs, dxs = jax.lax.fori_loop(0, nsmoothers, sweep, (x0, r, rs, dxs))
 
         Ldxs = jax.vmap(L.mv)(dxs)
         dxs = jnp.concatenate([dxs, Ldxs])
@@ -602,16 +643,20 @@ def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
+    branches = _smoother_branches(smoothers)
+
+    def sweep(i, state):
+        r, dxs, Adxs = state
+        dx = jax.lax.switch(i, branches, r)
+        dxs = dxs.at[i].set(dx)
+        Adxs = Adxs.at[i].set(operator.mv(dx))
+        return r, dxs, Adxs
+
     def body(k, state):
         x0, r = state
         dxs = jnp.empty((len(smoothers), rhs.size))
         Adxs = jnp.empty((len(smoothers), rhs.size))
-        x = x0
-
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
-            dxs = dxs.at[i].set(dx)
-            Adxs = Adxs.at[i].set(operator.mv(dx))
+        _, dxs, Adxs = jax.lax.fori_loop(0, len(smoothers), sweep, (r, dxs, Adxs))
 
         alpha = jnp.linalg.lstsq(Adxs.T, r)[0]
         x = x0 + dxs.T @ alpha
