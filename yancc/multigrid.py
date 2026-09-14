@@ -1060,29 +1060,30 @@ def _multigrid_cycle_recursive(
         "krylov2s": krylov2s_coarse_correction,
     }[coarse_method]
 
-    if verbose:
-        rk = rhs - Ak.mv(x)
+    # The cycle at this level is pre-smooth, then cycle_index repetitions of
+    # (coarse correction, post-smooth). Both are written as one loop of
+    # cycle_index + 1 passes, where every pass smooths and every pass but the first
+    # starts with a coarse correction. This gives the smoothers, the operator and
+    # the recursion into coarser levels a single call site each: every call site is
+    # compiled separately, so separate pre- and post-smoothing calls would compile
+    # the smoothers (and everything below this level) twice per level.
+    nsteps_pre = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
+    nsteps_post = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
+
+    def print_err(n, rk, when):
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print(
-            "level={k} before presmooth err: {err:.3e}", err=err, k=k, ordered=True
+        jax.debug.callback(
+            lambda n, err: print(
+                f"level={k}"
+                + (f" {when} presmooth" if n == 0 else f"/{n - 1} {when} postsmooth")
+                + f" err: {float(err):.3e}"
+            ),
+            n,
+            err,
+            ordered=True,
         )
 
-    # Pre-smooth: x is always zero on entry (top-level uses zeros_like(vector);
-    # recursive calls pass x=jnp.zeros_like(rkm1)), so r0 = rhs - A.mv(0) = rhs.
-    # The smoother returns the up-to-date residual, eliminating a separate mv.
-    vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    with jax.named_scope(f"pre-smooth, level={k}"):
-        x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0), r0=rhs)
-
-    if verbose:
-        err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print(
-            "level={k} after presmooth err: {err:.3e}", err=err, k=k, ordered=True
-        )
-
-    def body(i, state):
-        rk, x = state
-
+    def correct(n, x, rk):
         with jax.named_scope(f"restriction level={k}"):
             rkm1 = restrictions[k - 1].mv(rk)
         if k == 1:
@@ -1110,38 +1111,27 @@ def _multigrid_cycle_recursive(
             yk = prolongations[k - 1].mv(ykm1)
         with jax.named_scope(f"coarse_correction level={k}"):
             x = coarse_correction(
-                x, k, i, Ak, yk, rk, coarse_weight, verbose=max(verbose - 1, 0)
+                x, k, n - 1, Ak, yk, rk, coarse_weight, verbose=max(verbose - 1, 0)
             )
+        return x, rhs - Ak.mv(x)
 
+    def body(n, state):
+        x, rk = state
+        x, rk = jax.lax.cond(n > 0, correct, lambda n, x, rk: (x, rk), n, x, rk)
         if verbose:
-            rk = rhs - Ak.mv(x)
-            err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-            jax.debug.print(
-                "level={k}/{i} before postsmooth err: {err:.3e}",
-                err=err,
-                k=k,
-                i=i,
-                ordered=True,
+            print_err(n, rk, "before")
+        nsteps = jnp.where(n == 0, nsteps_pre, nsteps_post)
+        with jax.named_scope(f"smooth, level={k}"):
+            x, rk = smooth(
+                x, Ak, rhs, Mk, nsteps=nsteps, verbose=max(verbose - 1, 0), r0=rk
             )
-
-        # Post-smooth: x has been modified by coarse_correction so rk is stale;
-        # let the smoother compute its initial residual internally (r0=None).
-        # The returned rk is up-to-date, so we don't need a separate mv after.
-        vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        with jax.named_scope(f"post-smooth, level={k}"):
-            x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
         if verbose:
-            err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-            jax.debug.print(
-                "level={k}/{i} after postsmooth err: {err:.3e}",
-                err=err,
-                k=k,
-                i=i,
-                ordered=True,
-            )
-        return rk, x
+            print_err(n, rk, "after")
+        return x, rk
 
-    _, x = jax.lax.fori_loop(0, cycle_index, body, (rk, x))
+    # x is always zero on entry (the top level passes zeros_like(vector) and coarser
+    # levels pass zeros_like(rkm1)), so the initial residual is rhs.
+    x, _ = jax.lax.fori_loop(0, cycle_index + 1, body, (x, rhs))
 
     return x
 
