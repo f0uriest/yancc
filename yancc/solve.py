@@ -224,8 +224,8 @@ def solve_mdke(
             res=info["res2"],
             ordered=True,
         )
-    f = jnp.array([f1, f1, f2]).T
-    sol = MDKESolution(f, rhs, field, pitchgrid, nuhat, erhohat)
+    f = jnp.array([f1, f1, f2])
+    sol = MDKESolution(f, rhs.T, field, pitchgrid, nuhat, erhohat)
     return (
         sol,
         info,

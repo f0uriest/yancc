@@ -337,14 +337,14 @@ class MDKESolution(eqx.Module):
 )
 def _mdke_Dij(sol, normalization=None, **kwargs):
     """Monoenergetic transport coefficients."""
-    f = sol.f.reshape((-1, 3))
-    s = sol.rhs.reshape((-1, 3))
+    f = sol.f.reshape((3, -1))
+    s = sol.rhs.reshape((3, -1))
     na, nt, nz = (
         sol.pitchgrid.nalpha,
         sol.field.ntheta,
         sol.field.nzeta,
     )
-    sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
+    sf = s[:, None] * f[None, :]  # shape (3,3,N)
     Dij_itz = sf.reshape((3, 3, na, nt, nz))
     Dij_i = sol.field.flux_surface_average(Dij_itz)  # shape (3,3,na)
     Dij = jnp.sum(Dij_i * sol.pitchgrid.wxi, axis=-1)  # shape (3,3)
