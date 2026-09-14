@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 from jax import config
 from jax.typing import ArrayLike
-from scipy.constants import Boltzmann, elementary_charge, epsilon_0, hbar, proton_mass
+from scipy.constants import elementary_charge, epsilon_0, hbar, proton_mass
 
 from .field import Field
 
@@ -15,7 +15,7 @@ from .field import Field
 config.update("jax_enable_x64", True)
 
 
-JOULE_PER_EV = jnp.array(11606 * Boltzmann)
+JOULE_PER_EV = jnp.array(elementary_charge)
 EV_PER_JOULE = jnp.array(1 / JOULE_PER_EV)
 
 
