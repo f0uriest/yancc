@@ -340,7 +340,7 @@ def _(operator):
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])
 @functools.partial(jnp.vectorize, signature="(m,n)->(n,n)", excluded=(0, 1))
-def banded_to_dense(p, q, A):
+def banded_to_dense(p: int, q: int, A: jax.Array) -> jax.Array:
     """Convert from banded representation to dense.
 
     Parameters
@@ -372,7 +372,7 @@ def banded_to_dense(p, q, A):
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])
 @functools.partial(jnp.vectorize, signature="(n,n)->(m,n)", excluded=(0, 1))
-def dense_to_banded(p, q, A):
+def dense_to_banded(p: int, q: int, A: jax.Array) -> jax.Array:
     """Convert from dense representation to banded.
 
     Parameters
@@ -728,11 +728,11 @@ def lu_factor_banded_periodic(
 
     # Calculate virtual row indices to find wrap-around elements
     i_linear = j_idx + r_idx - q
-    is_wrap = (i_linear < 0) | (i_linear >= n)
+    is_wrap = jnp.array((i_linear < 0) | (i_linear >= n))
     i_cyclic = i_linear % n
 
     # A_band is the strictly banded part (wrap-around elements zeroed out)
-    A_band = _where(is_wrap, jnp.array(0.0), A)
+    A_band = jnp.where(is_wrap, jnp.array(0.0), A)
 
     # Row equilibration (no-op when equilibrate=False). Scaling the full-system
     # rows by s scales A_band and the low-rank columns U identically, leaving
@@ -757,13 +757,13 @@ def lu_factor_banded_periodic(
 
     # Construct V^T (k_dim x n): Contains the actual wrap-around values
     # Map the cyclic rows to the k_dim coordinate space
-    k_idx = _where(i_cyclic >= n - q, i_cyclic - (n - q), q + i_cyclic)
+    k_idx = jnp.where(i_cyclic >= n - q, i_cyclic - (n - q), q + i_cyclic)
 
     # We use scatter-add to build V^T while keeping static shapes.
     # Non-wrap elements add 0.0 to the 0-th index (harmless).
-    safe_k = _where(is_wrap, k_idx, jnp.array(0)).flatten()
+    safe_k = jnp.where(is_wrap, k_idx, jnp.array(0)).flatten()
     safe_j = jnp.broadcast_to(j_idx, (H, n)).flatten()
-    safe_vals = _where(is_wrap, A, jnp.array(0.0)).flatten()
+    safe_vals = jnp.where(is_wrap, A, jnp.array(0.0)).flatten()
 
     V_T = jnp.zeros((k_dim, n), dtype=A.dtype)
     V_T = V_T.at[safe_k, safe_j].add(safe_vals)
@@ -796,7 +796,7 @@ def lu_solve_banded_periodic(p, q, lu, b, *, unroll=None):
     ----------
     p, q : int
         Lower and upper bandwidth of A
-    lu : tuple of jax.Array
+    lu_info : tuple of jax.Array
         Output from ``lu_factor_banded_periodic``
     b : jax.Array, shape(...,N)
         RHS vector.
@@ -1316,7 +1316,7 @@ def cr_banded_periodic_solve(factors, b, *, trans=False):
 
 @functools.partial(jax.jit, static_argnames=("p", "q"))
 @functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1))
-def banded_mv(p, q, A, x):
+def banded_mv(p: int, q: int, A: jax.Array, x: jax.Array) -> jax.Array:
     """Matrix vector product w/ banded matrix.
 
     Parameters
@@ -1356,7 +1356,9 @@ def banded_mv(p, q, A, x):
 @functools.partial(
     jnp.vectorize, signature="(k,n),(l,n)->(m,n),(),()", excluded=(0, 1, 2, 3)
 )
-def banded_mm(p1, q1, p2, q2, A, B):
+def banded_mm(
+    p1: int, q1: int, p2: int, q2: int, A: jax.Array, B: jax.Array
+) -> tuple[jax.Array, int, int]:
     """Matrix-matrix product w/ banded matrices.
 
     Parameters
@@ -1399,20 +1401,20 @@ def banded_mm(p1, q1, p2, q2, A, B):
     # and the specific row of B being evaluated (r2).
     col_idx = (j_idx - q2 + r2_idx) % n
 
-    def compute_row(r):
+    def compute_row(r: jax.Array):
         """Computes the r-th row (diagonal) of the output banded matrix."""
         r2 = jnp.arange(H_B)
         r1 = r - r2
 
         # Mask out indices where r1 falls outside the valid rows of A
         valid = (r1 >= 0) & (r1 < H_A)
-        r1_safe = _where(valid, r1, jnp.array(0))
+        r1_safe = jnp.where(valid, r1, jnp.array(0))
 
         # Gather elements from A. col_idx has shape (H_B, n)
         A_vals = A[r1_safe[:, None], col_idx]
 
         # Element-wise multiply by B and zero out invalid index contributions
-        product = _where(valid[:, None], A_vals * B, jnp.array(0.0))
+        product = jnp.where(valid[:, None], A_vals * B, jnp.array(0.0))
 
         # Summing over the intermediate dimension (r2) gives the dot product
         return jnp.sum(product, axis=0)
@@ -1422,7 +1424,7 @@ def banded_mm(p1, q1, p2, q2, A, B):
 
 
 @jax.jit
-def banded_transpose(p, q, A):
+def banded_transpose(p: int, q: int, A: jax.Array) -> tuple[jax.Array, int, int]:
     """Transposes a (periodic) banded matrix in compact format.
 
     Parameters
