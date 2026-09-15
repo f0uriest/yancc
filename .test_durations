@@ -689,7 +689,7 @@
     "tests/test_potentials.py::test_rosenbluth_derivatives[2-4]": 7.176015113014728,
     "tests/test_potentials.py::test_rosenbluth_derivatives[4-2]": 7.668011328205466,
     "tests/test_potentials.py::test_rosenbluth_derivatives[4-4]": 7.424325946951285,
-    "tests/test_potentials.py::test_rosenbluth_quad_vs_gamma": 0.17106616194359958,
+    "tests/test_potentials.py::test_rosenbluth_quad_vs_gauss_legendre": 0.17106616194359958,
     "tests/test_potentials.py::test_single_species_potentials_vs_sympy[0]": 5.244155701249838,
     "tests/test_potentials.py::test_single_species_potentials_vs_sympy[1]": 6.9121274231001735,
     "tests/test_potentials.py::test_single_species_potentials_vs_sympy[2]": 16.179764360189438,

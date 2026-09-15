@@ -73,10 +73,10 @@ def test_rosenbluth_derivatives(potential_quad, l, k):
     np.testing.assert_allclose(d2Gfd, d2Gan, rtol=1e-2)
 
 
-def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
-    """Test for potentials using incomplete gamma functions."""
+def test_rosenbluth_quad_vs_gauss_legendre(potential_quad, potential_gauss_legendre):
+    """Test fixed Gauss-Legendre potentials against adaptive quadrature."""
     R1 = potential_quad
-    R2 = potential_gamma
+    R2 = potential_gauss_legendre
     # a,a
     np.testing.assert_allclose(
         R1.Hxlk[0, 0],
@@ -308,8 +308,8 @@ def test_Gammainc_Gammaincc_values():
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_single_species_potentials_vs_sympy(l, potential_gamma):
-    potentials = potential_gamma
+def test_single_species_potentials_vs_sympy(l, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     speedgrid = potentials.speedgrid
     pitchgrid = UniformPitchAngleGrid(41)
 
@@ -364,8 +364,8 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_2_species_potentials_vs_sympy(l, potential_gamma):
-    potentials = potential_gamma
+def test_2_species_potentials_vs_sympy(l, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     speedgrid = potentials.speedgrid
     species = potentials.species
     pitchgrid = UniformPitchAngleGrid(41)

@@ -64,9 +64,10 @@ DKE-only options
    cost of increasing is negligible so we use a default of 8.
 
 ``quad`` *(bool, default False)*
-   Use quadrature to compute the Rosenbluth potential Green's functions, otherwise uses
-   an exact formula involving incomplete gamma functions. Quadrature is usually slower
-   so should only be used for verification or if using a non-Maxwellian speed grid.
+   Use adaptive quadrature to compute the Rosenbluth potential Green's functions,
+   otherwise uses a fixed Gauss-Legendre quadrature rule. The fixed Gauss-Legendre is
+   accurate to machine precision up to nx=20 and much faster so adaptive quadrature
+   should generally only be used for verification or extreme cases.
 
 ``operator_weights`` *(array, length 8)*
    Scale factors for the 8 sub-operators that make up the DKE:

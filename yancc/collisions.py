@@ -20,8 +20,6 @@ from .utils import (
     _parse_axorder_shape_3d,
     _parse_axorder_shape_4d,
     _refold,
-    lGammainc,
-    lGammaincc,
 )
 from .velocity_grids import (
     AbstractSpeedGrid,
@@ -199,6 +197,61 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
+# Fixed Gauss-Legendre rule for the speed integrals of the Rosenbluth potentials.
+# The integrands z^q L_k(z) exp(-z^2) are evaluated pointwise, with L_k from its
+# three-term recurrence, so the quadrature error is limited primarily by the
+# conditioning of the integral itself. A fixed rule (as opposed to an adaptive one) has
+# no data dependent control flow, so it vectorizes cheaply and compiles to a small
+# graph.
+_GL_ORDER = 32
+_GL_NODES, _GL_WEIGHTS = np.polynomial.legendre.leggauss(_GL_ORDER)
+_GL_NODES = (_GL_NODES + 1) / 2  # map to [0, 1]
+_GL_WEIGHTS = _GL_WEIGHTS / 2
+# exp(-z^2) times the highest polynomial powers used (~20) is negligible beyond this
+_GL_ZMAX = 10.0
+_GL_LOWER_PANELS = 2
+_GL_UPPER_GEOMETRIC_PANELS = 4
+_GL_UPPER_UNIFORM_PANELS = 2
+
+
+def _gauss_legendre_panels(edges):
+    """Nodes and weights for panels with breakpoints edges[..., i], edges[..., i+1]."""
+    lo = edges[..., :-1, None]
+    hi = edges[..., 1:, None]
+    z = lo + (hi - lo) * _GL_NODES
+    w = (hi - lo) * _GL_WEIGHTS
+    return z.reshape(*edges.shape[:-1], -1), w.reshape(*edges.shape[:-1], -1)
+
+
+def _lower_speed_quadrature(x):
+    """Nodes and weights for integrals over [0, x] with a Maxwellian weight."""
+    # Beyond _GL_ZMAX the integrand is negligible, so larger x just truncates there.
+    top = jnp.minimum(x, _GL_ZMAX)
+    edges = top[..., None] * jnp.linspace(0.0, 1.0, _GL_LOWER_PANELS + 1)
+    return _gauss_legendre_panels(edges)
+
+
+def _upper_speed_quadrature(x):
+    """Nodes and weights for integrals over [x, inf) with a Maxwellian weight."""
+    # The integrands contain negative powers of z, which are sharply peaked at z = x
+    # when x is small. Geometrically graded panels from x up to max(x, 1) resolve
+    # that with a fixed number of nodes regardless of how small x is. Beyond that,
+    # uniform panels cover the Maxwellian tail, whose decay length shrinks like 1/x
+    # for large x.
+    mid = jnp.maximum(x, 1.0)
+    ratio = (mid / x) ** (1.0 / _GL_UPPER_GEOMETRIC_PANELS)
+    geometric = x[..., None] * ratio[..., None] ** jnp.arange(
+        _GL_UPPER_GEOMETRIC_PANELS + 1
+    )
+    far = mid + jnp.minimum(8.0, 22.0 / x + 1.0)
+    uniform = mid[..., None] + (far - mid)[..., None] * jnp.linspace(
+        0.0, 1.0, _GL_UPPER_UNIFORM_PANELS + 1
+    )
+    z1, w1 = _gauss_legendre_panels(geometric)
+    z2, w2 = _gauss_legendre_panels(uniform)
+    return jnp.concatenate([z1, z2], axis=-1), jnp.concatenate([w1, w2], axis=-1)
+
+
 class RosenbluthPotentials(eqx.Module):
     """Thing to calculate Rosenbluth Potentials.
 
@@ -211,8 +264,8 @@ class RosenbluthPotentials(eqx.Module):
     nL : int
         Number of Legendre modes to use for potentials.
     quad : bool
-        Whether to compute potentials using quadrature (slow) or incomplete gamma
-        functions (fast)
+        Whether to compute potentials using adaptive quadrature (slow but robust) or a
+        fixed Gauss-Legendre quadrature (fast, but may be inaccurate for nx > 20).
     """
 
     speedgrid: MaxwellSpeedGrid
@@ -422,12 +475,8 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
-        p = orthax.orth2poly(c, self.speedgrid.xrec)
-        n = jnp.arange(self.speedgrid.nx)
-        sgn, lg = lGammaincc(-l / 2 + n / 2 + 1, x**2)
-        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
-        return sgn * jnp.exp(li) / 2
+        z, w = _upper_speed_quadrature(x)
+        return jnp.sum(w * self._integrand1(z, l, k))
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -444,12 +493,8 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
-        p = orthax.orth2poly(c, self.speedgrid.xrec)
-        n = jnp.arange(self.speedgrid.nx)
-        sgn, lg = lGammainc(l / 2 + n / 2 + 3 / 2, x**2)
-        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
-        return sgn * jnp.exp(li) / 2
+        z, w = _lower_speed_quadrature(x)
+        return jnp.sum(w * self._integrand2(z, l, k))
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -466,12 +511,8 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
-        p = orthax.orth2poly(c, self.speedgrid.xrec)
-        n = jnp.arange(self.speedgrid.nx)
-        sgn, lg = lGammaincc(-l / 2 + n / 2 + 2, x**2)
-        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
-        return sgn * jnp.exp(li) / 2
+        z, w = _upper_speed_quadrature(x)
+        return jnp.sum(w * self._integrand3(z, l, k))
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -488,12 +529,8 @@ class RosenbluthPotentials(eqx.Module):
                 epsrel=1e-12,
             )
             return f
-        c = jnp.zeros(self.speedgrid.nx).at[k].set(1, unique_indices=True)
-        p = orthax.orth2poly(c, self.speedgrid.xrec)
-        n = jnp.arange(self.speedgrid.nx)
-        sgn, lg = lGammainc(l / 2 + n / 2 + 5 / 2, x**2)
-        li, sgn = jax.scipy.special.logsumexp(lg, b=sgn * p, return_sign=True)
-        return sgn * jnp.exp(li) / 2
+        z, w = _lower_speed_quadrature(x)
+        return jnp.sum(w * self._integrand4(z, l, k))
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
