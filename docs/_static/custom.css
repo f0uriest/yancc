@@ -1,0 +1,11 @@
+/* Widen the main content area beyond the theme's 800px default. */
+.wy-nav-content {
+    max-width: 1200px;
+}
+
+/* Allow wide tables (e.g. the List of Output Variables) to wrap text
+   instead of forcing horizontal scrolling. */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+    white-space: normal;
+}

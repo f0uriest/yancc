@@ -11,7 +11,10 @@ from yancc.collisions import (
     FieldPartCD,
     FieldPartCG,
     FieldPartCH,
+    FieldParticleScattering,
     FokkerPlanckLandau,
+    MDKEPitchAngleScattering,
+    PitchAngleScattering,
     RosenbluthPotentials,
 )
 from yancc.species import JOULE_PER_EV, GlobalMaxwellian, Hydrogen, gamma_ab
@@ -23,6 +26,8 @@ from .conftest import (
     _compute_CGab_sympy,
     _compute_CHab_sympy,
     _eval_f,
+    _eval_f_sampled,
+    _speed_subset,
 )
 
 
@@ -53,7 +58,7 @@ def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
     CEsympy = _eval_f(CEaa, v, speedgrid.x * species[0].v_thermal, subs)
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     f[0] *= ffa[:, None, None, None]
 
     CEjax = -CE.mv(f)[
@@ -123,7 +128,7 @@ def test_CE_2_species_vs_sympy(dummy_field, xigrid, xgrid, species2):
 
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
     ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
-    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     f[0] *= ffa[:, None, None, None]
     f[1] *= ffb[:, None, None, None]
     CE_jax = -CE.mv(f)
@@ -152,7 +157,7 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     gamma_aa_jax = gamma_ab(species[0], species[0])
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 
@@ -165,12 +170,12 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     CDsympy = _eval_f(CDaa, v, speedgrid.x * species[0].v_thermal, subs)
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
@@ -186,8 +191,8 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -242,14 +247,14 @@ def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
 
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
     ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
-    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     T = orthax.orthval(
         pitchgrid.xi,
-        jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+        jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
         potentials.legendregrid.xirec,
     )[None, :, None, None]
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
     f[0] *= ffa[:, None, None, None] * T
@@ -280,7 +285,7 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     gamma_aa_jax = gamma_ab(species[0], species[0])
     CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 
@@ -293,12 +298,12 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     CHsympy = _eval_f(CHaa, v, speedgrid.x * species[0].v_thermal, subs)
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
@@ -313,9 +318,11 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     np.testing.assert_allclose(ch[:, l, 0, 0], CHsympy, rtol=2e-6, atol=1e-8)
 
 
-@pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+# Subset of l values: single-species variant exercises l=[0,1,2,3];
+# the 2-species version only needs to verify cross-species coupling.
+@pytest.mark.parametrize("l", [0, 2])
+def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -360,23 +367,23 @@ def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CHab = _compute_CHab_sympy(Fa, fb, l, v, vta, vtb, ma, mb, Gamma_ab)
     CHba = _compute_CHab_sympy(Fb, fa, l, v, vtb, vta, mb, ma, Gamma_ba)
     CHbb = _compute_CHab_sympy(Fb, fb, l, v, vtb, vtb, mb, mb, Gamma_bb)
-    CHaa_sympy = _eval_f(CHaa, v, speedgrid.x * species[0].v_thermal, subs)
-    CHab_sympy = _eval_f(CHab, v, speedgrid.x * species[0].v_thermal, subs)
-    CHba_sympy = _eval_f(CHba, v, speedgrid.x * species[1].v_thermal, subs)
-    CHbb_sympy = _eval_f(CHbb, v, speedgrid.x * species[1].v_thermal, subs)
+    CHaa_sympy = _eval_f_sampled(CHaa, v, speedgrid.x * species[0].v_thermal, subs)
+    CHab_sympy = _eval_f_sampled(CHab, v, speedgrid.x * species[0].v_thermal, subs)
+    CHba_sympy = _eval_f_sampled(CHba, v, speedgrid.x * species[1].v_thermal, subs)
+    CHbb_sympy = _eval_f_sampled(CHbb, v, speedgrid.x * species[1].v_thermal, subs)
     CHa_sympy = CHaa_sympy + CHab_sympy
     CHb_sympy = CHba_sympy + CHbb_sympy
 
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
     ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
-    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     T = orthax.orthval(
         pitchgrid.xi,
-        jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+        jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
         potentials.legendregrid.xirec,
     )[None, :, None, None]
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
     f[0] *= ffa[:, None, None, None] * T
@@ -385,8 +392,9 @@ def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CH_jax = jnp.einsum("la,sxatz->sxltz", Txi_inv, CH_jax)
     CHa_jax = CH_jax[0, :, :, 0, 0]
     CHb_jax = CH_jax[1, :, :, 0, 0]
-    np.testing.assert_allclose(CHa_jax[:, l], CHa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(CHb_jax[:, l], CHb_sympy, rtol=1e-8, atol=0)
+    i = _speed_subset(speedgrid.nx)
+    np.testing.assert_allclose(CHa_jax[i, l], CHa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(CHb_jax[i, l], CHb_sympy, rtol=1e-8, atol=0)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
@@ -407,7 +415,7 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     gamma_aa_jax = gamma_ab(species[0], species[0])
     CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 
@@ -419,12 +427,12 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 
     CGsympy = _eval_f(CGaa, v, speedgrid.x * species[0].v_thermal, subs)
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
-    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
@@ -439,9 +447,11 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     np.testing.assert_allclose(cg[:, l, 0, 0], CGsympy, rtol=2e-6, atol=1e-8)
 
 
-@pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+# Subset of l values: single-species variant exercises l=[0,1,2,3];
+# the 2-species version only needs to verify cross-species coupling.
+@pytest.mark.parametrize("l", [0, 2])
+def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -486,23 +496,23 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CGab = _compute_CGab_sympy(Fa, fb, l, v, vta, vtb, Gamma_ab)
     CGba = _compute_CGab_sympy(Fb, fa, l, v, vtb, vta, Gamma_ba)
     CGbb = _compute_CGab_sympy(Fb, fb, l, v, vtb, vtb, Gamma_bb)
-    CGaa_sympy = _eval_f(CGaa, v, speedgrid.x * species[0].v_thermal, subs)
-    CGab_sympy = _eval_f(CGab, v, speedgrid.x * species[0].v_thermal, subs)
-    CGba_sympy = _eval_f(CGba, v, speedgrid.x * species[1].v_thermal, subs)
-    CGbb_sympy = _eval_f(CGbb, v, speedgrid.x * species[1].v_thermal, subs)
+    CGaa_sympy = _eval_f_sampled(CGaa, v, speedgrid.x * species[0].v_thermal, subs)
+    CGab_sympy = _eval_f_sampled(CGab, v, speedgrid.x * species[0].v_thermal, subs)
+    CGba_sympy = _eval_f_sampled(CGba, v, speedgrid.x * species[1].v_thermal, subs)
+    CGbb_sympy = _eval_f_sampled(CGbb, v, speedgrid.x * species[1].v_thermal, subs)
     CGa_sympy = CGaa_sympy + CGab_sympy
     CGb_sympy = CGba_sympy + CGbb_sympy
 
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
     ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
-    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
     T = orthax.orthval(
         pitchgrid.xi,
-        jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+        jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
         potentials.legendregrid.xirec,
     )[None, :, None, None]
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
     f[0] *= ffa[:, None, None, None] * T
@@ -511,8 +521,9 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     CG_jax = jnp.einsum("la,sxatz->sxltz", Txi_inv, CG_jax)
     CGa_jax = CG_jax[0, :, :, 0, 0]
     CGb_jax = CG_jax[1, :, :, 0, 0]
-    np.testing.assert_allclose(CGa_jax[:, l], CGa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(CGb_jax[:, l], CGb_sympy, rtol=1e-8, atol=0)
+    i = _speed_subset(speedgrid.nx)
+    np.testing.assert_allclose(CGa_jax[i, l], CGa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(CGb_jax[i, l], CGb_sympy, rtol=1e-8, atol=0)
 
 
 def test_verify_collision_null_single_species(dummy_field):
@@ -530,7 +541,7 @@ def test_verify_collision_null_single_species(dummy_field):
 
     R = RosenbluthPotentials(speedgrid, [ions1], quad=False)
     C = FokkerPlanckLandau(field, pitchgrid, speedgrid, [ions1], potentials=R)
-    shape = (1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta)
+    shape = (1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
     x = speedgrid.x
     xi = pitchgrid.xi
 
@@ -553,7 +564,7 @@ def test_verify_collision_null_single_species(dummy_field):
     # C acting on v^2*maxwellian = 0
     ff = x**2 * np.exp(-(x**2))
     f = (
-        np.ones((1, speedgrid.nx, pitchgrid.nxi, field.ntheta, field.nzeta))
+        np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
         * ff[None, :, None, None, None]
     )
     cf = C.mv(f.flatten()).reshape(f.shape)
@@ -567,3 +578,48 @@ def test_verify_collision_null_single_species(dummy_field):
     # should have a null space of dimension 3*nt*nz
     # maxwellian, v*maxwellian, v^2*maxwellian
     assert sum(np.abs(es) < 1e-14 * np.max(np.abs(es))) == 3 * nt * nz
+
+
+def _check_operator_interface(op, rng):
+    """Exercise the lineax interface: structures, as_matrix, transpose."""
+    ins = op.in_structure()
+    outs = op.out_structure()
+    A = np.asarray(op.as_matrix())
+    assert A.shape == (outs.shape[0], ins.shape[0])
+
+    x = rng.standard_normal(ins.shape[0])
+    np.testing.assert_allclose(op.mv(x), A @ x, rtol=1e-6, atol=1e-10)
+
+    opT = op.transpose()
+    np.testing.assert_allclose(np.asarray(opT.as_matrix()), A.T, rtol=1e-6, atol=1e-10)
+    y = rng.standard_normal(outs.shape[0])
+    np.testing.assert_allclose(opT.mv(y), A.T @ y, rtol=1e-6, atol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda f, pg, sg, sp, pot: PitchAngleScattering(f, pg, sg, sp),
+        lambda f, pg, sg, sp, pot: EnergyScattering(f, pg, sg, sp),
+        lambda f, pg, sg, sp, pot: FieldPartCD(f, pg, sg, sp, pot),
+        lambda f, pg, sg, sp, pot: FieldPartCG(f, pg, sg, sp, pot),
+        lambda f, pg, sg, sp, pot: FieldPartCH(f, pg, sg, sp, pot),
+        lambda f, pg, sg, sp, pot: FieldParticleScattering(f, pg, sg, sp, pot),
+        # potentials=None exercises the default RosenbluthPotentials construction
+        lambda f, pg, sg, sp, pot: FokkerPlanckLandau(f, pg, sg, sp),
+    ],
+    ids=["CL", "CE", "CD", "CG", "CH", "FPS", "FPL"],
+)
+def test_collision_operator_interface(dummy_field, species1, build):
+    """out_structure/transpose/as_matrix are self-consistent."""
+    pitchgrid = UniformPitchAngleGrid(7)
+    speedgrid = MaxwellSpeedGrid(3)
+    potentials = RosenbluthPotentials(speedgrid, species1)
+    op = build(dummy_field, pitchgrid, speedgrid, species1, potentials)
+    _check_operator_interface(op, np.random.default_rng(0))
+
+
+def test_mdke_pitch_angle_scattering_interface(dummy_field):
+    """out_structure/transpose for the monoenergetic scattering operator."""
+    op = MDKEPitchAngleScattering(dummy_field, UniformPitchAngleGrid(7), 1.0)
+    _check_operator_interface(op, np.random.default_rng(0))

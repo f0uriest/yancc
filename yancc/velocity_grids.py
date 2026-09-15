@@ -159,10 +159,10 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
 
 
 class MaxwellSpeedGrid(AbstractSpeedGrid):
-    """Grid for speed variable x=v/vth.
+    r"""Grid for speed variable :math:`x = v/v_{th}`.
 
-    Uses Maxwell Polynomials, which are orthogonal on (0, xmax) with the weight
-    function x^k exp(-x^2)
+    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, x_{max}]` with the
+    weight function :math:`x^k \exp(-x^2)`
 
     Parameters
     ----------
@@ -188,6 +188,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     gauge_idx: jax.Array
 
     def __init__(self, nx, **kwargs):
+        assert nx >= 2, "MaxwellSpeedGrid requires nx >= 2"
         self.nx = nx
         if nx < 20:
             self.xrec = default_xrec
@@ -250,48 +251,27 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         gauge_idx = kwargs.get("gauge_idx", None)
         if gauge_idx is None:
             gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
-            if self.nx == 1:
-                gauge_idx = gauge_idx[0]
         self.gauge_idx = jnp.sort(gauge_idx)
 
-    def _dfdx(self, f):
-        # this only knows about a single species,
-        # f assumed to be shape(xi, x, theta, zeta)
-        return jnp.einsum("ax,ixtz->iatz", self.Dx_pseudospectral, f)
-
-    def _interp(self, x, f, xq, weight=True):
-        # f assumed to be shape(xi, x, theta, zeta)
-        M = orthax.orthvander(x, len(x) - 1, self.xrec)
-        if weight:
-            M *= jnp.sqrt(self.xrec.weight(x[:, None]))
-        f = jnp.moveaxis(f, 1, 0)
-        shp = f.shape
-        c = jnp.linalg.lstsq(M, f.reshape((self.nx, -1)))[0].reshape(shp)
-        fq = orthax.orthval(xq, c, self.xrec)
-        if weight:
-            fq *= jnp.sqrt(self.xrec.weight(xq))
-        # fq now of shape (xi, theta, zeta, x)
-        return jnp.moveaxis(fq, -1, 1)
-
-    def _integral(self, f):
-        # f assumed to be shape(xi, x, theta, zeta)
-        return (f * self.wx[None, :, None, None]).sum(axis=1)
+    def resample(self, nx):
+        """Resample grid to a lower or higher resolution."""
+        return self.__class__(nx)
 
 
 class LegendrePitchAngleGrid(eqx.Module):
-    """Grid for pitch angle variable xi=v||/v.
+    r"""Grid for pitch angle variable :math:`\xi = v_{||} / v`.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
     function 1.
 
     Parameters
     ----------
-    nxi : int
+    nalpha : int
         Number of grid points.
 
     """
 
-    nxi: int = eqx.field(static=True)
+    nalpha: int = eqx.field(static=True)
     xirec: orthax.recurrence.AbstractRecurrenceRelation
     xi: jax.Array
     wxi: jax.Array
@@ -301,11 +281,11 @@ class LegendrePitchAngleGrid(eqx.Module):
     Dxi_pseudospectral: jax.Array
     L: jax.Array
 
-    def __init__(self, nxi):
-        self.nxi = nxi
+    def __init__(self, nalpha):
+        self.nalpha = nalpha
         self.xirec = orthax.recurrence.Legendre()
-        self.xi, self.wxi = orthax.orthgauss(nxi, self.xirec)
-        self.xivander = orthax.orthvander(self.xi, self.nxi - 1, self.xirec)
+        self.xi, self.wxi = orthax.orthgauss(nalpha, self.xirec)
+        self.xivander = orthax.orthvander(self.xi, self.nalpha - 1, self.xirec)
         self.xivander_inv = jnp.linalg.pinv(self.xivander)
 
         def _dxifun(c):
@@ -315,49 +295,48 @@ class LegendrePitchAngleGrid(eqx.Module):
 
         self.Dxi = jax.jacfwd(_dxifun)(self.xi)
         self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
-        k = jnp.arange(self.nxi)
+        k = jnp.arange(self.nalpha)
         kk = -jnp.diag(k * (k + 1))
         # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv
 
-    def resample(self, nxi):
+    def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(nxi)
+        return self.__class__(nalpha)
 
 
 class UniformPitchAngleGrid(eqx.Module):
-    """Grid for pitch angle variable gamma= arccos(v||/v).
+    r"""Grid for pitch angle variable :math:`α = -\arccos(v_{||} / v)`.
 
-    Uniform grid not including endpoints.
+    Uniform grid on :math:`[0, \pi]`, not including endpoints.
 
     Parameters
     ----------
-    nxi : int
+    nalpha : int
         Number of grid points.
 
     """
 
-    nxi: int = eqx.field(static=True)
-    gamma: jax.Array
+    nalpha: int = eqx.field(static=True)
+    alpha: jax.Array
     xi: jax.Array
     wxi: jax.Array
 
-    def __init__(self, nxi):
-        nxi = eqx.error_if(nxi, nxi % 2 == 0, "nxi must be odd")
-        self.nxi = nxi
-        gamma = jnp.linspace(0, jnp.pi, nxi, endpoint=False)
-        gamma += jnp.pi / (2 * nxi)
-        self.gamma = gamma
-        self.xi = -jnp.cos(gamma)
+    def __init__(self, nalpha):
+        self.nalpha = nalpha
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False)
+        alpha += jnp.pi / (2 * nalpha)
+        self.alpha = alpha
+        self.xi = -jnp.cos(alpha)
 
         # fejer type 1 quadrature
-        length = nxi // 2
-        r = nxi - length
+        length = nalpha // 2
+        r = nalpha - length
 
         kappa = jnp.arange(r)
         beta = jnp.hstack(
             [
-                2 * jnp.exp(1j * jnp.pi * kappa / nxi) / (1 - 4 * kappa**2),
+                2 * jnp.exp(1j * jnp.pi * kappa / nalpha) / (1 - 4 * kappa**2),
                 jnp.zeros(length + 1),
             ]
         )
@@ -366,6 +345,6 @@ class UniformPitchAngleGrid(eqx.Module):
         wxi = jnp.fft.ifft(beta)
         self.wxi = wxi.real
 
-    def resample(self, nxi):
+    def resample(self, nalpha):
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(nxi)
+        return self.__class__(nalpha)

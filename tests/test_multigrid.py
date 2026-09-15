@@ -1,62 +1,206 @@
 """Tests for multigrid parts."""
 
-import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.multigrid import interpolate
+from yancc.misc import dke_rhs
+from yancc.multigrid import (
+    Prolongation,
+    Restriction,
+    _nearest,
+    get_dke_operators,
+    get_fields_grids,
+    get_grid_resolutions,
+    get_prolongations,
+    get_restrictions,
+    krylov1_coarse_correction,
+    krylov1s_coarse_correction,
+    krylov2_coarse_correction,
+    krylov2s_coarse_correction,
+    standard_coarse_correction,
+)
 from yancc.velocity_grids import UniformPitchAngleGrid
+
+COARSE_CORRECTIONS = [
+    standard_coarse_correction,
+    krylov1_coarse_correction,
+    krylov1s_coarse_correction,
+    krylov2_coarse_correction,
+    krylov2s_coarse_correction,
+]
+
+
+@pytest.mark.parametrize(
+    "x, minval, expected",
+    [
+        (7.0, 5, 7),  # exact integer -> unchanged
+        (8.0, 5, 8),  # even is allowed on coarse levels
+        (8.4, 5, 8),  # rounds down
+        (7.75, 5, 8),  # rounds up
+        (0.3, 5, 5),  # below floor -> minval
+    ],
+)
+def test_nearest(x, minval, expected):
+    """``_nearest`` rounds to the closest integer, floored at ``minval``."""
+    assert _nearest(x, minval) == expected
 
 
 @pytest.mark.parametrize("nx", [1, 3])
-def test_interpolate(field, nx):
-    """Test that interpolation is transposed correctly."""
-    field1 = field.resample(11, 13)
-    field2 = field.resample(15, 17)
-    pitchgrid1 = UniformPitchAngleGrid(11)
-    pitchgrid2 = UniformPitchAngleGrid(15)
-    N1 = nx * pitchgrid1.nxi * field1.ntheta * field1.nzeta
-    N2 = nx * pitchgrid2.nxi * field2.ntheta * field2.nzeta
+def test_prolongation_restriction(field, nx):
+    """Test that prolongation and restriction are transposes (volume weighted)."""
+    field_c = field.resample(11, 13)
+    field_f = field.resample(15, 17)
+    pitchgrid_c = UniformPitchAngleGrid(11)
+    pitchgrid_f = UniformPitchAngleGrid(15)
+    N_c = nx * pitchgrid_c.nalpha * field_c.ntheta * field_c.nzeta
+    N_f = nx * pitchgrid_f.nalpha * field_f.ntheta * field_f.nzeta
 
-    t1, t2 = field1.theta, field2.theta
-    z1, z2 = field1.zeta, field2.zeta
-    a1, a2 = pitchgrid1.gamma, pitchgrid2.gamma
+    t_c, t_f = field_c.theta, field_f.theta
+    z_c, z_f = field_c.zeta, field_f.zeta
+    a_c, a_f = pitchgrid_c.alpha, pitchgrid_f.alpha
     x = (1 + np.arange(nx)) ** 2
 
     def foo(x, a, t, z):
         return (
             x
             * np.sin(t)
-            * np.cos(z * field1.NFP)
+            * np.cos(z * field_c.NFP)
             * (np.exp(-(a**2)) + 2 * np.exp(-((a - np.pi) ** 2)))
         )
 
-    f1 = foo(
+    f_c = foo(
         x[:, None, None, None],
-        a1[None, :, None, None],
-        t1[None, None, :, None],
-        z1[None, None, None, :],
+        a_c[None, :, None, None],
+        t_c[None, None, :, None],
+        z_c[None, None, None, :],
     ).flatten()
-    f2 = foo(
+    f_f = foo(
         x[:, None, None, None],
-        a2[None, :, None, None],
-        t2[None, None, :, None],
-        z2[None, None, None, :],
+        a_f[None, :, None, None],
+        t_f[None, None, :, None],
+        z_f[None, None, None, :],
     ).flatten()
-    J1 = jax.jacfwd(interpolate)(f1, field1, field2, pitchgrid1, pitchgrid2)
-    J2 = jax.jacfwd(interpolate)(f2, field2, field1, pitchgrid2, pitchgrid1)
 
-    np.testing.assert_allclose(
-        J1 @ f1, interpolate(f1, field1, field2, pitchgrid1, pitchgrid2), atol=1e-12
-    )
-    np.testing.assert_allclose(
-        J2 @ f2, interpolate(f2, field2, field1, pitchgrid2, pitchgrid1), atol=1e-12
-    )
-    np.testing.assert_allclose(J1.T, J2 * N2 / N1, atol=1e-12)
+    P = Prolongation(field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx)
+    R = Restriction(field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx)
 
-    np.testing.assert_allclose(
-        f2,
-        interpolate(f1, field1, field2, pitchgrid1, pitchgrid2, method="cubic"),
-        atol=1e-2,
-        rtol=1e-2,
+    # prolongation maps coarse -> fine; restriction maps fine -> coarse.
+    assert P.in_structure().shape == (N_c,)
+    assert P.out_structure().shape == (N_f,)
+    assert R.in_structure().shape == (N_f,)
+    assert R.out_structure().shape == (N_c,)
+
+    Pmat = P.as_matrix()
+    Rmat = R.as_matrix()
+
+    np.testing.assert_allclose(Pmat @ f_c, P.mv(f_c), atol=1e-12)
+    np.testing.assert_allclose(Rmat @ f_f, R.mv(f_f), atol=1e-12)
+    # Restriction is the volume-weighted transpose of prolongation.
+    np.testing.assert_allclose(Pmat.T, Rmat * N_f / N_c, atol=1e-12)
+
+    P_cubic = Prolongation(
+        field_c, field_f, pitchgrid_c, pitchgrid_f, prefix_size=nx, method="cubic"
     )
+    np.testing.assert_allclose(f_f, P_cubic.mv(f_c), atol=2e-2, rtol=2e-2)
+
+
+def test_get_grid_resolutions_max_grids():
+    """``max_grids`` caps the number of levels (fewer is allowed)."""
+    res = get_grid_resolutions(2, 10, 51, 51, 51, max_grids=4)
+    assert len(res) <= 4
+    # list is ordered coarse -> fine, so the finest grid is last
+    assert res[-1] == (2, 10, 51, 51, 51)
+    # algebraic axes refine monotonically and the coarsest stays >= the minimums
+    for i in range(len(res) - 1):
+        for ax in (2, 3, 4):
+            assert res[i + 1][ax] >= res[i][ax]
+    assert res[0][2] >= 5 and res[0][3] >= 5 and res[0][4] >= 5
+    # a generous cap does not force extra levels: the natural ~factor-2 schedule
+    # reaching coarse_N is used, so a huge cap gives the same (or fewer) levels.
+    res_capped = get_grid_resolutions(2, 10, 51, 51, 51, max_grids=2)
+    res_loose = get_grid_resolutions(2, 10, 51, 51, 51, max_grids=99)
+    assert len(res_capped) == 2  # hard cap honored
+    assert len(res_loose) <= 99 and len(res_loose) < 99  # not forced to the cap
+
+
+def test_get_grid_resolutions_coarsening_factor():
+    """Specifying coarsening_factor derives the number of levels."""
+    res = get_grid_resolutions(2, 10, 51, 51, 51, coarsening_factor=2.0)
+    assert len(res) >= 2
+    assert res[-1] == (2, 10, 51, 51, 51)
+
+
+def test_get_grid_resolutions_conflicting_args():
+    """Cannot specify both coarsening_factor and max_grids."""
+    with pytest.raises(ValueError):
+        get_grid_resolutions(2, 10, 51, 51, 51, coarsening_factor=2, max_grids=4)
+
+
+def test_get_grid_resolutions_coarse_ge_fine():
+    """coarse_N >= finest N collapses to a single grid (no coarsening)."""
+    fine = (1, 1, 17, 11, 13)
+    N = 17 * 11 * 13
+    assert get_grid_resolutions(*fine, coarse_N=10 * N) == [fine]
+    assert get_grid_resolutions(*fine, coarse_N=10 * N, max_grids=4) == [fine]
+    assert get_grid_resolutions(*fine, coarse_N=10 * N, coarsening_factor=2.0) == [fine]
+    # exactly at the target size is still a single grid
+    assert get_grid_resolutions(*fine, coarse_N=N) == [fine]
+
+
+def _two_level_dke(field, pitchgrid, speedgrid, species):
+    """Build a coarse+fine DKE 2-level setup with matching P/R operators."""
+    Erho = jnp.array(0.0)
+    operator_weights = jnp.ones(8).at[-2:].set(0)
+    ns, nx = len(species), speedgrid.nx
+    # (ns, nx, na, nt, nz), coarse then fine. Need >= 5 points per algebraic axis
+    # (a, t, z) for the finite-difference stencils.
+    resolutions = [
+        (ns, nx, 5, 5, 5),
+        (ns, nx, pitchgrid.nalpha, field.ntheta, field.nzeta),
+    ]
+    fields, grids = get_fields_grids(field, pitchgrid, resolutions)
+    ops = get_dke_operators(
+        fields,
+        grids,
+        speedgrid,
+        species,
+        Erho,
+        [],
+        None,
+        "2d",
+        2,
+        True,
+        operator_weights=operator_weights,
+    )
+    prolongations = get_prolongations(fields, grids, prefix_size=ns * nx)
+    restrictions = get_restrictions(fields, grids, prefix_size=ns * nx)
+    return fields, grids, ops, prolongations, restrictions, Erho
+
+
+@pytest.mark.parametrize("correction", COARSE_CORRECTIONS)
+def test_coarse_correction_reduces_error(
+    field, pitchgrid, speedgrid, species1, correction
+):
+    """A 2-level coarse-grid correction should reduce the error vs the true solution.
+
+    The residual norm is not guaranteed to decrease (the operator is not SPD), but
+    the error relative to the exact solution should.
+    """
+    fields, grids, ops, P, R, Erho = _two_level_dke(
+        field, pitchgrid, speedgrid, species1
+    )
+    A_c, A_f = ops[0], ops[1]
+    b = dke_rhs(
+        fields[1], grids[1], speedgrid, species1, Erho, include_constraints=False
+    )
+    x_true = jnp.linalg.solve(A_f.as_matrix(), b)
+    x = jnp.zeros_like(b)
+    rk = b - A_f.mv(x)
+    # exact coarse solve of the restricted residual, prolong back to the fine grid
+    ykm1 = jnp.linalg.solve(A_c.as_matrix(), R[0].mv(rk))
+    yk = P[0].mv(ykm1)
+    x_new = correction(x, 1, 0, A_f, yk, rk, 1.0, verbose=True)
+    err_before = float(jnp.linalg.norm(x - x_true))
+    err_after = float(jnp.linalg.norm(x_new - x_true))
+    assert err_after < err_before

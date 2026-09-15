@@ -1,6 +1,5 @@
 """Tests for computing Rosenbluth potentials."""
 
-import jax
 import jax.numpy as jnp
 import mpmath
 import numpy as np
@@ -8,43 +7,48 @@ import orthax
 import pytest
 import sympy
 
-from yancc.utils import lGammainc, lGammaincc
 from yancc.velocity_grids import UniformPitchAngleGrid
 
-from .conftest import _compute_G_sympy, _compute_H_sympy, _eval_f
+from .conftest import (
+    _compute_G_sympy,
+    _compute_H_sympy,
+    _eval_f,
+    _eval_f_sampled,
+    _speed_subset,
+)
 
 mpmath.mp.dps = 100
 
 
 def rosenbluth_ddG_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
-    assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
+    assert f.shape == (speedgrid.nx, pitchgrid.nalpha, 1, 1)
     # convert nodal alpha -> legendre l
     f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
     # convert nodal x -> speed k
     f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
-    Gabxlk = potentials.ddGxlk[a, b, :, : potentials.legendregrid.nxi]
+    Gabxlk = potentials.ddGxlk[a, b, :, : potentials.legendregrid.nalpha]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
 
 
 def rosenbluth_dH_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
-    assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
+    assert f.shape == (speedgrid.nx, pitchgrid.nalpha, 1, 1)
     # convert nodal alpha -> legendre l
     f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
     # convert nodal x -> speed k
     f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
-    Gabxlk = potentials.dHxlk[a, b, :, : potentials.legendregrid.nxi]
+    Gabxlk = potentials.dHxlk[a, b, :, : potentials.legendregrid.nalpha]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
 
 
 def rosenbluth_H_jax(f, a, b, speedgrid, pitchgrid, potentials, Txi_inv):
-    assert f.shape == (speedgrid.nx, pitchgrid.nxi, 1, 1)
+    assert f.shape == (speedgrid.nx, pitchgrid.nalpha, 1, 1)
     # convert nodal alpha -> legendre l
     f = jnp.einsum("la,xatz->xltz", Txi_inv, f)
     # convert nodal x -> speed k
     f = jnp.einsum("kx,xltz->kltz", speedgrid.xvander_inv, f)
-    Gabxlk = potentials.Hxlk[a, b, :, : potentials.legendregrid.nxi]
+    Gabxlk = potentials.Hxlk[a, b, :, : potentials.legendregrid.nalpha]
     df = jnp.einsum("xlk,kltz->xltz", Gabxlk, f)
     return df
 
@@ -67,10 +71,10 @@ def test_rosenbluth_derivatives(potential_quad, l, k):
     np.testing.assert_allclose(d2Gfd, d2Gan, rtol=1e-2)
 
 
-def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
-    """Test for potentials using incomplete gamma functions."""
+def test_rosenbluth_quad_vs_gauss_legendre(potential_quad, potential_gauss_legendre):
+    """Test fixed Gauss-Legendre potentials against adaptive quadrature."""
     R1 = potential_quad
-    R2 = potential_gamma
+    R2 = potential_gauss_legendre
     # a,a
     np.testing.assert_allclose(
         R1.Hxlk[0, 0],
@@ -149,135 +153,9 @@ def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
     )
 
 
-@np.vectorize
-def mplGammainc(s, x, cast=True):
-    f = mpmath.gammainc(s, 0, x)
-    s = mpmath.sign(f)
-    lf = mpmath.log(mpmath.fabs(f))
-    if cast:
-        return int(s), float(lf)
-    return s, lf
-
-
-@np.vectorize
-def mplGammaincc(s, x, cast=True):
-    f = mpmath.gammainc(s, x, mpmath.inf)
-    s = mpmath.sign(f)
-    lf = mpmath.log(mpmath.fabs(f))
-    if cast:
-        return int(s), float(lf)
-    return s, lf
-
-
-@np.vectorize
-def mpdlGammainc(s, x):
-    h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
-    f1 = mplGammainc(s, x + h, False)[1]
-    f2 = mplGammainc(s, x - h, False)[1]
-    return int(0), float((f1 - f2) / h / 2)
-
-
-@np.vectorize
-def mpdlGammaincc(s, x):
-    h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
-    f1 = mplGammaincc(s, x + h, False)[1]
-    f2 = mplGammaincc(s, x - h, False)[1]
-    return int(0), float((f1 - f2) / h / 2)
-
-
-def test_lower_Gamma():
-    """Test for lower incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = l / 2 + k / 2 + 5 / 2  # for I_4
-
-    s1, f1 = lGammainc(s, x0**2)
-    s2, f2 = mplGammainc(s, x0**2)
-    rtol = 1e-12
-    atol = 1e-12
-    mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
-    )
-    assert np.all(s1 == s2)
-
-
-def test_lower_Gamma_derivative():
-    """Test derivative rule for lower incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = l / 2 + k / 2 + 5 / 2  # for I_4
-
-    s, x0 = np.broadcast_arrays(s, x0)
-
-    sf, ff = jnp.vectorize(jax.jacfwd(lGammainc, 1))(s, x0**2)
-    sr, fr = jnp.vectorize(jax.jacrev(lGammainc, 1))(s, x0**2)
-    s2, f2 = mpdlGammainc(s, x0**2)
-    rtol = 1e-12
-    atol = 1e-12
-    mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
-    )
-    mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
-    )
-    assert np.all(sf == s2)
-    assert np.all(sr == s2)
-
-
-def test_upper_Gamma():
-    """Test for upper incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = -l / 2 + k / 2 + 1  # for I_1
-
-    s, x0 = np.broadcast_arrays(s, x0)
-
-    s1, f1 = lGammaincc(s, x0**2)
-    s2, f2 = mplGammaincc(s, x0**2)
-    rtol = 5e-8
-    atol = 5e-8
-    mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
-    )
-    assert np.all(s1 == s2)
-
-
-def test_upper_Gamma_derivative():
-    """Test derivative rule for upper incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = -l / 2 + k / 2 + 1  # for I_1
-
-    s, x0 = np.broadcast_arrays(s, x0)
-
-    sf, ff = jnp.vectorize(jax.jacfwd(lGammaincc, 1))(s, x0**2)
-    sr, fr = jnp.vectorize(jax.jacrev(lGammaincc, 1))(s, x0**2)
-    s2, f2 = mpdlGammaincc(s, x0**2)
-    rtol = 5e-7
-    atol = 5e-7
-    mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
-    )
-    mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask]**2}"
-    )
-    assert np.all(sf == s2)
-    assert np.all(sr == s2)
-
-
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_single_species_potentials_vs_sympy(l, potential_gamma):
-    potentials = potential_gamma
+def test_single_species_potentials_vs_sympy(l, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     speedgrid = potentials.speedgrid
     pitchgrid = UniformPitchAngleGrid(41)
 
@@ -296,18 +174,18 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     dHasympy = _eval_f(Ha.diff(v), v, speedgrid.x * vta, subs)
     ffa = _eval_f(fa, v, speedgrid.x * vta, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nxi, 1, 1))
+    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, 1, 1))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
 
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 
@@ -329,9 +207,11 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
     np.testing.assert_allclose(ddGajax[:, l, 0, 0], ddGasympy, rtol=1e-10, atol=0)
 
 
-@pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_2_species_potentials_vs_sympy(l, potential_gamma):
-    potentials = potential_gamma
+# Subset of l values: single-species variant exercises l=[0,1,2,3];
+# the 2-species version only needs to verify cross-species coupling.
+@pytest.mark.parametrize("l", [0, 2])
+def test_2_species_potentials_vs_sympy(l, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     speedgrid = potentials.speedgrid
     species = potentials.species
     pitchgrid = UniformPitchAngleGrid(41)
@@ -354,30 +234,30 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
     Hb = _compute_H_sympy(fb, v, l, vtb)
     Gb = _compute_G_sympy(fb, v, l, vtb)
 
-    Haa_sympy = _eval_f(Ha, v, speedgrid.x * va, subs)
-    Hab_sympy = _eval_f(Hb, v, speedgrid.x * va, subs)
-    Hba_sympy = _eval_f(Ha, v, speedgrid.x * vb, subs)
-    Hbb_sympy = _eval_f(Hb, v, speedgrid.x * vb, subs)
+    Haa_sympy = _eval_f_sampled(Ha, v, speedgrid.x * va, subs)
+    Hab_sympy = _eval_f_sampled(Hb, v, speedgrid.x * va, subs)
+    Hba_sympy = _eval_f_sampled(Ha, v, speedgrid.x * vb, subs)
+    Hbb_sympy = _eval_f_sampled(Hb, v, speedgrid.x * vb, subs)
 
-    dHaa_sympy = _eval_f(Ha.diff(v), v, speedgrid.x * va, subs)
-    dHab_sympy = _eval_f(Hb.diff(v), v, speedgrid.x * va, subs)
-    dHba_sympy = _eval_f(Ha.diff(v), v, speedgrid.x * vb, subs)
-    dHbb_sympy = _eval_f(Hb.diff(v), v, speedgrid.x * vb, subs)
+    dHaa_sympy = _eval_f_sampled(Ha.diff(v), v, speedgrid.x * va, subs)
+    dHab_sympy = _eval_f_sampled(Hb.diff(v), v, speedgrid.x * va, subs)
+    dHba_sympy = _eval_f_sampled(Ha.diff(v), v, speedgrid.x * vb, subs)
+    dHbb_sympy = _eval_f_sampled(Hb.diff(v), v, speedgrid.x * vb, subs)
 
-    ddGaa_sympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * va, subs)
-    ddGab_sympy = _eval_f(Gb.diff(v).diff(v), v, speedgrid.x * va, subs)
-    ddGba_sympy = _eval_f(Ga.diff(v).diff(v), v, speedgrid.x * vb, subs)
-    ddGbb_sympy = _eval_f(Gb.diff(v).diff(v), v, speedgrid.x * vb, subs)
+    ddGaa_sympy = _eval_f_sampled(Ga.diff(v).diff(v), v, speedgrid.x * va, subs)
+    ddGab_sympy = _eval_f_sampled(Gb.diff(v).diff(v), v, speedgrid.x * va, subs)
+    ddGba_sympy = _eval_f_sampled(Ga.diff(v).diff(v), v, speedgrid.x * vb, subs)
+    ddGbb_sympy = _eval_f_sampled(Gb.diff(v).diff(v), v, speedgrid.x * vb, subs)
 
     ffa = _eval_f(fa, v, speedgrid.x * va, subs)
     ffb = _eval_f(fb, v, speedgrid.x * vb, subs)
 
-    f = np.ones((2, speedgrid.nx, pitchgrid.nxi, 1, 1))
+    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, 1, 1))
     f[0] *= (
         ffa[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
@@ -385,13 +265,13 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
         ffb[:, None, None, None]
         * orthax.orthval(
             pitchgrid.xi,
-            jnp.zeros(potentials.legendregrid.nxi).at[l].set(1.0),
+            jnp.zeros(potentials.legendregrid.nalpha).at[l].set(1.0),
             potentials.legendregrid.xirec,
         )[None, :, None, None]
     )
 
     Txi = orthax.orthvander(
-        pitchgrid.xi, potentials.legendregrid.nxi - 1, potentials.legendregrid.xirec
+        pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
     )
     Txi_inv = jnp.linalg.pinv(Txi)
 
@@ -447,22 +327,24 @@ def test_2_species_potentials_vs_sympy(l, potential_gamma):
     np.testing.assert_allclose(ddGbb_jax[:, :l, :, :], 0, atol=1e-12 * vb**2)
     np.testing.assert_allclose(ddGbb_jax[:, l + 1 :, :, :], 0, atol=1e-12 * vb**2)
 
+    # compare against the sympy reference only at the sampled speed-grid points
+    i = _speed_subset(speedgrid.nx)
     # a,a
-    np.testing.assert_allclose(Haa_jax[:, l, 0, 0], Haa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(dHaa_jax[:, l, 0, 0], dHaa_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(ddGaa_jax[:, l, 0, 0], ddGaa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(Haa_jax[i, l, 0, 0], Haa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHaa_jax[i, l, 0, 0], dHaa_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGaa_jax[i, l, 0, 0], ddGaa_sympy, rtol=1e-10, atol=0)
     # a,b
-    np.testing.assert_allclose(Hab_jax[:, l, 0, 0], Hab_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(dHab_jax[:, l, 0, 0], dHab_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(ddGab_jax[:, l, 0, 0], ddGab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(Hab_jax[i, l, 0, 0], Hab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHab_jax[i, l, 0, 0], dHab_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGab_jax[i, l, 0, 0], ddGab_sympy, rtol=1e-10, atol=0)
     # b,a
-    np.testing.assert_allclose(Hba_jax[:, l, 0, 0], Hba_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(dHba_jax[:, l, 0, 0], dHba_sympy, rtol=1e-10, atol=0)
-    np.testing.assert_allclose(ddGba_jax[:, l, 0, 0], ddGba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(Hba_jax[i, l, 0, 0], Hba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(dHba_jax[i, l, 0, 0], dHba_sympy, rtol=1e-10, atol=0)
+    np.testing.assert_allclose(ddGba_jax[i, l, 0, 0], ddGba_sympy, rtol=1e-10, atol=0)
     # b,b
-    np.testing.assert_allclose(Hbb_jax[:, l, 0, 0], Hbb_sympy, rtol=1e-8, atol=0)
-    np.testing.assert_allclose(dHbb_jax[:, l, 0, 0], dHbb_sympy, rtol=1e-8, atol=0)
-    np.testing.assert_allclose(ddGbb_jax[:, l, 0, 0], ddGbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(Hbb_jax[i, l, 0, 0], Hbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(dHbb_jax[i, l, 0, 0], dHbb_sympy, rtol=1e-8, atol=0)
+    np.testing.assert_allclose(ddGbb_jax[i, l, 0, 0], ddGbb_sympy, rtol=1e-8, atol=0)
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])

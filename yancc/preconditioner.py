@@ -1,6 +1,6 @@
 """Stuff for preconditioners."""
 
-from typing import Optional, Union
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -10,6 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from .collisions import RosenbluthPotentials
 from .field import Field
+from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
 from .linalg import InverseLinearOperator
 from .multigrid import (
     MultigridOperator,
@@ -20,8 +21,11 @@ from .multigrid import (
     get_grid_resolutions,
     get_mdke_jacobi_smoothers,
     get_mdke_operators,
+    get_prolongations,
+    get_restrictions,
 )
 from .species import LocalMaxwellian, collisionality
+from .trajectories import DKE, MDKE
 from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
 
 
@@ -59,28 +63,37 @@ class MDKEPreconditioner(MultigridOperator):
         pitchgrid: UniformPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
-        verbose: Union[bool, int] = False,
+        verbose: bool | int = False,
         **options,
     ):
-
         self.field = field
         self.pitchgrid = pitchgrid
         self.erhohat = jnp.asarray(erhohat)
         self.nuhat = jnp.asarray(nuhat)
-        self.p1 = options.pop("p1", "2d")
-        self.p2 = options.pop("p2", 2)
+        self.p1 = options.pop("p1", DEFAULT_P1M)
+        self.p2 = options.pop("p2", DEFAULT_P2M)
         gauge = options.pop("gauge", True)
-        ress = options.pop("ress", None)
+        resolutions = options.pop("resolutions", None)
         max_grids = options.pop("max_grids", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         coarse_N = options.pop("coarse_N", 8000)
-        min_nt = options.pop("min_nt", 5)
-        min_nz = options.pop("min_nz", 5)
-        min_na = options.pop("min_na", 5)
+        # The coarsest grid must still fit the FD stencils: every axis needs
+        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+        # hold the stencil should error (via the operator asserts), so we floor
+        # theta/a at min_n rather than capping at the given size. The exception
+        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+        min_n = (
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        )
+        min_nt = options.pop("min_nt", min_n)
+        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
         coarse_method = options.pop("coarse_method", "standard")
+        coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
@@ -90,11 +103,11 @@ class MDKEPreconditioner(MultigridOperator):
             options
         )
 
-        if ress is None:
-            ress = get_grid_resolutions(
+        if resolutions is None:
+            resolutions = get_grid_resolutions(
                 ns=1,
                 nx=1,
-                na=pitchgrid.nxi,
+                na=pitchgrid.nalpha,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -105,20 +118,10 @@ class MDKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
 
-        if verbose:
-            for i, res in enumerate(ress):
-                ns, nx, na, nt, nz = res
-                jax.debug.print(
-                    f"Grid {i}: na={na:4d}, "
-                    f"nt={nt:4d}, "
-                    f"nz={nz:4d}, "
-                    f"N={ns*nx*na*nt*nz}"
-                )
-
         fields, grids = get_fields_grids(
             field=field,
             pitchgrid=pitchgrid,
-            ress=ress,
+            resolutions=resolutions,
         )
 
         operators = get_mdke_operators(
@@ -141,20 +144,42 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_solver=smooth_solver,
             weight=smooth_weights,
         )
+        prolongations = get_prolongations(
+            fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
+        )
+        restrictions = get_restrictions(
+            fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
+        )
 
         super().__init__(
             operators=operators,
             smoothers=smoothers,
+            prolongations=prolongations,
+            restrictions=restrictions,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
             v2=v2,
-            interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=None,
             coarse_method=coarse_method,
+            coarse_weight=coarse_weight,
             verbose=max(0, verbose - 2),
         )
+
+    def print_resolution_summary(self) -> None:
+        """Print one ``Grid i: ...`` line per multigrid level."""
+        for i, op in enumerate(self.operators):
+            # cast is a no-op at runtime; just narrows the declared
+            # AbstractLinearOperator type to MDKE for pyright.
+            op = cast(MDKE, op)
+            jax.debug.print(
+                f"Grid {i}: nα={op.pitchgrid.nalpha:4d}, "
+                f"nθ={op.field.ntheta:4d}, "
+                f"nζ={op.field.nzeta:4d}, "
+                f"N={op.pitchgrid.nalpha * op.field.ntheta * op.field.nzeta:,d}",
+                ordered=True,
+            )
 
 
 @lx.is_symmetric.register(MDKEPreconditioner)
@@ -165,7 +190,23 @@ def _(operator):
 
 
 class DKEPreconditioner(MultigridOperator):
-    """Preconditioner for the DKE."""
+    """Preconditioner for the DKE.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : AbstractSpeedGrid
+        Speed grid data.
+    species : list of LocalMaxwellian
+        Plasma species.
+    Erho : float
+        Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
+    background : list of LocalMaxwellian, optional
+        Background species for inter-species collisions.
+    """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -183,12 +224,11 @@ class DKEPreconditioner(MultigridOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]],
+        background: list[LocalMaxwellian] | None,
         potentials: RosenbluthPotentials,
-        verbose: Union[bool, int] = False,
+        verbose: bool | int = False,
         **options,
     ):
-
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -198,35 +238,46 @@ class DKEPreconditioner(MultigridOperator):
         self.background = background
         self.Erho = jnp.asarray(Erho)
 
-        self.p1 = options.pop("p1", "2d")
-        self.p2 = options.pop("p2", 2)
+        self.p1 = options.pop("p1", DEFAULT_P1M)
+        self.p2 = options.pop("p2", DEFAULT_P2M)
         gauge = options.pop("gauge", True)
-        ress = options.pop("ress", None)
+        resolutions = options.pop("resolutions", None)
         coarsening_factor = options.pop("coarsening_factor", None)
         max_grids = options.pop("max_grids", None)
         coarse_N = options.pop("coarse_N", 8000)
-        min_nt = options.pop("min_nt", 5)
-        min_nz = options.pop("min_nz", 5)
-        min_na = options.pop("min_na", 5)
+        # The coarsest grid must still fit the FD stencils: every axis needs
+        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+        # hold the stencil should error (via the operator asserts), so we floor
+        # theta/a at min_n rather than capping at the given size. The exception
+        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+        min_n = (
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        )
+        min_nt = options.pop("min_nt", min_n)
+        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
         smooth_type = options.pop("smooth_type", 1)
         coarse_method = options.pop("coarse_method", "standard")
+        coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
         cycle_index = options.pop("cycle_index", 1)
         operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
         smoother_weights = options.pop("smoother_weights", operator_weights)
+        coulomb_log = options.pop("coulomb_log", None)
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
 
-        if ress is None:
-            ress = get_grid_resolutions(
+        if resolutions is None:
+            resolutions = get_grid_resolutions(
                 ns=len(species),
                 nx=speedgrid.nx,
-                na=pitchgrid.nxi,
+                na=pitchgrid.nalpha,
                 nt=field.ntheta,
                 nz=field.nzeta,
                 coarse_N=coarse_N,
@@ -237,7 +288,9 @@ class DKEPreconditioner(MultigridOperator):
                 coarsening_factor=coarsening_factor,
             )
 
-        fields, grids = get_fields_grids(field=field, pitchgrid=pitchgrid, ress=ress)
+        fields, grids = get_fields_grids(
+            field=field, pitchgrid=pitchgrid, resolutions=resolutions
+        )
         operators = get_dke_operators(
             fields=fields,
             pitchgrids=grids,
@@ -250,7 +303,7 @@ class DKEPreconditioner(MultigridOperator):
             p2=self.p2,
             gauge=gauge,
             operator_weights=operator_weights,
-            **options,
+            coulomb_log=coulomb_log,
         )
         if smooth_type == 1:
             smoothers = get_dke_jacobi_smoothers(
@@ -267,7 +320,7 @@ class DKEPreconditioner(MultigridOperator):
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
-                **options,
+                coulomb_log=coulomb_log,
             )
         else:
             smoothers = get_dke_jacobi2_smoothers(
@@ -284,23 +337,59 @@ class DKEPreconditioner(MultigridOperator):
                 smooth_solver=smooth_solver,
                 weight=smooth_weights,
                 operator_weights=smoother_weights,
+                coulomb_log=coulomb_log,
                 **options,
             )
         coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        prefix_size = len(species) * speedgrid.nx
+        prolongations = get_prolongations(
+            fields=fields,
+            pitchgrids=grids,
+            prefix_size=prefix_size,
+            method=interp_method,
+        )
+        restrictions = get_restrictions(
+            fields=fields,
+            pitchgrids=grids,
+            prefix_size=prefix_size,
+            method=interp_method,
+        )
 
         super().__init__(
             operators=operators,
             smoothers=smoothers,
+            prolongations=prolongations,
+            restrictions=restrictions,
             x0=None,
             cycle_index=cycle_index,
             v1=v1,
             v2=v2,
-            interp_method=interp_method,
             smooth_method=smooth_method,
             coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
+            coarse_weight=coarse_weight,
             verbose=max(0, verbose - 2),
         )
+
+    def print_resolution_summary(self) -> None:
+        """Print one ``Grid i: ...`` line per multigrid level."""
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        for i, op in enumerate(self.operators):
+            # cast is a no-op at runtime; just narrows the declared
+            # AbstractLinearOperator type to DKE for pyright.
+            op = cast(DKE, op)
+            na = op.pitchgrid.nalpha
+            nt = op.field.ntheta
+            nz = op.field.nzeta
+            jax.debug.print(
+                f"Grid {i}: nx={nx:4d}, "
+                f"nα={na:4d}, "
+                f"nθ={nt:4d}, "
+                f"nζ={nz:4d}, "
+                f"N={ns * nx * na * nt * nz:,d}",
+                ordered=True,
+            )
 
 
 @lx.is_symmetric.register(DKEPreconditioner)
@@ -311,7 +400,23 @@ def _(operator):
 
 
 class DKEMPreconditioner(lx.AbstractLinearOperator):
-    """Preconditioner for the DKE using block diagonal MDKE preconditioners."""
+    """Preconditioner for the DKE using block diagonal MDKE preconditioners.
+
+    Parameters
+    ----------
+    field : yancc.Field
+        Magnetic field information.
+    pitchgrid : UniformPitchAngleGrid
+        Pitch angle grid data.
+    speedgrid : AbstractSpeedGrid
+        Speed grid data.
+    species : list of LocalMaxwellian
+        Plasma species.
+    Erho : float
+        Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
+    background : list of LocalMaxwellian, optional
+        Background species for inter-species collisions.
+    """
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
@@ -321,6 +426,8 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
     background: list[LocalMaxwellian]
     M: MultigridOperator
     vs: jax.Array
+    smooth_method: str = eqx.field(static=True)
+    coarse_method: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -329,50 +436,55 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         speedgrid: AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        background: Optional[list[LocalMaxwellian]] = None,
+        background: list[LocalMaxwellian] | None = None,
         **options,
     ):
-
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
         if background is None:
             background = []
-        background = background
+        self.background = background
         self.Erho = jnp.asarray(Erho)
+        self.smooth_method = options.get("smooth_method", "standard")
+        self.coarse_method = options.get("coarse_method", "standard")
 
-        Ers = []
-        nus = []
+        erhohats = []
+        nuhats = []
         vs = []
         for i, spec in enumerate(species):
-            temp_nu = []
-            temp_Er = []
+            temp_nuhat = []
+            temp_erhohat = []
             temp_vs = []
             others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
                 nu = collisionality(spec, v, *others)
-                Erhat = Erho / v
+                erhohat = Erho / v
                 nuhat = nu / v
-                temp_Er.append(Erhat)
-                temp_nu.append(nuhat)
+                temp_erhohat.append(erhohat)
+                temp_nuhat.append(nuhat)
                 temp_vs.append(v)
 
-            Ers.append(temp_Er)
-            nus.append(temp_nu)
+            erhohats.append(temp_erhohat)
+            nuhats.append(temp_nuhat)
             vs.append(temp_vs)
 
-        Ers = jnp.array(Ers)
-        nus = jnp.array(nus)
+        erhohats = jnp.array(erhohats)
+        nuhats = jnp.array(nuhats)
         self.vs = jnp.array(vs)
 
-        def get_mdke_precond(nu, Er):
+        def get_mdke_precond(nuhat, erhohat):
             return MDKEPreconditioner(
-                field=field, pitchgrid=pitchgrid, erhohat=Er, nuhat=nu, **options
+                field=field,
+                pitchgrid=pitchgrid,
+                erhohat=erhohat,
+                nuhat=nuhat,
+                **options,
             )
 
-        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nus, Ers)
+        self.M = jax.vmap(jax.vmap(get_mdke_precond))(nuhats, erhohats)
 
     @eqx.filter_jit
     def mv(self, vector):
@@ -397,7 +509,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -410,7 +522,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             (
                 self.field.ntheta
                 * self.field.nzeta
-                * self.pitchgrid.nxi
+                * self.pitchgrid.nalpha
                 * self.speedgrid.nx
                 * len(self.species),
             ),
@@ -418,13 +530,46 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         )
 
     def transpose(self):
-        """Transpose of the operator."""
-        x = jnp.zeros(self.in_size())
+        """Transpose of the operator.
 
-        def fun(y):
-            return jax.linear_transpose(self.mv, x)(y)[0]
+        ``mv`` is ``(M @ v) / vs`` (per ``(species, x)`` block), so its adjoint
+        is ``M^T @ (u / vs)``. Closed-form so we don't reverse-mode through the
+        underlying multigrid ``while_loop``.
+        """
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        vs = self.vs
+        M = self.M
 
-        return lx.FunctionLinearOperator(fun, x)
+        def _mv(u):
+            u = u.reshape((ns, nx, -1)) / vs[:, :, None]
+            out = jax.vmap(jax.vmap(lambda Mi, v: Mi.transpose().mv(v)))(M, u)
+            return out.flatten()
+
+        return lx.FunctionLinearOperator(_mv, jnp.zeros(self.in_size()))
+
+    def print_resolution_summary(self) -> None:
+        """Print one ``Grid i: ...`` line per multigrid level. The same grid
+        stack is shared across all (species, x) pairs; only the underlying
+        ``nuhat`` / ``erhohat`` coefficients vary.
+        """
+        ns = len(self.species)
+        nx = self.speedgrid.nx
+        for i, op in enumerate(self.M.operators):
+            # cast is a no-op at runtime; just narrows the declared
+            # AbstractLinearOperator type to MDKE for pyright.
+            op = cast(MDKE, op)
+            na = op.pitchgrid.nalpha
+            nt = op.field.ntheta
+            nz = op.field.nzeta
+            jax.debug.print(
+                f"Grid {i}: nx={nx:4d}, "
+                f"nα={na:4d}, "
+                f"nθ={nt:4d}, "
+                f"nζ={nz:4d}, "
+                f"N={ns * nx * na * nt * nz:,d}",
+                ordered=True,
+            )
 
 
 @lx.is_symmetric.register(DKEMPreconditioner)
