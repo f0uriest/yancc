@@ -316,6 +316,7 @@ def solve_dke(  # noqa: C901
     U = options.pop("U", None)
     f1 = options.pop("f1", None)
     coulomb_log = options.pop("coulomb_log", None)
+    entropy_norm = options.pop("entropy_norm", True)
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
@@ -394,6 +395,11 @@ def solve_dke(  # noqa: C901
         # maybe pad with zeros for sources
         U = jnp.pad(U, [(0, size + 2 * len(species) - U.shape[0]), (0, 0)])
 
+    if entropy_norm:
+        weights = _dke_entropy_weights(species, speedgrid, pitchgrid, field)
+    else:
+        weights = jnp.ones_like(rhs)
+
     f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
         rhs,
@@ -409,11 +415,12 @@ def solve_dke(  # noqa: C901
         U=U,
         flexible=flexible,
         throw=throw,
+        weights=weights if entropy_norm else None,
     )
     info = {
         "niter": j1,
         "nmv": nmv1,
-        "res": res1 / jnp.linalg.norm(rhs),
+        "res": res1 / jnp.linalg.norm(jnp.sqrt(weights) * rhs),
         "success": success,
         "C": C1,
         "U": U1,
@@ -450,6 +457,25 @@ def solve_dke(  # noqa: C901
         sol,
         info,
     )
+
+
+def _dke_entropy_weights(species, speedgrid, pitchgrid, field):
+    """Residual weights for the bordered DKE system in the entropy norm."""
+    # The linearized collision operator is self-adjoint (and streaming/drifts are
+    # anti-self-adjoint) in the inner product sum_s T_s int d^3v f_s g_s / F_Ms.
+    # Keeping only the species-dependent constant of that weight, T_s vth_s^6 / n_s,
+    # makes each species' residual measure its perturbation relative to its own
+    # Maxwellian, so the norm is not dominated by the species with the largest
+    # F_M. The velocity dependence exp(x^2) is dropped since it would weight the
+    # poorly resolved tail most heavily. Constraint rows get the same per-species
+    # weight, which keeps the bordered system consistent with the scaled f.
+    T = jnp.array([sp.temperature for sp in species])
+    n = jnp.array([sp.density for sp in species])
+    vth = jnp.array([sp.v_thermal for sp in species])
+    ws = T * vth**6 / n
+    ws = ws / ws.max()
+    nf = speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
+    return jnp.concatenate([jnp.repeat(ws, nf), jnp.repeat(ws, 2)])
 
 
 def _print_species_summary(species, field, speedgrid, background, coulomb_log=None):

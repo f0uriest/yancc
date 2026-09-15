@@ -184,8 +184,10 @@ class DKESolution(eqx.Module):
             particle_source = jnp.full(ns, jnp.nan)
             heat_source = jnp.full(ns, jnp.nan)
         elif f1.size == N + 2 * ns:
-            heat_source = f1[-ns:]
-            particle_source = f1[-2 * ns : -ns]
+            # one (particle, heat) pair per species, matching DKESources columns
+            sources = f1[N:].reshape((ns, 2))
+            particle_source = sources[:, 0]
+            heat_source = sources[:, 1]
             f1 = f1[:N].reshape(shape)
         else:
             raise ValueError("got wrong size for f1")
@@ -212,8 +214,8 @@ class DKESolution(eqx.Module):
     def f1_krylov(self) -> jax.Array:
         """Distribution function, including source terms, as seen by krylov solver."""
         f1 = self.f1.flatten()
-        sources = jnp.concatenate([self._particle_source, self._heat_source])
-        sources = jnp.nan_to_num(sources, nan=0.0)
+        sources = jnp.stack([self._particle_source, self._heat_source], axis=1)
+        sources = jnp.nan_to_num(sources, nan=0.0).flatten()
         return jnp.concatenate([f1, sources])
 
     def get(self, qty, **kwargs):
