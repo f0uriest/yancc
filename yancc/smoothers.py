@@ -30,7 +30,7 @@ from .linalg import (
     lu_solve_banded_periodic,
     matrix_1norm,
 )
-from .species import LocalMaxwellian, nustar
+from .species import LocalMaxwellian, _nustar_species
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -510,13 +510,9 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.smooth_solver = smooth_solver
 
         if weight is None:
-            x = speedgrid.x
-            nus = []
-            for i, spa in enumerate(species):
-                others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
-                nus.append(nu)
-            nus = jnp.asarray(nus)
+            nus = _nustar_species(
+                species, field, speedgrid.x, background, lnlambda=coulomb_log
+            )
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
             _weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             _weight = _weight * jnp.ones(
@@ -794,13 +790,9 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
         )
         if weight is None:
-            x = speedgrid.x
-            nus = []
-            for i, spa in enumerate(species):
-                others = species[:i] + species[i + 1 :] + background
-                nu = nustar(spa, field, x, *others, lnlambda=coulomb_log)
-                nus.append(nu)
-            nus = jnp.asarray(nus)
+            nus = _nustar_species(
+                species, field, speedgrid.x, background, lnlambda=coulomb_log
+            )
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[2])
             wght = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
             weight = wght * jnp.ones(

@@ -15,7 +15,7 @@ from jaxtyping import Array, ArrayLike, Bool, Float
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdfwd
 from .linalg import TransposedLinearOperator, banded_to_dense, dense_to_banded
-from .species import LocalMaxwellian, gamma_ab, nuD_ab, nupar_ab
+from .species import LocalMaxwellian, _species_pairs, gamma_ab, nuD_ab, nupar_ab
 from .utils import (
     _parse_axorder_shape_3d,
     _parse_axorder_shape_4d,
@@ -236,30 +236,26 @@ class RosenbluthPotentials(eqx.Module):
         self.ddGxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         self.dHxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
         self.Hxlk = jnp.zeros((ns, ns, self.speedgrid.nx, nL, self.speedgrid.nx))
+
         # arr[a,b] is potential operator from species b evaluated at x grid of species a
-        for a, spa in enumerate(species):
-            for b, spb in enumerate(species):
-                va, vb = spa.v_thermal, spb.v_thermal
-                # suppose vb > va, then fb is wider in v space
-                # so to get {H,G}b on fa grid, we evaluate at x << 1 ie x*va/vb
-                xa = x * va / vb
-                ddG = self._ddGlk(xa, l, k)
-                dH = self._dHlk(xa, l, k)
-                H = self._Hlk(xa, l, k)
-                # ddG is in normalized units, needs to be scaled by vb^4
-                # but ddG is dG/dx^2, want dG/dv^2 so gives extra factor of 1/vb^2
-                self.ddGxlk = self.ddGxlk.at[a, b, :, :, :].set(
-                    ddG * vb**2, unique_indices=True
-                )
-                # dH is in normalized units, needs to be scaled by vb^2
-                # but dH is dH/dx, want dH/dv so gives extra factor of 1/vb
-                self.dHxlk = self.dHxlk.at[a, b, :, :, :].set(
-                    dH * vb, unique_indices=True
-                )
-                # H is in normalized units, needs to be scaled by vb^2
-                self.Hxlk = self.Hxlk.at[a, b, :, :, :].set(
-                    H * vb**2, unique_indices=True
-                )
+        def potentials_ab(spa, spb):
+            va, vb = spa.v_thermal, spb.v_thermal
+            # suppose vb > va, then fb is wider in v space
+            # so to get {H,G}b on fa grid, we evaluate at x << 1 ie x*va/vb
+            xa = x * va / vb
+            ddG = self._ddGlk(xa, l, k)
+            dH = self._dHlk(xa, l, k)
+            H = self._Hlk(xa, l, k)
+            # ddG is in normalized units, needs to be scaled by vb^4
+            # but ddG is dG/dx^2, want dG/dv^2 so gives extra factor of 1/vb^2
+            # dH is in normalized units, needs to be scaled by vb^2
+            # but dH is dH/dx, want dH/dv so gives extra factor of 1/vb
+            # H is in normalized units, needs to be scaled by vb^2
+            return ddG * vb**2, dH * vb, H * vb**2
+
+        self.ddGxlk, self.dHxlk, self.Hxlk = _species_pairs(
+            potentials_ab, species, species
+        )
 
     @eqx.filter_jit
     @functools.partial(jnp.vectorize, excluded=[0])
@@ -596,14 +592,12 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         self.p2 = p2
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
-        nus = []
         x = speedgrid.x
-        for spa in species:
-            nu = 0.0
-            for spb in species + background:
-                nu += nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
-            nus.append(nu)
-        self.nus = jnp.asarray(nus)
+
+        def nu_ab(spa, spb):
+            return nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
+
+        self.nus = _species_pairs(nu_ab, species, species + background).sum(axis=1)
         h = jnp.pi / pitchgrid.nalpha
         f1 = jnp.ones(pitchgrid.nalpha)
         D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
@@ -875,32 +869,25 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self.background = background
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
-        coeff0 = []
-        coeff1 = []
-        coeff2 = []
         x = speedgrid.x
 
-        for spa in species:
+        def terms_ab(spa, spb):
             vta = spa.v_thermal
             v = x * vta
-            term0 = 0.0
-            term1 = 0.0
-            term2 = 0.0
-            for spb in species + background:
-                nupar = nupar_ab(spa, spb, v, lnlambda=coulomb_log)
-                nuD = nuD_ab(spa, spb, v, lnlambda=coulomb_log)
-                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
-                ma, mb = spa.species.mass, spb.species.mass
-                vtb = spb.v_thermal
-                term0 += 4 * jnp.pi * gamma * ma / mb * spb(v)
-                term1 += nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
-                term2 += nupar * x**2 / 2
-            coeff0.append(term0)
-            coeff1.append(term1)
-            coeff2.append(term2)
-        self.coeff0 = jnp.asarray(coeff0)
-        self.coeff1 = jnp.asarray(coeff1)
-        self.coeff2 = jnp.asarray(coeff2)
+            nupar = nupar_ab(spa, spb, v, lnlambda=coulomb_log)
+            nuD = nuD_ab(spa, spb, v, lnlambda=coulomb_log)
+            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            ma, mb = spa.species.mass, spb.species.mass
+            vtb = spb.v_thermal
+            term0 = 4 * jnp.pi * gamma * ma / mb * spb(v)
+            term1 = nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
+            term2 = nupar * x**2 / 2
+            return term0, term1, term2
+
+        term0, term1, term2 = _species_pairs(terms_ab, species, species + background)
+        self.coeff0 = term0.sum(axis=1)
+        self.coeff1 = term1.sum(axis=1)
+        self.coeff2 = term2.sum(axis=1)
 
         # The speed operator acts only on the x axis and is independent of the
         # vector, so collapse coeff2*D2x + coeff1*Dx + coeff0*I into a single
@@ -1601,31 +1588,26 @@ class FieldPartCD(lx.AbstractLinearOperator):
         # | C_aa  C_ab | | f_a | = | R_a |
         # | C_ba  C_bb | | f_b |   | R_b |
 
-        C = []
-        Ca = []
-        for a, spa in enumerate(species):
+        def C_ab(spa, spb):
             va = spa.v_thermal
             ma = spa.species.mass
             v = x * va
             Fa = spa(v)
-            for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
-                vb = spb.v_thermal
-                mb = spb.species.mass
-                # need to evaluate fb on the speed grid for fa
-                # if va >> vb, then fa is "wider" in speed, and we're evaluating in
-                # the tail of fb, ie xq >> 1, so xq = va/vb x
-                xq = va / vb * x
-                # matrix to evaluate fb at xq
-                Dab = orthax.orthvander(
-                    xq, speedgrid.nx - 1, speedgrid.xrec
-                ) * speedgrid.xrec.weight(xq[:, None])
-                prefactor = jnp.diag(gamma * Fa * 4 * jnp.pi * ma / mb)
-                CDab = prefactor @ Dab @ speedgrid.xvander_inv
-                Ca.append(CDab)
-            C.append(Ca)
-            Ca = []
-        self.C = jnp.asarray(C)
+            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            vb = spb.v_thermal
+            mb = spb.species.mass
+            # need to evaluate fb on the speed grid for fa
+            # if va >> vb, then fa is "wider" in speed, and we're evaluating in
+            # the tail of fb, ie xq >> 1, so xq = va/vb x
+            xq = va / vb * x
+            # matrix to evaluate fb at xq
+            Dab = orthax.orthvander(
+                xq, speedgrid.nx - 1, speedgrid.xrec
+            ) * speedgrid.xrec.weight(xq[:, None])
+            prefactor = jnp.diag(gamma * Fa * 4 * jnp.pi * ma / mb)
+            return prefactor @ Dab @ speedgrid.xvander_inv
+
+        self.C = _species_pairs(C_ab, species, species)
 
         # gauge scale depends only on operator data, not the input vector
         idxs = jnp.arange(len(species))
@@ -1771,18 +1753,15 @@ class FieldPartCG(lx.AbstractLinearOperator):
         # | C_ba  C_bb | | f_b |   | R_b |
 
         x = speedgrid.x
-        prefactor = []
-        for a, spa in enumerate(species):
+
+        def prefactor_ab(spa, spb):
             va = spa.v_thermal
             v = x * va
             Fa = spa(v)
-            pb = []
-            for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
-                pb.append(gamma * Fa * 2 * v**2 / va**4)
-            prefactor.append(pb)
+            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            return gamma * Fa * 2 * v**2 / va**4
 
-        self.prefactor = jnp.array(prefactor)
+        self.prefactor = _species_pairs(prefactor_ab, species, species)
         self.Txi = orthax.orthvander(
             pitchgrid.xi,
             potentials.legendregrid.nalpha - 1,
@@ -1951,25 +1930,21 @@ class FieldPartCH(lx.AbstractLinearOperator):
         # | C_ba  C_bb | | f_b |   | R_b |
 
         x = speedgrid.x
-        prefactor_H = []
-        prefactor_dH = []
-        for a, spa in enumerate(species):
+
+        def prefactors_ab(spa, spb):
             va = spa.v_thermal
             ma = spa.species.mass
             v = x * va
             Fa = spa(v)
-            temp_prefactor_H = []
-            temp_prefactor_dH = []
-            for b, spb in enumerate(species):
-                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
-                mb = spb.species.mass
-                temp_prefactor_H.append(-2 / va**2 * gamma * Fa)
-                temp_prefactor_dH.append(-2 * v / va**2 * (1 - ma / mb) * gamma * Fa)
-            prefactor_H.append(temp_prefactor_H)
-            prefactor_dH.append(temp_prefactor_dH)
+            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            mb = spb.species.mass
+            prefactor_H = -2 / va**2 * gamma * Fa
+            prefactor_dH = -2 * v / va**2 * (1 - ma / mb) * gamma * Fa
+            return prefactor_H, prefactor_dH
 
-        self.prefactor_H = jnp.array(prefactor_H)
-        self.prefactor_dH = jnp.array(prefactor_dH)
+        self.prefactor_H, self.prefactor_dH = _species_pairs(
+            prefactors_ab, species, species
+        )
         self.Txi = orthax.orthvander(
             pitchgrid.xi,
             potentials.legendregrid.nalpha - 1,
@@ -2145,43 +2120,30 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
         #  * the diagonal-in-pitch speed-space operator (CD)
         x = speedgrid.x
         idxs = jnp.arange(len(species))
-        prefactor_G = []
-        prefactor_H = []
-        prefactor_dH = []
-        C = []
-        for spa in species:
+
+        def terms_ab(spa, spb):
             va = spa.v_thermal
             ma = spa.species.mass
             v = x * va
             Fa = spa(v)
-            pg = []
-            pH = []
-            pdH = []
-            Crow = []
-            for spb in species:
-                gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
-                vb = spb.v_thermal
-                mb = spb.species.mass
-                pg.append(gamma * Fa * 2 * v**2 / va**4)
-                pH.append(-2 / va**2 * gamma * Fa)
-                pdH.append(-2 * v / va**2 * (1 - ma / mb) * gamma * Fa)
-                # CD evaluates fb at xq = va/vb x: if va >> vb, fa is "wider" in
-                # speed and we sample fb in its tail (xq >> 1).
-                xq = va / vb * x
-                Dab = orthax.orthvander(
-                    xq, speedgrid.nx - 1, speedgrid.xrec
-                ) * speedgrid.xrec.weight(xq[:, None])
-                cd_prefactor = jnp.diag(gamma * Fa * 4 * jnp.pi * ma / mb)
-                Crow.append(cd_prefactor @ Dab @ speedgrid.xvander_inv)
-            prefactor_G.append(pg)
-            prefactor_H.append(pH)
-            prefactor_dH.append(pdH)
-            C.append(Crow)
+            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            vb = spb.v_thermal
+            mb = spb.species.mass
+            pg = gamma * Fa * 2 * v**2 / va**4
+            pH = -2 / va**2 * gamma * Fa
+            pdH = -2 * v / va**2 * (1 - ma / mb) * gamma * Fa
+            # CD evaluates fb at xq = va/vb x: if va >> vb, fa is "wider" in
+            # speed and we sample fb in its tail (xq >> 1).
+            xq = va / vb * x
+            Dab = orthax.orthvander(
+                xq, speedgrid.nx - 1, speedgrid.xrec
+            ) * speedgrid.xrec.weight(xq[:, None])
+            cd_prefactor = jnp.diag(gamma * Fa * 4 * jnp.pi * ma / mb)
+            return pg, pH, pdH, cd_prefactor @ Dab @ speedgrid.xvander_inv
 
-        prefactor_G = jnp.array(prefactor_G)
-        prefactor_H = jnp.array(prefactor_H)
-        prefactor_dH = jnp.array(prefactor_dH)
-        self.C = jnp.asarray(C)
+        prefactor_G, prefactor_H, prefactor_dH, self.C = _species_pairs(
+            terms_ab, species, species
+        )
 
         self.Txi = orthax.orthvander(
             pitchgrid.xi,

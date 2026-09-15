@@ -472,5 +472,34 @@ def nustar(
     x = jnp.asarray(x)
     v = x * species.v_thermal
     nu = collisionality(species, v, *others, lnlambda=lnlambda)
-    nustar = field.R_major * nu / v / jnp.abs(field.iota)
-    return nustar
+    return _normalize_collisionality(nu, v, field)
+
+
+def _normalize_collisionality(nu, v, field):
+    """ν* = ν R₀ /(v ι) from a collisionality ν at speed v."""
+    return field.R_major * nu / v / jnp.abs(field.iota)
+
+
+def _species_pairs(fn, maxwellians_a, maxwellians_b):
+    """Evaluate fn(a, b) for every pair, stacked with leading axes (len(a), len(b)).
+
+    The Maxwellians are stacked and fn is vmapped over both lists, so fn is traced
+    once regardless of the number of species. Tracing fn separately for each pair
+    grows the compiled program quadratically with the number of species.
+    """
+    stack = lambda ms: jax.tree.map(lambda *leaves: jnp.stack(leaves), *ms)
+    a, b = stack(maxwellians_a), stack(maxwellians_b)
+    return jax.vmap(lambda spa: jax.vmap(lambda spb: fn(spa, spb))(b))(a)
+
+
+def _nustar_species(species, field, x, background=(), lnlambda=None):
+    """ν* of each species against all species and background, shape (ns, *x.shape)."""
+    x = jnp.asarray(x)
+
+    def nu_ab(spa, spb):
+        return nuD_ab(spa, spb, x * spa.v_thermal, lnlambda)
+
+    nu = _species_pairs(nu_ab, list(species), list(species) + list(background))
+    vth = jnp.stack([sp.v_thermal for sp in species])
+    v = x[None] * vth.reshape((-1,) + (1,) * x.ndim)
+    return _normalize_collisionality(nu.sum(axis=1), v, field)
