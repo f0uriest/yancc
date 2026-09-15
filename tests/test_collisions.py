@@ -191,8 +191,8 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -321,8 +321,8 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -450,8 +450,8 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
