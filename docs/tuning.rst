@@ -159,6 +159,12 @@ Coarsening
    automatic coarsening from ``coarse_N`` / ``coarsening_factor`` is
    inadequate.
 
+``as_matrix_chunk`` *(int, default 512)*
+   Number of columns of the coarse grid operator to build at a time for the direct
+   solve there. Peak memory during the build scales with this, so lower it if you are
+   memory limited and raise it (or pass ``None`` to build every column at once) to
+   save a small amount of setup time. Does not affect the result.
+
 Cycle and smoothing
 -------------------
 

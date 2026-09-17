@@ -11,7 +11,7 @@ from jaxtyping import Array, ArrayLike, Float
 from .collisions import RosenbluthPotentials
 from .field import Field
 from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from .linalg import InverseLinearOperator
+from .linalg import InverseLinearOperator, dense_from_mv
 from .multigrid import (
     MultigridOperator,
     get_dke_jacobi2_smoothers,
@@ -270,6 +270,7 @@ class DKEPreconditioner(MultigridOperator):
         operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
         smoother_weights = options.pop("smoother_weights", operator_weights)
         coulomb_log = options.pop("coulomb_log", None)
+        as_matrix_chunk = options.pop("as_matrix_chunk", 512)
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
 
@@ -340,7 +341,16 @@ class DKEPreconditioner(MultigridOperator):
                 coulomb_log=coulomb_log,
                 **options,
             )
-        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        # The direct solve on the coarsest grid needs the operator as a dense matrix.
+        # Building it a chunk of columns at a time keeps peak memory near the size of
+        # the matrix itself, rather than that times the number of intermediates in a
+        # matrix vector product, at the cost of a little speed.
+        coarse_matrix = dense_from_mv(
+            operators[0].mv, operators[0].in_size(), as_matrix_chunk
+        )
+        coarse_opinv = InverseLinearOperator(
+            lx.MatrixLinearOperator(coarse_matrix), lx.LU(), throw=False
+        )
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,

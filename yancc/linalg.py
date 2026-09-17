@@ -15,6 +15,30 @@ def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
     return jnp.where(a, b, c)
 
 
+def dense_from_mv(mv, n, chunk=None):
+    """Materialize a linear operator by applying it to the columns of the identity.
+
+    Parameters
+    ----------
+    mv : callable
+        Matrix vector product of the operator.
+    n : int
+        Size of the operator.
+    chunk : int, optional
+        Number of columns to map over at a time. Default maps over all columns at
+        once.
+    """
+    # Mapping over all n columns at once makes every intermediate array inside the
+    # matvec n times larger, so peak memory is set by the working set of the matvec
+    # rather than by the n x n result, which for operators with many intermediates
+    # is an order of magnitude more. Mapping over chunks of columns bounds the
+    # intermediates at chunk x n and gives the same matrix.
+    x = jnp.eye(n)
+    if chunk is None or chunk >= n:
+        return jax.vmap(mv)(x).T
+    return jax.lax.map(mv, x, batch_size=chunk).T
+
+
 def _banded_row_scale(p, q, A, periodic):
     """Row-equilibration factors for a matrix in banded storage.
 
