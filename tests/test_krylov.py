@@ -459,6 +459,19 @@ def test_gcrotmk_warm_start(flexible):
     np.testing.assert_allclose(C1, C2)
     np.testing.assert_allclose(U1, U2)
 
+    # Round 5: a solve that restarts fewer than k times returns zero columns in U.
+    # Passing that back, with C computed from it, must behave exactly like passing
+    # only the vectors it holds.
+    Upad = np.zeros_like(U2)
+    Upad[:, 0] = U2[:, 0]
+    xa, *_ = gcrotmk(
+        A, b, rtol=tol, maxiter=2, m=m, k=k, U=U2[:, 0], refine=False, flexible=flexible
+    )
+    xb, *_ = gcrotmk(
+        A, b, rtol=tol, maxiter=2, m=m, k=k, U=Upad, refine=False, flexible=flexible
+    )
+    np.testing.assert_allclose(xa, xb)
+
 
 @pytest.mark.parametrize("flexible", [True, False])
 def test_gcrotmk_preconditioner(flexible):
@@ -576,6 +589,31 @@ def test_lgmres_with_outer_v(flexible):
     np.testing.assert_allclose(A1, A2)
 
 
+def test_lgmres_reuse_outer_v():
+    """Augmentation vectors from one solve can be reused on another system.
+
+    A solve returns as many augmentation vectors as were asked for, but only the ones
+    it actually built are nonzero, so the empty ones must be left out of the basis.
+    """
+    n = 20
+    rng = np.random.default_rng(0)
+    A_mat = jnp.array(rng.random((n, n)) + n * np.eye(n))
+    A = lx.MatrixLinearOperator(A_mat)
+    m, k = 7, 5
+
+    _, _, _, _, _, V, AV = lgmres(
+        A, jnp.array(rng.random(n)), rtol=1e-12, maxiter=20, m=m, k=k
+    )
+    assert 0 < np.count_nonzero(np.linalg.norm(np.asarray(V), axis=0)) < k
+
+    b = jnp.array(rng.random(n))
+    x, _, _, _, success, *_ = lgmres(
+        A, b, rtol=1e-12, maxiter=20, m=m, k=k, outer_v=V, outer_Av=AV
+    )
+    assert success
+    np.testing.assert_allclose(x, jnp.linalg.solve(A_mat, b), rtol=1e-8)
+
+
 @pytest.mark.parametrize("flexible", [True, False])
 def test_lgmres_preconditioner(flexible):
     """LGMRES with a left preconditioner matches scipy."""
@@ -647,6 +685,42 @@ def test_left_right_preconditioner(solver, flexible):
     assert beta1 / np.linalg.norm(b) < tol
     assert beta2 / np.linalg.norm(b) < tol
     np.testing.assert_allclose(x1, x2, rtol=tol, atol=tol)
+
+
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_reverse_mode_with_recycled_vectors(solver):
+    """Derivatives of a warm started solve with recycled vectors are correct.
+
+    The recycled vectors are paired with their images under the forward operator, so
+    the transposed solve taken by reverse mode cannot reuse them.
+    """
+    n = 20
+    rng = np.random.default_rng(0)
+    A0 = jnp.array(rng.random((n, n)) + n * np.eye(n))
+    E = jnp.array(rng.random((n, n)))
+    b = jnp.array(rng.random(n))
+    w = jnp.array(rng.random(n))
+    x0 = jnp.array(rng.random(n))
+    V = jnp.array(rng.random((n, 3)))
+    AV = A0 @ V
+    m, k = 7, 5
+
+    # both members of the pair are supplied, so neither solve recomputes the images
+    def f(t):
+        A = lx.MatrixLinearOperator(A0 + t * E)
+        if solver is gcrotmk:
+            x = gcrotmk(A, b, x0=x0, rtol=1e-12, maxiter=20, m=m, k=k, U=V, C=AV)[0]
+        else:
+            x = lgmres(
+                A, b, x0=x0, rtol=1e-12, maxiter=20, m=m, k=k, outer_v=V, outer_Av=AV
+            )[0]
+        return jnp.dot(w, x)
+
+    # d/dt (w . (A0 + t E)^-1 b) at t = 0
+    exact = -w @ jnp.linalg.solve(A0, E @ jnp.linalg.solve(A0, b))
+    t = jnp.array(0.0)
+    np.testing.assert_allclose(jax.jacfwd(f)(t), exact, rtol=1e-6)
+    np.testing.assert_allclose(jax.jacrev(f)(t), exact, rtol=1e-6)
 
 
 @pytest.mark.parametrize("solver", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])

@@ -783,6 +783,11 @@ def gcrotmk(
         return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     def _transpose_solve(At, b):
+        # The recycled pair must satisfy C = A U for the operator being solved, which
+        # the projection and the re-orthogonalization of U both rely on. The pair built
+        # for A doesn't satisfy it for A^T (nor does the pair with C and U exchanged,
+        # which would need A^T A U = U), so the transposed system is solved without
+        # recycling rather than with vectors that would corrupt its residuals.
         xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
             At,
             b,
@@ -794,8 +799,8 @@ def gcrotmk(
             maxiter,
             m,
             k,
-            C,
-            U,
+            None,
+            None,
             verbose,
             print_every,
             print_every_inner,
@@ -850,7 +855,12 @@ def _gcrot_init_UC(
         U = tree_map(
             lambda x: jsp.linalg.solve_triangular(R.T, x[:, P].T, lower=True).T, U
         )
+        # Columns of Q beyond the rank of C are orthonormal but not the image of
+        # anything in U, so they are dropped from both. Leaving them in C would let the
+        # projection onto C remove parts of the residual that x never accounts for, so
+        # the residual would no longer be b - A x and could even look converged.
         U = tree_map(lambda x: jnp.where(mask, x, 0), U)
+        C = tree_map(lambda x: jnp.where(mask, x, 0), C)
         # pad to full size
         U = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), U)
         C = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), C)
@@ -1021,8 +1031,8 @@ def _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv):
     if outer_v is None:
         assert outer_Av is None
         lv = 0
-        outer_v = tree_map(lambda x: jnp.zeros((x.size, k)), x)
-        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k)), x)
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
     else:  # outer_v provided
         outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
         lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
@@ -1032,7 +1042,11 @@ def _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv):
         # pad to full size
         outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
         outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
-    # sort to move nonzero elements to the front
+    # An augmentation vector is used as a basis vector together with its image, so a
+    # zero column would put a zero vector in the basis and break the inner iteration.
+    # A solve returns fewer vectors than were asked for whenever the space it built
+    # was smaller, so the columns actually carrying a vector are counted and moved to
+    # the front, and the rest are left out of the count.
     mask = _norm(outer_v, axis=0) > 0
     lv = jnp.sum(mask)
     idx = jnp.argsort(mask, descending=True)
@@ -1214,6 +1228,11 @@ def lgmres(
         return xsol, (j, nmv, beta, success, ov, oAv)
 
     def _transpose_solve(At, b):
+        # The augmentation vectors are used as a basis together with their images
+        # outer_Av = A outer_v, which are substituted for the operator application
+        # rather than recomputed. Those images are wrong for A^T, so the transposed
+        # system is solved without augmentation rather than with a basis whose Arnoldi
+        # relation doesn't hold.
         xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
             At,
             b,
@@ -1225,8 +1244,8 @@ def lgmres(
             maxiter,
             m,
             k,
-            outer_v,
-            outer_Av,
+            None,
+            None,
             verbose,
             print_every,
             print_every_inner,
@@ -1280,20 +1299,7 @@ def _lgmres_solve(
     if verbose:
         _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="LGMRES  ")
 
-    if outer_v is None:
-        assert outer_Av is None
-        lv = 0
-        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
-        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
-    else:  # outer_v provided
-        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
-        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
-        if outer_Av is None:
-            outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
-            nmv += lv
-        # pad to full size
-        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
-        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+    outer_v, outer_Av, lv, nmv = _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv)
 
     def lgmres_cond(carry):
         j_outer, nmv, x, r, beta, _, _, _, _ = carry
