@@ -453,7 +453,7 @@ def deflated_root_scalar(
     num_roots,
     args=(),
     bounds=(-jnp.inf, jnp.inf),
-    ftol=jnp.array(1e-6),
+    ftol=jnp.array(1e-4),
     xatol=jnp.array(0.0),
     xrtol=jnp.array(1e-6),
     maxiter=20,
@@ -606,7 +606,7 @@ def deflated_root_scalar(
     def phase(carry, inputs):
         # One Newton solve of fun deflated by the given roots, skipped if the previous
         # phase failed. Deflating by all-inf roots gives the original function.
-        x, f, aux, k, ok = carry
+        x, f, aux, k, ok, diff = carry
         i, p, roots, lo, hi, budget = inputs
         deflated_fun = _DeflatedFun1D(recorded_fun, roots, length)
 
@@ -632,12 +632,13 @@ def deflated_root_scalar(
                 sol.state.aux,
                 k + sol.stats["num_steps"].astype(k.dtype),
                 sol.result == RESULTS.successful,
+                sol.state.diff,
             )
 
         def skip(x, aux):
-            return x, f, aux, k, jnp.array(False)
+            return x, f, aux, k, jnp.array(False), diff
 
-        x, f, aux, k, ok = jax.lax.cond(ok, solve, skip, x, aux)
+        x, f, aux, k, ok, diff = jax.lax.cond(ok, solve, skip, x, aux)
         if verbose > 1:
             jax.debug.print(
                 "Search {i:3d}, phase {p:1d}, x={x: .4e}, f={f: .4e}, steps={k:3d}",
@@ -648,7 +649,7 @@ def deflated_root_scalar(
                 k=k,
                 ordered=True,
             )
-        return (x, f, aux, k, ok), None
+        return (x, f, aux, k, ok, diff), None
 
     def condfun(state):
         i, nfound, xs, fs, ks, auxs, history, probed, tried, failed, bracket = state[
@@ -753,8 +754,9 @@ def deflated_root_scalar(
             (search_args, history),
             jnp.zeros((), dtype=ks.dtype),
             jnp.array(True),
+            jnp.asarray(jnp.inf, dtype=dtype),
         )
-        (x, f, (aux, history), k, ok), _ = jax.lax.scan(
+        (x, f, (aux, history), k, ok, diff), _ = jax.lax.scan(
             phase,
             carry,
             (
@@ -769,8 +771,15 @@ def deflated_root_scalar(
 
         # if we converged to a previously found root we consider that a failure.
         # Usually this means deflation found a spurious root, and the refinement
-        # brought us to one we've already seen.
-        status = ok & ~jnp.isclose(cast(jax.Array, x), xs, rtol=xrtol, atol=xatol).any()
+        # brought us to one we've already seen. Convergence can stop on the function
+        # value alone, before the step shrinks to xrtol, so two searches landing on
+        # the same root can differ in x by as much as ftol divided by the local
+        # slope, which the last step and function value of the refinement estimate.
+        slope = jnp.abs(f) / jnp.maximum(jnp.abs(diff), jnp.finfo(dtype).tiny)
+        dedup_atol = xatol + 3 * ftol / jnp.maximum(slope, jnp.finfo(dtype).tiny)
+        status = (
+            ok & ~jnp.isclose(cast(jax.Array, x), xs, rtol=xrtol, atol=dedup_atol).any()
+        )
 
         xs = jnp.where(status, xs.at[nfound].set(x), xs)
         fs = jnp.where(status, fs.at[nfound].set(f), fs)
