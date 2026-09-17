@@ -115,6 +115,42 @@ def _apply_givens_rotations(H_row, givens, k):
 ####
 
 
+def _weighted_problem(matvec, b, lpsolve, rpsolve, sqrtw):
+    """Rewrite a linear problem so the plain 2-norm is the sqrt(w)-weighted norm.
+
+    Solving ``D A x = D b`` with ``D = diag(sqrtw)`` leaves the solution space
+    unchanged, so only residual-space quantities are scaled: the operator output,
+    the rhs, and the input of the preconditioners (the right preconditioner maps
+    residuals to solutions, so it sees ``D^-1`` first).
+
+    Returns (matvec, b, lpsolve, rpsolve, scale, unscale) where scale/unscale act
+    on residual-space pytrees with a trailing (column) dimension.
+    """
+    if sqrtw is None:
+        return matvec, b, lpsolve, rpsolve, _identity, _identity
+
+    def mul(v):
+        return tree_map(lambda s, x: s * x, sqrtw, v)
+
+    def div(v):
+        return tree_map(lambda s, x: x / s, sqrtw, v)
+
+    def scale_cols(V):
+        return tree_map(lambda s, X: s.reshape((-1, 1)) * X, sqrtw, V)
+
+    def unscale_cols(V):
+        return tree_map(lambda s, X: X / s.reshape((-1, 1)), sqrtw, V)
+
+    return (
+        lambda v: mul(matvec(v)),
+        mul(b),
+        lambda r: mul(lpsolve(div(r))),
+        lambda r: rpsolve(div(r)),
+        scale_cols,
+        unscale_cols,
+    )
+
+
 def _roll_prepend(X: jax.Array, y: jax.Array) -> jax.Array:
     return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
 
@@ -650,6 +686,7 @@ def gcrotmk(
     flexible: bool = True,
     stabilize_every: ArrayLike = 10,
     throw: bool = False,
+    weights: PyTree[ArrayLike] | None = None,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -715,6 +752,13 @@ def gcrotmk(
         untouched. Default: 10; set to 0 to disable.
     throw : bool, optional
         If True, raise an error if the solver does not converge. Default: False.
+    weights : pytree of jax.Array, optional
+        Positive weights ``w`` with the same structure as ``b``. If given, all
+        residual norms (both the minimization and the convergence test) use
+        ``sqrt(sum(w * r**2))`` instead of the 2-norm, and ``rtol``/``atol`` and the
+        returned residual refer to this norm. Transposed solves (e.g. for
+        derivatives) use the dual weights ``1/w``. ``C`` is given and returned in
+        the unweighted residual space. Default: unweighted.
 
     Returns
     -------
@@ -757,19 +801,28 @@ def gcrotmk(
     if k is None:
         k = m
 
-    def _solve(A, b):
+    if weights is None:
+        sqrtw = sqrtw_t = None
+    else:
+        sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
+        sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
+
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, C, U, sqrtw, msg):
+        matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
+            matvec, b, lpsolve, rpsolve, sqrtw
+        )
         xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
-            A,
+            matvec,
             b,
             x,
-            ML.mv,
-            MR.mv,
+            lpsolve,
+            rpsolve,
             rtol,
             atol,
             maxiter,
             m,
             k,
-            C,
+            None if C is None else scale(C),
             U,
             verbose,
             print_every,
@@ -779,8 +832,13 @@ def gcrotmk(
             stabilize_every,
         )
         if throw:
-            xsol = eqx.error_if(xsol, ~success, "GCROT forward solve did not converge")
-        return xsol, (j, nmv, beta, success, Cnew, Unew)
+            xsol = eqx.error_if(xsol, ~success, msg)
+        return xsol, (j, nmv, beta, success, unscale(Cnew), Unew)
+
+    def _solve(A, b):
+        return _solve_weighted(
+            A, b, ML.mv, MR.mv, C, U, sqrtw, "GCROT forward solve did not converge"
+        )
 
     def _transpose_solve(At, b):
         # The recycled pair must satisfy C = A U for the operator being solved, which
@@ -788,29 +846,16 @@ def gcrotmk(
         # for A doesn't satisfy it for A^T (nor does the pair with C and U exchanged,
         # which would need A^T A U = U), so the transposed system is solved without
         # recycling rather than with vectors that would corrupt its residuals.
-        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
+        return _solve_weighted(
             At,
             b,
-            x,
             ML.transpose().mv,
             MR.transpose().mv,
-            rtol,
-            atol,
-            maxiter,
-            m,
-            k,
             None,
             None,
-            verbose,
-            print_every,
-            print_every_inner,
-            refine,
-            flexible,
-            stabilize_every,
+            sqrtw_t,
+            "GCROT tangent solve did not converge",
         )
-        if throw:
-            xsol = eqx.error_if(xsol, ~success, "GCROT tangent solve did not converge")
-        return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
@@ -1077,6 +1122,7 @@ def lgmres(
     flexible: bool = True,
     stabilize_every: ArrayLike = 10,
     throw: bool = False,
+    weights: PyTree[ArrayLike] | None = None,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -1149,6 +1195,13 @@ def lgmres(
         untouched. Default: 10; set to 0 to disable.
     throw : bool, optional
         If True, raise an error if the solver does not converge. Default: False.
+    weights : pytree of jax.Array, optional
+        Positive weights ``w`` with the same structure as ``b``. If given, all
+        residual norms (both the minimization and the convergence test) use
+        ``sqrt(sum(w * r**2))`` instead of the 2-norm, and ``rtol``/``atol`` and the
+        returned residual refer to this norm. Transposed solves (e.g. for
+        derivatives) use the dual weights ``1/w``. ``outer_Av`` is given and
+        returned in the unweighted residual space. Default: unweighted.
 
     Returns
     -------
@@ -1202,20 +1255,29 @@ def lgmres(
     else:
         x = x0
 
-    def _solve(A, b):
+    if weights is None:
+        sqrtw = sqrtw_t = None
+    else:
+        sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
+        sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
+
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, outer_v, outer_Av, sqrtw, msg):
+        matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
+            matvec, b, lpsolve, rpsolve, sqrtw
+        )
         xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
-            A,
+            matvec,
             b,
             x,
-            ML.mv,
-            MR.mv,
+            lpsolve,
+            rpsolve,
             rtol,
             atol,
             maxiter,
             m,
             k,
             outer_v,
-            outer_Av,
+            None if outer_Av is None else scale(outer_Av),
             verbose,
             print_every,
             print_every_inner,
@@ -1224,8 +1286,20 @@ def lgmres(
             stabilize_every,
         )
         if throw:
-            xsol = eqx.error_if(xsol, ~success, "LGMRES forward solve did not converge")
-        return xsol, (j, nmv, beta, success, ov, oAv)
+            xsol = eqx.error_if(xsol, ~success, msg)
+        return xsol, (j, nmv, beta, success, ov, unscale(oAv))
+
+    def _solve(A, b):
+        return _solve_weighted(
+            A,
+            b,
+            ML.mv,
+            MR.mv,
+            outer_v,
+            outer_Av,
+            sqrtw,
+            "LGMRES forward solve did not converge",
+        )
 
     def _transpose_solve(At, b):
         # The augmentation vectors are used as a basis together with their images
@@ -1233,29 +1307,16 @@ def lgmres(
         # rather than recomputed. Those images are wrong for A^T, so the transposed
         # system is solved without augmentation rather than with a basis whose Arnoldi
         # relation doesn't hold.
-        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
+        return _solve_weighted(
             At,
             b,
-            x,
             ML.transpose().mv,
             MR.transpose().mv,
-            rtol,
-            atol,
-            maxiter,
-            m,
-            k,
             None,
             None,
-            verbose,
-            print_every,
-            print_every_inner,
-            refine,
-            flexible,
-            stabilize_every,
+            sqrtw_t,
+            "LGMRES tangent solve did not converge",
         )
-        if throw:
-            xsol = eqx.error_if(xsol, ~success, "LGMRES tangent solve did not converge")
-        return xsol, (j, nmv, beta, success, ov, oAv)
 
     x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
