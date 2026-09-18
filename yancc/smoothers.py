@@ -17,8 +17,6 @@ from .field import Field
 from .finite_diff import fd2, fd_coeffs
 from .linalg import (
     TransposedLinearOperator,
-    cond_1norm_banded,
-    cond_1norm_cr,
     cr_banded_factor,
     cr_banded_periodic_factor,
     cr_banded_periodic_solve,
@@ -28,7 +26,6 @@ from .linalg import (
     lu_factor_banded_periodic,
     lu_solve_banded,
     lu_solve_banded_periodic,
-    matrix_1norm,
 )
 from .species import LocalMaxwellian, _nustar_species
 from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
@@ -376,29 +373,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
-# We've found empirically that for certain cases, some blocks of the pitch line smoother
-# amplify error significantly rather than smoothing it, causing the multigrid
-# preconditioner to return garbage and stalling krylov. The problematic cases seem to
-# always be 2 species, thermal collisionality ~1e-1. The problematic blocks seem to
-# correspond to the slowest electrons, and the modes that get amplified tend to live
-# near the turning points (b*gradB ~= 0), but gating purely based on electron speed
-# or turning points doesn't seem to catch them, since its a very specific resonance.
-# The best filter I've come up with is just based on the condition number of the
-# smoother blocks. The condition number naturally scales with na^2 from the finite
-# difference matrices, so we normalize by that. Healthy blocks usually have
-# cond/na^2 ~ 1-10, asymptoting to ~40 at high collisionality. The blocks that amplify
-# error are usually around cond/na^2 ~ 400, so we set a threshold at 150. Anything
-# above this we switch from block jacobi to point jacobi which seems to avoid the
-# blowup and stalling. Zeroing the weight for the flagged blocks also fixes it but
-# point jacobi seems to do marginally better in some cases.
-_PITCH_COND_GATE = 150.0
-
-
-def _pitch_cond_gate(cond, na):
-    """Flag pitch blocks with 1-norm cond above ``_PITCH_COND_GATE * na**2``."""
-    return cond > _PITCH_COND_GATE * na**2
-
-
 class DKEJacobiSmoother(lx.AbstractLinearOperator):
     """Block diagonal smoother for DKE.
 
@@ -541,9 +515,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         ).block_diagonal(bd_fmt, self.bandwidth)
 
         # The pitch line smoother (convolved axis "a") is the only case with a
-        # non-periodic band and the only one prone to blowing up, so it gets the
-        # standard banded factor/solve plus a condition-number gate replacing ill-
-        # conditioned blocks with point Jacobi (drop off-diagonals).
+        # non-periodic band, so it uses the standard (non-periodic) banded/CR
+        # factor/solve rather than the periodic variant used for theta/zeta.
         pitch = self.axorder[-1] == "a"
         pivot_tol = jnp.finfo(mats.dtype).eps ** (1 / 2)
         if self.smooth_solver == "banded" and not pitch:
@@ -557,7 +530,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 unroll=4,
             )
         elif self.smooth_solver == "banded":
-            lu, s = lu_factor_banded(
+            self.mats = lu_factor_banded(
                 self.bandwidth,
                 self.bandwidth,
                 mats,
@@ -565,42 +538,10 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 pivot_tol=pivot_tol,
                 unroll=4,
             )
-            cond = cond_1norm_banded(self.bandwidth, self.bandwidth, mats, (lu, s))
-            flag = _pitch_cond_gate(cond, self.pitchgrid.nalpha)
-            # point Jacobi: LU of diag(A) is L = I (zero bands), U = diag(A); s = 1
-            lu_pj = (
-                jnp.zeros_like(lu)
-                .at[:, self.bandwidth, :]
-                .set(mats[:, self.bandwidth, :])
-            )
-            lu = jnp.where(flag[:, None, None], lu_pj, lu)
-            s = jnp.where(flag[:, None], jnp.ones_like(s), s)
-            self.mats = (lu, s)
         elif self.smooth_solver == "cr" and not pitch:
             self.mats = cr_banded_periodic_factor(mats, equilibrate=True)
         elif self.smooth_solver == "cr":
-            # Unlike banded LU (point Jacobi = zero the off-diagonal bands) or the dense
-            # inverse (point Jacobi = diag(1/diag)), the CR factor is a multi-level
-            # reduction tree with no local point-Jacobi form, so we can't splice the
-            # gate into it without a second factorization. Instead we keep the single
-            # full-matrix factor plus the per-block flag and diagonal, and apply point
-            # Jacobi (x/diag) for flagged blocks directly in `mv`.
-            factors = cr_banded_factor(mats, equilibrate=True)
-            cond = cond_1norm_cr(mats, factors)
-            flag = _pitch_cond_gate(cond, self.pitchgrid.nalpha)
-            diag = mats[:, self.bandwidth, :]
-            self.mats = (factors, flag, diag)
-        elif pitch:
-            # dense pitch: same gate, but blocks are stored as inverses.
-            anorm = matrix_1norm(mats)
-            inv = jnp.linalg.inv(mats)
-            cond = anorm * matrix_1norm(inv)
-            na = mats.shape[-1]
-            flag = _pitch_cond_gate(cond, na)
-            pj = (1.0 / jnp.diagonal(mats, axis1=-2, axis2=-1))[:, None, :] * jnp.eye(
-                na, dtype=mats.dtype
-            )
-            self.mats = jnp.where(flag[:, None, None], pj, inv)
+            self.mats = cr_banded_factor(mats, equilibrate=True)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -647,9 +588,7 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
                 x = x.reshape(-1, M)
                 # pitch ("...a") is non-periodic; theta/zeta are periodic line smoothers
                 if self.axorder[-1] == "a":
-                    # gate flagged (ill-conditioned) blocks to point Jacobi (x/diag)
-                    factors, flag, diag = self.mats
-                    b = jnp.where(flag[:, None], x / diag, cr_banded_solve(factors, x))
+                    b = cr_banded_solve(self.mats, x)
                 else:
                     b = cr_banded_periodic_solve(self.mats, x)
             else:
