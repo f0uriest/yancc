@@ -862,7 +862,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         Magnetic field data.
     pitchgrid : UniformPitchAngleGrid
         Pitch angle grid data.
-    speedgrid : AbstractSpeedGrid
+    speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
     species : list[LocalMaxwellian]
         Species being considered
@@ -874,7 +874,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
     axorder: str = eqx.field(static=True)
@@ -889,7 +889,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         background: list[LocalMaxwellian] | None = None,
         axorder: str = "sxatz",
@@ -907,6 +907,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         x = speedgrid.x
+        xrec = speedgrid.xrec
 
         def terms_ab(spa, spb):
             vta = spa.v_thermal
@@ -919,24 +920,60 @@ class EnergyScattering(lx.AbstractLinearOperator):
             term0 = 4 * jnp.pi * gamma * ma / mb * spb(v)
             term1 = nuD * x - nupar * (x * vta / vtb) ** 2 * (1 - ma / mb) * x
             term2 = nupar * x**2 / 2
-            return term0, term1, term2
+            # flux form: C f = x^-2 d/dx [a (f' + 2 tau x f)], a = nupar x^4 / 2,
+            # tau = T_a / T_b, which expands to term2 f'' + term1 f' + term0 f.
+            a = nupar * x**4 / 2
+            tau = spa.temperature / spb.temperature
+            diffusion = a
+            relaxation = 2 * (tau - 1) * a * x
+            return term0, term1, term2, diffusion, relaxation
 
-        term0, term1, term2 = _species_pairs(terms_ab, species, species + background)
+        term0, term1, term2, diffusion, relaxation = _species_pairs(
+            terms_ab, species, species + background
+        )
         self.coeff0 = term0.sum(axis=1)
         self.coeff1 = term1.sum(axis=1)
         self.coeff2 = term2.sum(axis=1)
+        diffusion = diffusion.sum(axis=1)
+        relaxation = relaxation.sum(axis=1)
 
         # The speed operator acts only on the x axis and is independent of the
-        # vector, so collapse coeff2*D2x + coeff1*Dx + coeff0*I into a single
-        # (ns, ny, nx) operator applied with one einsum per mv.
-        Dx = speedgrid.Dx_pseudospectral
-        D2x = speedgrid.D2x_pseudospectral
-        eye = jnp.eye(speedgrid.nx)
-        self._M = (
-            self.coeff2[:, :, None] * D2x[None, :, :]
-            + self.coeff1[:, :, None] * Dx[None, :, :]
-            + self.coeff0[:, :, None] * eye[None, :, :]
+        # vector, so it is collapsed into a single (ns, ny, nx) matrix applied with
+        # one einsum per mv.
+        #
+        # It is discretized in weak (Galerkin) form. The grid represents
+        # f = exp(-x^2) p(x) with p expanded in the orthogonal polynomials P_n. Testing
+        # the flux form against P_m and integrating by parts gives
+        #   (P_m, x^2 P_n) d = -[(P_m', a P_n') + (P_m', 2(tau-1) a x P_n)] c
+        # with (u, v) the exp(-x^2)-weighted inner product evaluated by the grid's
+        # quadrature. The boundary term vanishes since a ~ x^4 at x=0. For tau=1 the
+        # stiffness matrix is symmetric positive semidefinite and the mass matrix is
+        # positive definite, so the discrete operator is dissipative for any set of
+        # colliding species.
+        #
+        # Collocating term2 f'' + term1 f' + term0 f at the nodes instead has no such
+        # guarantee: the lowest node has no neighbour below it, so its one-sided second
+        # derivative is anti-dissipative and relies on a positive term1 there to cancel
+        # it. A background whose thermal speed puts that node inside its collisional
+        # transition makes term1 negative, giving a spurious growing mode that the
+        # multigrid smoothers cannot handle.
+        #
+        # The price is that the weak form returns the projection of C_E f onto the
+        # polynomial space rather than its nodal values. The collision coefficients are
+        # not polynomial, so the cancellation of C_E against the collocated pitch-angle
+        # and field-particle terms on the momentum and energy invariants holds only to
+        # the speed resolution, converging spectrally with nx. The density invariant
+        # has zero flux pointwise and is annihilated exactly.
+        Vp = orthax.orthvander(x, speedgrid.nx - 1, xrec)
+        Dmod = jax.jacfwd(lambda c: jnp.append(orthax.orthder(c, xrec), 0.0))(x)
+        dVp = Vp @ Dmod
+        gq = speedgrid.wx * xrec.weight(x)
+        mass = jnp.einsum("im,i,in->mn", Vp, gq * x**2, Vp)
+        stiffness = jnp.einsum("im,si,in->smn", dVp, gq * diffusion, dVp) + jnp.einsum(
+            "im,si,in->smn", dVp, gq * relaxation, Vp
         )
+        modal = -jnp.linalg.solve(mass[None], stiffness)
+        self._M = speedgrid.xvander @ modal @ speedgrid.xvander_inv
         idxx = speedgrid.gauge_idx
         self._scale = (
             jnp.abs(self.coeff2[:, idxx] / jnp.mean(speedgrid.wx) ** 2)
@@ -960,7 +997,6 @@ class EnergyScattering(lx.AbstractLinearOperator):
         )
         f = f.reshape(shape)
         f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
-        # single fused speed operator: coeff2*D2x + coeff1*Dx + coeff0*I
         out = jnp.einsum("syx,sxatz->syatz", self._M, f)
         idxa = self.pitchgrid.nalpha // 2
         idxx = self.speedgrid.gauge_idx
@@ -986,14 +1022,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             self.axorder,
         )
 
-        f = jnp.ones(self.speedgrid.nx)[None, :, None, None, None]
-        df = jnp.diag(self.speedgrid.Dx_pseudospectral)[None, :, None, None, None]
-        ddf = jnp.diag(self.speedgrid.D2x_pseudospectral)[None, :, None, None, None]
-        out = (
-            self.coeff2[:, :, None, None, None] * ddf
-            + self.coeff1[:, :, None, None, None] * df
-            + self.coeff0[:, :, None, None, None] * f
-        )
+        out = jnp.diagonal(self._M, axis1=1, axis2=2)[:, :, None, None, None]
         out = jnp.broadcast_to(
             out,
             out.shape[:2]
@@ -1050,14 +1079,7 @@ class EnergyScattering(lx.AbstractLinearOperator):
             self.axorder,
         )
 
-        f = jnp.eye(self.speedgrid.nx)[None, :, None, None, None, :]
-        df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
-        ddf = self.speedgrid.D2x_pseudospectral[None, :, None, None, None, :]
-        out = (
-            self.coeff2[:, :, None, None, None, None] * ddf
-            + self.coeff1[:, :, None, None, None, None] * df
-            + self.coeff0[:, :, None, None, None, None] * f
-        )
+        out = self._M[:, :, None, None, None, :]
         out = jnp.broadcast_to(
             out,
             out.shape[:2]
