@@ -204,6 +204,36 @@ def _nearest(x: float, minval: int) -> int:
     return max(int(round(x)), minval)
 
 
+def _water_fill_coarsen(sizes, floors, target_ratio):
+    """Shrink ``sizes`` so their product drops by ``target_ratio``, spread as
+    evenly as possible in log-space, without taking any axis below its floor.
+
+    An axis already close to its floor can't absorb its share of a uniform
+    per-axis factor; naively applying that factor anyway (and letting it clip)
+    silently under-coarsens, since the clipped axis then does not contribute
+    its assumed share of the reduction. Instead, an axis that would fall below
+    its floor at the current shared factor is clamped there, and the ratio it
+    failed to contribute is redistributed over the remaining axes.
+    """
+    sizes = list(sizes)
+    out: list[int] = [0] * len(sizes)
+    remaining = target_ratio
+    # Axes closest to their floor (smallest sizes[i]/floors[i]) clip first.
+    order = sorted(range(len(sizes)), key=lambda i: sizes[i] / floors[i])
+    for idx, i in enumerate(order):
+        s = remaining ** (1 / (len(sizes) - idx))
+        if sizes[i] / s < floors[i]:
+            out[i] = floors[i]
+            remaining = max(remaining / (sizes[i] / floors[i]), 1.0)
+        else:
+            free = order[idx:]
+            s = remaining ** (1 / len(free))
+            for j in free:
+                out[j] = _nearest(sizes[j] / s, floors[j])
+            return out
+    return out
+
+
 def get_grid_resolutions(
     ns: int,
     nx: int,
@@ -286,18 +316,17 @@ def get_grid_resolutions(
         factor = R ** (1 / (dim * nsteps))
 
     # Build fine -> coarse by uniform geometric scaling of every axis (which
-    # preserves the finest grid's aspect ratio) with a per-axis floor. Skip a
-    # level if integer rounding makes it identical to the previous one.
+    # preserves the finest grid's aspect ratio), water-filled across na, nt, nz
+    # so a floor-clipped axis (eg. nt already near min_nt) doesn't silently
+    # under-coarsen the level. The remaining axes take up its share instead,
+    # keeping each level's total size close to its target. Skip a level if
+    # integer rounding makes it identical to the previous one.
     resolutions = [finest]
     for i in range(1, nsteps + 1):
-        s = factor**i
-        res = (
-            ns,
-            nx,
-            _nearest(na / s, min_na),
-            _nearest(nt / s, min_nt),
-            _nearest(nz / s, min_nz),
+        na_i, nt_i, nz_i = _water_fill_coarsen(
+            (na, nt, nz), (min_na, min_nt, min_nz), R ** (i / nsteps)
         )
+        res = (ns, nx, na_i, nt_i, nz_i)
         if res != resolutions[-1]:
             resolutions.append(res)
     return resolutions[::-1]
