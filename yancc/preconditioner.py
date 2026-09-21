@@ -189,6 +189,71 @@ def _(operator):
     return False
 
 
+def _dke_resolutions(field, pitchgrid, speedgrid, species, p1, p2, options):
+    """Resolutions of the multigrid levels of a DKEPreconditioner, coarse to fine.
+
+    Pops the options that set them from ``options``.
+    """
+    resolutions = options.pop("resolutions", None)
+    coarsening_factor = options.pop("coarsening_factor", None)
+    max_grids = options.pop("max_grids", None)
+    coarse_N = options.pop("coarse_N", 8000)
+    # The coarsest grid must still fit the FD stencils: every axis needs
+    # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+    # hold the stencil should error (via the operator asserts), so we floor
+    # theta/a at min_n rather than capping at the given size. The exception
+    # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+    # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+    min_n = max(fd_coeffs[1][p1].size // 2, fd_coeffs[2][p2].size // 2) + 1
+    min_nt = options.pop("min_nt", min_n)
+    min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+    min_na = options.pop("min_na", min_n)
+    if resolutions is None:
+        resolutions = get_grid_resolutions(
+            ns=len(species),
+            nx=speedgrid.nx,
+            na=pitchgrid.nalpha,
+            nt=field.ntheta,
+            nz=field.nzeta,
+            coarse_N=coarse_N,
+            min_na=min_na,
+            min_nt=min_nt,
+            min_nz=min_nz,
+            max_grids=max_grids,
+            coarsening_factor=coarsening_factor,
+        )
+    return resolutions
+
+
+def _print_grid_levels(resolutions) -> None:
+    """Print one ``Grid i: ...`` line per multigrid level, from (ns, nx, na, nt, nz)."""
+    for i, (ns, nx, na, nt, nz) in enumerate(resolutions):
+        jax.debug.print(
+            f"Grid {i}: nx={nx:4d}, "
+            f"nα={na:4d}, "
+            f"nθ={nt:4d}, "
+            f"nζ={nz:4d}, "
+            f"N={ns * nx * na * nt * nz:,d}",
+            ordered=True,
+        )
+
+
+def _print_dke_resolution_summary(
+    field, pitchgrid, speedgrid, species, multigrid_options
+) -> None:
+    """Print the multigrid levels a DKEPreconditioner would have, without building it.
+
+    The levels only depend on the grids and on the multigrid options that set the
+    coarsening, so they can be shown before, or without, building the preconditioner.
+    """
+    options = dict(multigrid_options)
+    p1 = options.pop("p1", DEFAULT_P1M)
+    p2 = options.pop("p2", DEFAULT_P2M)
+    _print_grid_levels(
+        _dke_resolutions(field, pitchgrid, speedgrid, species, p1, p2, options)
+    )
+
+
 class DKEPreconditioner(MultigridOperator):
     """Preconditioner for the DKE.
 
@@ -241,22 +306,9 @@ class DKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", DEFAULT_P1M)
         self.p2 = options.pop("p2", DEFAULT_P2M)
         gauge = options.pop("gauge", True)
-        resolutions = options.pop("resolutions", None)
-        coarsening_factor = options.pop("coarsening_factor", None)
-        max_grids = options.pop("max_grids", None)
-        coarse_N = options.pop("coarse_N", 8000)
-        # The coarsest grid must still fit the FD stencils: every axis needs
-        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
-        # hold the stencil should error (via the operator asserts), so we floor
-        # theta/a at min_n rather than capping at the given size. The exception
-        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
-        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
-        min_n = (
-            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        resolutions = _dke_resolutions(
+            field, pitchgrid, speedgrid, species, self.p1, self.p2, options
         )
-        min_nt = options.pop("min_nt", min_n)
-        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
-        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
@@ -273,21 +325,6 @@ class DKEPreconditioner(MultigridOperator):
         as_matrix_chunk = options.pop("as_matrix_chunk", 512)
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
-
-        if resolutions is None:
-            resolutions = get_grid_resolutions(
-                ns=len(species),
-                nx=speedgrid.nx,
-                na=pitchgrid.nalpha,
-                nt=field.ntheta,
-                nz=field.nzeta,
-                coarse_N=coarse_N,
-                min_na=min_na,
-                min_nt=min_nt,
-                min_nz=min_nz,
-                max_grids=max_grids,
-                coarsening_factor=coarsening_factor,
-            )
 
         fields, grids = get_fields_grids(
             field=field, pitchgrid=pitchgrid, resolutions=resolutions
@@ -385,21 +422,15 @@ class DKEPreconditioner(MultigridOperator):
         """Print one ``Grid i: ...`` line per multigrid level."""
         ns = len(self.species)
         nx = self.speedgrid.nx
-        for i, op in enumerate(self.operators):
-            # cast is a no-op at runtime; just narrows the declared
-            # AbstractLinearOperator type to DKE for pyright.
-            op = cast(DKE, op)
-            na = op.pitchgrid.nalpha
-            nt = op.field.ntheta
-            nz = op.field.nzeta
-            jax.debug.print(
-                f"Grid {i}: nx={nx:4d}, "
-                f"nα={na:4d}, "
-                f"nθ={nt:4d}, "
-                f"nζ={nz:4d}, "
-                f"N={ns * nx * na * nt * nz:,d}",
-                ordered=True,
-            )
+        # cast is a no-op at runtime; just narrows the declared
+        # AbstractLinearOperator type to DKE for pyright.
+        ops = [cast(DKE, op) for op in self.operators]
+        _print_grid_levels(
+            [
+                (ns, nx, op.pitchgrid.nalpha, op.field.ntheta, op.field.nzeta)
+                for op in ops
+            ]
+        )
 
 
 @lx.is_symmetric.register(DKEPreconditioner)

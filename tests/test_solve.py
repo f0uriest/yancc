@@ -13,7 +13,7 @@ from scipy.constants import elementary_charge, proton_mass
 import yancc
 from yancc.field import Field
 from yancc.preconditioner import DKEMPreconditioner
-from yancc.solve import solve_dke, solve_mdke
+from yancc.solve import solve_dke, solve_dke_ambipolar, solve_mdke
 from yancc.species import JOULE_PER_EV, LocalMaxwellian
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -567,6 +567,96 @@ def test_solve_dke_derivatives(field, pitchgrid, speedgrid):
     np.testing.assert_allclose(Jr, Jf, rtol=1e-10)
     np.testing.assert_allclose(Jr, Jfd.T, rtol=1e-6)
     np.testing.assert_allclose(Jf, Jfd.T, rtol=1e-6)
+
+
+def test_solve_dke_ambipolar(field, pitchgrid, speedgrid, species2):
+    """Deflated ambipolar root search with a reused preconditioner.
+
+    Asks for more roots than exist in the bracket, so it also exercises the
+    not-found branch. Low resolution, not a physics check.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    # bracket around the ion root, in Erho [V], from bounds in E*
+    Escale = float(field.a_minor * species2[0].v_thermal * field.Bmag_fsa)
+    bounds = (-3e-2 * Escale, -1e-2 * Escale)
+    with pytest.raises(RuntimeError, match="lower < upper"):
+        solve_dke_ambipolar(
+            field, pitchgrid, speedgrid, species2, 1, bounds=(bounds[1], bounds[0])
+        )
+    with pytest.raises(RuntimeError, match="finite"):
+        solve_dke_ambipolar(
+            field, pitchgrid, speedgrid, species2, 1, bounds=(bounds[0], np.inf)
+        )
+    # outside the default bounds, E* = +-0.1
+    with pytest.raises(RuntimeError, match="within bounds"):
+        solve_dke_ambipolar(field, pitchgrid, speedgrid, species2, 1, Erho0=Escale)
+    with pytest.raises(ValueError):
+        solve_dke_ambipolar(
+            field, pitchgrid, speedgrid, species2, 1, bounds=bounds, U=jnp.zeros(1)
+        )
+    with pytest.raises(ValueError):
+        solve_dke_ambipolar(
+            field, pitchgrid, speedgrid, species2, 1, bounds=bounds, scale="foo"
+        )
+    with pytest.raises(RuntimeError, match="positive"):
+        solve_dke_ambipolar(
+            field, pitchgrid, speedgrid, species2, 1, bounds=bounds, scale=0.0
+        )
+    with pytest.raises(AssertionError):
+        solve_dke_ambipolar(
+            field, pitchgrid, speedgrid, species2, 1, bounds=bounds, method="bisect"
+        )
+    with pytest.raises(ValueError):
+        solve_dke_ambipolar(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            1,
+            bounds=bounds,
+            root_options={"verbose": 1},
+        )
+
+    Erho, sols, info = solve_dke_ambipolar(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        2,
+        bounds=bounds,
+        reuse_preconditioner=True,
+        verbose=1,
+        root_options={"max_stall": 5},
+    )
+    assert info["success"][0]
+    assert not info["success"][1]
+    assert bounds[0] <= Erho[0] <= bounds[1]
+    assert np.isinf(Erho[1])
+    assert np.all(np.isnan(sols[1].f1))
+
+    qs = np.array([sp.species.charge for sp in species2])
+    currents = qs * sols[0].get("<particle_flux>")
+    # returned solution is the one the reported residual was computed from, and the
+    # automatic scale is the size of the current at the initial guess
+    np.testing.assert_allclose(
+        currents.sum() / info["scale"], info["residual"][0], rtol=1e-8
+    )
+    # the cost of each root excludes the solves before it, which are all in the total
+    assert 0 < info["nmv"].sum() <= info["nmv_total"]
+    assert abs(currents.sum()) < 1e-4 * np.abs(currents).sum()
+
+    # independent, tightly converged solve at the returned root. The radial current is
+    # a small difference of the species currents, so the Krylov tolerance of the search
+    # limits how close to ambipolar the root is to more than ftol
+    sol, _ = solve_dke(
+        field, pitchgrid, speedgrid, species2, Erho[0], rtol=1e-8, maxiter=20
+    )
+    currents = qs * sol.get("<particle_flux>")
+    assert abs(currents.sum()) < 5e-4 * np.abs(currents).sum()
+    np.testing.assert_allclose(
+        sols[0].get("<particle_flux>"), sol.get("<particle_flux>"), rtol=2e-4
+    )
 
 
 def test_solve_dke_coulomb_log_override(field, pitchgrid, speedgrid):

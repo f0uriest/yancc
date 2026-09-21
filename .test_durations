@@ -855,6 +855,7 @@
     "tests/test_solution.py::test_dkesolution_qtys_list": 0.026836556615307927,
     "tests/test_solution.py::test_dkesolution_wrong_f1_size": 0.8823739022482187,
     "tests/test_solution.py::test_mdkesolution_qtys_list": 0.020200379192829132,
+    "tests/test_solve.py::test_solve_dke_ambipolar": 32.82,
     "tests/test_solve.py::test_solve_dke_coulomb_log_override": 41.35248856223188,
     "tests/test_solve.py::test_solve_dke_derivatives": 342.27349610440433,
     "tests/test_solve.py::test_solve_dke_dshape_2species[15]": 93.86634588986635,

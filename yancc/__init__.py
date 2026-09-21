@@ -15,7 +15,7 @@ from . import (
     trajectories,
     velocity_grids,
 )
-from .solve import solve_dke, solve_mdke
+from .solve import solve_dke, solve_dke_ambipolar, solve_mdke
 
 # lots of big and small numbers that will over/underflow in 32bit so
 # we set this here to ensure we don't get nans elsewhere.
