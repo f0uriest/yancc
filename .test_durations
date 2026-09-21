@@ -711,6 +711,7 @@
     "tests/test_root.py::test_deflated_root_scalar_multiple_roots": 1.3,
     "tests/test_root.py::test_deflated_root_scalar_saturated_residual": 0.76,
     "tests/test_root.py::test_deflated_root_scalar_seeded": 1.39,
+    "tests/test_root.py::test_deflated_root_scalar_wide_bounds": 2.5,
     "tests/test_smoothers.py::test_dke_banded_vs_dense_smoother[atzsx]": 1.8573551909066737,
     "tests/test_smoothers.py::test_dke_banded_vs_dense_smoother[sxatz]": 8.386606815969571,
     "tests/test_smoothers.py::test_dke_banded_vs_dense_smoother[tzsxa]": 2.4111210068222135,

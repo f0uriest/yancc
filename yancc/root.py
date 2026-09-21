@@ -382,19 +382,58 @@ def _insert_history(hx, hf, x, f):
     return jnp.where(skip, hx, ax[take]), jnp.where(skip, hf, af[take])
 
 
-def _widest_gap(hx, lower, upper):
+# When searching for roots we make a few related assumptions:
+# 1. if the user knows where roots are, that information is supplied either as guesses
+# or bounds, and we likely won't ever need to resort to blind search.
+# 2. Otherwise, the user sets the bounds generously, so that roots are clustered
+# relative to the bounds.
+# Therefore, when searching blind for a root or sign change, we bias samples towards
+# already found roots or the initial guess, while still trying to bisect the largest
+# unexplored interval to find sign changes. We use an arcsinh measure, which is linear
+# within _SAMPLE_SCALE of the guess/found root (as a fraction of the width of the
+# domain) and logarithmic beyond. We also take a mix of the arcsinh distance and the
+# standard linear distance according to _SAMPLE_MIX, which keeps the whole domain
+# covered, as opposed to arcsinh, which packs samples too strongly towards the guess.
+_SAMPLE_SCALE = 1e-3
+_SAMPLE_MIX = 0.5
+
+
+def _sample_coordinate(x, center, length):
+    """Coordinate in which intervals are compared when choosing where to sample."""
+    d = x - center
+    geometric = jnp.arcsinh(d / (_SAMPLE_SCALE * length)) / jnp.arcsinh(
+        0.5 / _SAMPLE_SCALE
+    )
+    return _SAMPLE_MIX * d / length + (1 - _SAMPLE_MIX) * geometric
+
+
+def _widest_gap(hx, lower, upper, center, length):
     """Midpoint of the widest interval between recorded points, bounds included.
 
     Sign changes can only reveal an odd number of roots, so a pair of roots close
     together is invisible until a point is recorded between them. Splitting the widest
-    unexplored interval covers the domain in as few evaluations as possible.
+    unexplored interval, measured in a coordinate that is denser towards ``center``,
+    covers the domain in few evaluations while resolving the neighborhood of the center
+    most finely.
     """
     xs = jnp.concatenate([hx, jnp.stack([lower, upper])])
     xs = jnp.sort(jnp.where(jnp.isfinite(xs), xs, jnp.inf))
-    gaps = jnp.diff(xs)
+    u = _sample_coordinate(xs, center, length)
+    gaps = jnp.diff(u)
     gaps = jnp.where(jnp.isfinite(gaps), gaps, -jnp.inf)
     j = jnp.argmax(cast(jax.Array, gaps))
-    return (xs[j] + xs[j + 1]) / 2
+    # the coordinate is monotonic but not invertible in closed form, so bisect for the
+    # point at the middle of the interval in it
+    target = (u[j] + u[j + 1]) / 2
+
+    def bisect(_, ab):
+        a, b = ab
+        m = (a + b) / 2
+        below = _sample_coordinate(m, center, length) < target
+        return jnp.where(below, m, a), jnp.where(below, b, m)
+
+    a, b = jax.lax.fori_loop(0, 60, bisect, (xs[j], xs[j + 1]))
+    return (a + b) / 2
 
 
 def _best_point(hx, hf, roots, ftol, xrtol, xatol):
@@ -461,7 +500,7 @@ def deflated_root_scalar(
     probe_steps=1,
     interior_samples=6,
     best_searches=2,
-    history_size=12,
+    history_size=None,
     method="secant",
     carry_state=False,
     full_output=False,
@@ -520,12 +559,16 @@ def deflated_root_scalar(
         Number of points sampled inside the bounds, one per search, once the guesses,
         the sign changes and both bounds are exhausted. Each splits the widest interval
         not yet explored, which is the only way to find a pair of roots that no sign
-        change points at.
+        change points at. Intervals are measured on a scale that is partly logarithmic
+        in the distance from the first guess, so the samples concentrate towards it
+        while still covering the whole domain, which suits roots that are close
+        together compared to the bounds.
     best_searches : int, optional
         Number of searches started from the recorded point with the smallest abs(f),
         run once the interior samples are used up.
     history_size : int, optional
-        Number of evaluated points kept for detecting sign changes.
+        Number of evaluated points kept for detecting sign changes. Defaults to enough
+        to keep every point evaluated.
     method : {"secant", "newton"}, optional
         How the derivative of fun is found at each iteration. "newton" differentiates
         fun in forward mode at every iteration. "secant" estimates it from the last
@@ -567,6 +610,10 @@ def deflated_root_scalar(
     # Guesses likewise: several of them can lead to the same root, and the fallback
     # still needs its full budget afterwards to reach the roots they missed.
     max_searches = num_roots + nguess + 4 + interior_samples + best_searches
+    if history_size is None:
+        # each search evaluates at most maxiter points in each of its two phases
+        history_size = max_searches * 2 * (maxiter + 1)
+    center = jnp.clip(starts[0], lower, upper)
 
     def recorded_fun(x, state):
         user_state, (hx, hf) = state
@@ -731,7 +778,7 @@ def deflated_root_scalar(
         # the cases are mutually exclusive, so these are alternatives, not overrides
         start = cast(jax.Array, guess)
         start = cast(jax.Array, jnp.where(from_best, best_start, start))
-        gap = _widest_gap(history[0], lower, upper)
+        gap = _widest_gap(history[0], lower, upper, center, length)
         start = cast(jax.Array, jnp.where(sampling, gap, start))
         start = cast(jax.Array, jnp.where(at_upper, upper, start))
         start = cast(jax.Array, jnp.where(at_lower, lower, start))

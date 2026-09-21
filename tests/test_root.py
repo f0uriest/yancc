@@ -260,3 +260,56 @@ def test_deflated_root_scalar_saturated_residual():
     assert success.sum() == 1
     np.testing.assert_allclose(xs[success], [0.3], atol=1e-6)
     assert np.all(np.abs(fs[success]) < ftol)
+
+
+def test_deflated_root_scalar_wide_bounds():
+    """Roots that are close together compared to the bounds are found from the middle.
+
+    With bounds far wider than the range where the residual changes sign, the pair of
+    roots on one side of the first has no sign change pointing at it, and only samples
+    that land between them reveal it. The residual is a solved flux scan continued out
+    to the bounds, where it is large and no longer monotonic.
+    """
+    ftol = 1e-4
+    name, xcol, fluxcols, charges = _SCANS["w7x"]
+    data = np.loadtxt(_DATA / name)
+    x = data[:, xcol]
+    current = (data[:, fluxcols] * np.array(charges)).sum(axis=1)
+    f = current / np.abs(data[:, fluxcols]).sum(axis=1)[np.argmin(np.abs(x))]
+    far = np.array(
+        [
+            (-0.1, -1.2),
+            (-0.085, -3.3),
+            (-0.05, -2.3),
+            (-0.017, -1.9),
+            (0.016, 2.1),
+            (0.075, 3.3),
+            (0.1, 1.2),
+        ]
+    )
+    xs = np.concatenate([x, far[:, 0]])
+    fs = np.concatenate([f, far[:, 1]])
+    order = np.argsort(xs)
+    xs, fs = jnp.array(xs[order]), jnp.array(fs[order])
+
+    def fun(y, nevals):
+        return interpax.interp1d(y, xs, fs, method="monotonic"), nevals + 1
+
+    lo, hi = -0.1, 0.1
+    expected, slope = _sweep_roots(fun, lo, hi, num=40001)
+    assert len(expected) == 3
+    xr, (_, success, fs_root, *_) = deflated_root_scalar(
+        fun,
+        jnp.array(0.0),
+        3,
+        args=jnp.array(0),
+        bounds=(lo, hi),
+        ftol=jnp.array(ftol),
+        xatol=jnp.array(0.0),
+        xrtol=jnp.array(1e-8),
+        full_output=True,
+    )
+    assert success.sum() == len(expected)
+    atol = 2 * ftol / np.abs(slope).min()
+    np.testing.assert_allclose(np.sort(xr[success]), expected, rtol=0, atol=atol)
+    assert np.all(np.abs(fs_root[success]) < ftol)
