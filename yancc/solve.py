@@ -740,6 +740,7 @@ def solve_dke_ambipolar(  # noqa: C901
         "bounds",
         "carry_state",
         "full_output",
+        "state_filter",
         "verbose",
     ]:
         if key in root_options:
@@ -887,11 +888,14 @@ def solve_dke_ambipolar(  # noqa: C901
         bounds=(lower, upper),
         carry_state=True,
         full_output=True,
+        # The state holds the solution and recycled subspace, each the size of the
+        # problem, so only what is used below is kept.
+        state_filter=lambda state: (state[0], state[2], state[3], state[4]),
         verbose=verbose,
         **root_options,
     )
-    f1s, _, niter, nmv, res, _, _ = states
-    searched, (_, _, _, search_nmv, _, _, _) = searches
+    f1s, niter, nmv, res = states
+    _, (_, _, nmv_last, _) = searches
 
     sols = []
     for j in range(num_roots):
@@ -924,7 +928,7 @@ def solve_dke_ambipolar(  # noqa: C901
         "nmv": jnp.where(success, jnp.diff(nmv, prepend=0), 0),
         "res": jnp.where(success, res, jnp.nan),
         "scale": scale0,
-        "nmv_total": cast(jax.Array, jnp.where(searched, search_nmv, 0)).max() + nmv0,
+        "nmv_total": nmv_last + nmv0,
     }
     if verbose:
         for j in range(num_roots):

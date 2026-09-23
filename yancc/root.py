@@ -504,6 +504,7 @@ def deflated_root_scalar(
     method="secant",
     carry_state=False,
     full_output=False,
+    state_filter=None,
     verbose: bool | int = False,
 ):
     """Find multiple roots x where fun(x, args) == 0.
@@ -581,6 +582,10 @@ def deflated_root_scalar(
         the state, such as a warm start for an iterative solver, carries over.
     full_output : bool, optional
         If True, also return additional information about the search.
+    state_filter : callable, optional
+        Function applied to the state returned by fun before it is stored in the
+        output, such as to keep only the parts of a large state that are needed
+        afterwards. Default stores the whole state.
     verbose : bool, optional
         Whether to print iteration info.
 
@@ -591,10 +596,11 @@ def deflated_root_scalar(
     info : tuple
         Only returned if full_output is True. Contains the number of searches, and for
         each root the success flag, residual of fun at xk, number of iterations, and
-        the state returned by fun at xk. The last element is a tuple containing, for
-        each search (up to ``num_roots + len(x0) + 4 + interior_samples +
-        best_searches``), whether the search was run,
-        and the final state returned by fun.
+        the state returned by fun at xk, passed through ``state_filter``. The last
+        element is a tuple containing, for each search (up to ``num_roots + len(x0) +
+        4 + interior_samples + best_searches``), whether the search was run, and the
+        state the next search would start from, passed through ``state_filter``. With
+        ``carry_state``, that is the state returned by the last evaluation of fun.
 
     """
     if method not in ("secant", "newton"):
@@ -628,13 +634,16 @@ def deflated_root_scalar(
         fill = jnp.inf if jnp.issubdtype(x.dtype, jnp.inexact) else 0
         return jnp.repeat(jnp.full_like(x, fill)[None], n, axis=0)
 
+    if state_filter is None:
+        state_filter = lambda state: state  # noqa: E731
+
     _, aux_struct = jax.eval_shape(fun, starts[0], args)
+    filtered_struct = jax.eval_shape(state_filter, aux_struct)
     xs = jnp.full(num_roots, jnp.inf, dtype=dtype)
     fs = jnp.full(num_roots, jnp.inf, dtype=dtype)
     ks = jnp.zeros(num_roots, dtype=int)
-    auxs = jax.tree.map(lambda x: _invalid(x, num_roots), aux_struct)
+    auxs = jax.tree.map(lambda x: _invalid(x, num_roots), filtered_struct)
     searched = jnp.zeros(max_searches, dtype=bool)
-    search_auxs = jax.tree.map(lambda x: _invalid(x, max_searches), aux_struct)
     history = (
         jnp.full(history_size, jnp.inf, dtype=dtype),
         jnp.full(history_size, jnp.nan, dtype=dtype),
@@ -702,7 +711,7 @@ def deflated_root_scalar(
         i, nfound, xs, fs, ks, auxs, history, probed, tried, failed, bracket = state[
             :11
         ]
-        nscan, nbest = state[14], state[15]
+        nscan, nbest = state[13], state[14]
         exhausted = (
             failed
             & ~bracket
@@ -728,7 +737,6 @@ def deflated_root_scalar(
             _,
             _,
             searched,
-            search_auxs,
             search_args,
             nscan,
             nbest,
@@ -832,10 +840,11 @@ def deflated_root_scalar(
         fs = jnp.where(status, fs.at[nfound].set(f), fs)
         ks = jnp.where(status, ks.at[nfound].set(k), ks)
         auxs = jax.tree.map(
-            lambda x, y: jnp.where(status, x.at[nfound].set(y), x), auxs, aux
+            lambda x, y: jnp.where(status, x.at[nfound].set(y), x),
+            auxs,
+            state_filter(aux),
         )
         searched = searched.at[i].set(True)
-        search_auxs = jax.tree.map(lambda x, y: x.at[i].set(y), search_auxs, aux)
         if verbose:
             jax.debug.print(
                 "Search {i:3d}: start={x0: .4e}, bounds=({lo: .4e},{hi: .4e}), "
@@ -864,7 +873,6 @@ def deflated_root_scalar(
             ~status,
             has_bracket,
             searched,
-            search_auxs,
             aux if carry_state else search_args,
             nscan + sampling,
             nbest + from_best,
@@ -885,7 +893,6 @@ def deflated_root_scalar(
         jnp.array(False),
         jnp.array(False),
         searched,
-        search_auxs,
         args,
         jnp.array(0),
         jnp.array(0),
@@ -893,8 +900,9 @@ def deflated_root_scalar(
     state = eqx.internal.while_loop(
         condfun, bodyfun, state, max_steps=max_searches, kind="bounded"
     )
-    i, _, xs, fs, ks, auxs, *_, searched, search_auxs, _, _, _ = state
+    i, _, xs, fs, ks, auxs, *_, searched, final_state, _, _ = state
     if full_output:
-        return xs, (i, jnp.isfinite(xs), fs, ks, auxs, (searched, search_auxs))
+        final_state = state_filter(final_state)
+        return xs, (i, jnp.isfinite(xs), fs, ks, auxs, (searched, final_state))
 
     return xs
