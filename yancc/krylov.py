@@ -509,12 +509,12 @@ def _fgmres(  # noqa: C901
         return jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
 
     def arnoldi_cond(carry):
-        return carry[12] != DONE
+        return carry[0][10] != DONE
 
     def arnoldi_loop(carry):
         # L A Z = C B + V H
-        mode = carry[12]
-        j, V, Z, y = carry[0], carry[2], carry[3], carry[13]
+        state, V, Z = carry
+        j, mode, y = state[0], state[10], state[11]
         is_arnoldi = mode == ARNOLDI
         is_stabilize = mode == STABILIZE
         is_final = mode == FINAL
@@ -543,26 +543,44 @@ def _fgmres(  # noqa: C901
         # be applied in sequence, each skipped unless some element is in its mode.
         # Unbatched, exactly one of them runs. The mode masks are taken before any
         # step runs, so a step's mode transition doesn't trigger a later step.
+        #
+        # The bases V and Z are only read inside the steps, which return the new
+        # columns, and are written here outside of any lax.cond. If the bases were
+        # outputs of a cond, XLA may be unable to alias the branch outputs to the
+        # input buffers (it doesn't on GPU), and then copies the full basis every
+        # iteration, doubling its peak memory.
         steps = [
             (is_arnoldi, arnoldi_step),
             (is_stabilize, stabilize_step),
             (is_final, final_step),
         ]
+        cols = (zero, zero)
         for active, step in steps:
-            carry = lax.cond(
+            state, cols = lax.cond(
                 eqx.internal.unvmap_any(active),
                 step,
-                lambda carry, z, w, active: carry,
-                carry,
+                lambda state, cols, V, z, w, active: (state, cols),
+                state,
+                cols,
+                V,
                 z,
                 w,
                 active,
             )
-        return carry
 
-    def arnoldi_step(carry, z, w, active):
-        (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
-         dx) = carry  # fmt: skip
+        # commit the Arnoldi step's columns for Arnoldi elements only
+        def put(X, i, value):
+            return X.at[..., i].set(jnp.where(is_arnoldi, value, X[..., i]))
+
+        v_col, z_col = cols
+        V = tree_map(lambda X, u: put(X, j + 1, u), V, v_col)
+        if flexible:
+            Z = tree_map(lambda X, u: put(X, j, u), Z, z_col)
+        return state, V, Z
+
+    def arnoldi_step(state, cols, V, z, w, active):
+        (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = state  # fmt: skip
         outer = j < lv
         z = tree_map(lambda x, zz: jnp.where(outer, x[..., j], zz), outer_v, z)
         w = tree_map(lambda x, ww: jnp.where(outer, x[..., j], ww), outer_Av, w)
@@ -607,9 +625,6 @@ def _fgmres(  # noqa: C901
         def put(X, i, value):
             return X.at[..., i].set(jnp.where(active, value, X[..., i]))
 
-        V = tree_map(lambda X, u: put(X, j + 1, u), V, unit_w)
-        if flexible:
-            Z = tree_map(lambda X, u: put(X, j, u), Z, z)
         B = put(B, j, Bj)
         R = R.at[j, :].set(jnp.where(active, R_row, R[j, :]))
         H = H.at[j, :].set(jnp.where(active, h, H[j, :]))
@@ -621,12 +636,13 @@ def _fgmres(  # noqa: C901
         mode = jnp.where(active, new_mode, mode)
         nmv = jnp.where(active & ~outer, nmv + 1, nmv)
         j = jnp.where(active, j + 1, j)
-        return (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
-                mode, y, dx)  # fmt: skip
+        state = (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode,
+                 y, dx)  # fmt: skip
+        return state, (unit_w, z)
 
-    def stabilize_step(carry, z, w, active):
-        (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
-         dx) = carry  # fmt: skip
+    def stabilize_step(state, cols, V, z, w, active):
+        (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = state  # fmt: skip
         w, _ = _gram_schmidt(C, w, lc, gs_method)
         new_res = _norm(_sub(v0, w))
         if verbose:
@@ -641,22 +657,23 @@ def _fgmres(  # noqa: C901
         res = jnp.where(active, new_res, res)
         nmv = jnp.where(active, nmv + 1, nmv)
         mode = jnp.where(active, jnp.where(cont, ARNOLDI, finish), mode)
-        return (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
-                mode, y, dx)  # fmt: skip
+        state = (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode,
+                 y, dx)  # fmt: skip
+        return state, cols
 
-    def final_step(carry, z, w, active):
-        mode = jnp.where(active, DONE, carry[12])
-        dx = tree_map(lambda new, old: jnp.where(active, new, old), z, carry[14])
-        return (*carry[:12], mode, carry[13], dx)
+    def final_step(state, cols, V, z, w, active):
+        mode = jnp.where(active, DONE, state[10])
+        dx = tree_map(lambda new, old: jnp.where(active, new, old), z, state[12])
+        return (*state[:10], mode, state[11], dx), cols
 
     cont0 = (maxiter > 0) & (res > atol)
     mode = jnp.where(cont0, ARNOLDI, finish)
     y = jnp.zeros(size, dtype=dtype)
     dx = tree_map(jnp.zeros_like, v0)
-    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
-             mode, y, dx)  # fmt: skip
-    carry = lax.while_loop(arnoldi_cond, arnoldi_loop, carry)
-    j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr, _, _, dx = carry
+    state = (0, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+             dx)  # fmt: skip
+    state, V, Z = lax.while_loop(arnoldi_cond, arnoldi_loop, (state, V, Z))
+    j, nmv, B, R, H, _, beta_vec, res, breakdown, res_arr, _, _, dx = state
     y = _lstsq_y(R, beta_vec)
 
     if return_increment:
