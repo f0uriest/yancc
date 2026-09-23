@@ -159,6 +159,35 @@ def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
     return x
 
 
+def _matvec_columns(matvec, X):
+    """Apply a linear matvec to each column (last axis) of every leaf of X.
+
+    Returns the result and the number of matvecs applied. Columns that are zero map
+    to zero without applying matvec.
+    """
+    # Mapping matvec over all columns at once with vmap makes every intermediate
+    # array inside the matvec as wide as X, which for an operator with many large
+    # intermediates costs several times the memory of X itself. Applying it to one
+    # column at a time bounds the extra memory at a single matvec's working set.
+    ncol = tree_leaves(X)[0].shape[-1]
+    col = tree_map(lambda x: x[..., 0], X)
+    out_struct = jax.eval_shape(matvec, col)
+    Y = tree_map(lambda s: jnp.zeros((*s.shape, ncol), dtype=s.dtype), out_struct)
+
+    def zero(x):
+        return tree_map(lambda s: jnp.zeros(s.shape, dtype=s.dtype), out_struct)
+
+    def body(i, carry):
+        Y, count = carry
+        x = tree_map(lambda x: x[..., i], X)
+        nonzero = jnp.any(jnp.array([jnp.any(leaf != 0) for leaf in tree_leaves(x)]))
+        y = _cond_any(nonzero, lambda x: matvec(x), zero, x)
+        Y = tree_map(lambda Y, y: Y.at[..., i].set(y), Y, y)
+        return Y, count + nonzero
+
+    return lax.fori_loop(0, ncol, body, (Y, jnp.array(0)))
+
+
 def _maybe_print(flag, j, res, pre=""):
     # Under vmap, print a single line for the whole batch instead of one per element,
     # reporting the largest iteration count and residual among elements that print.
@@ -441,8 +470,8 @@ def _fgmres(  # noqa: C901
     assert lv is not None
 
     if outer_Av is None:
-        outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
-        nmv += lv
+        outer_Av, nmv_Av = _matvec_columns(matvec, outer_v)
+        nmv += nmv_Av
 
     if C is None:
         assert lc is None, "if C is None, lc must also be None"
@@ -898,8 +927,8 @@ def _gcrot_init_UC(
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
         k = max(k, lc)
         if C is None:
-            C = jax.vmap(matvec, in_axes=1, out_axes=1)(U)
-            nmv += lc
+            C, nmv_C = _matvec_columns(matvec, U)
+            nmv += nmv_C
         C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
         # re-orthogonalize old vectors
         c = tree_map(lambda x: x[..., 0], C)
@@ -1099,8 +1128,8 @@ def _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv):
         outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
         lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
         if outer_Av is None:
-            outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
-            nmv += lv
+            outer_Av, nmv_Av = _matvec_columns(matvec, outer_v)
+            nmv += nmv_Av
         # pad to full size
         outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
         outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
