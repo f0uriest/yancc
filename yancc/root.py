@@ -666,35 +666,32 @@ def deflated_root_scalar(
         i, p, roots, lo, hi, budget = inputs
         deflated_fun = _DeflatedFun1D(recorded_fun, roots, length)
 
-        def solve(x, aux):
-            sol = optimistix.root_find(
-                deflated_fun,
-                solver,
-                y0=x,
-                has_aux=True,
-                args=aux,
-                options={
-                    "lower": lo,
-                    "upper": hi,
-                    "maxstep": budget,
-                    "roots": roots,
-                },
-                throw=False,
-                max_steps=maxiter,
-            )
-            return (
-                sol.value,
-                sol.state.f / deflated_fun.regularizer(sol.value),
-                sol.state.aux,
-                k + sol.stats["num_steps"].astype(k.dtype),
-                sol.result == RESULTS.successful,
-                sol.state.diff,
-            )
-
-        def skip(x, aux):
-            return x, f, aux, k, jnp.array(False), diff
-
-        x, f, aux, k, ok, diff = jax.lax.cond(ok, solve, skip, x, aux)
+        # A phase is skipped by giving it no step budget, so the search stops before
+        # evaluating fun and returns x and aux as they were. Skipping it with lax.cond
+        # instead would pass aux through a branch that returns it unchanged, and XLA
+        # may then keep a separate copy of aux for the whole search (it does on GPU),
+        # which for a large state such as a Krylov subspace is expensive.
+        sol = optimistix.root_find(
+            deflated_fun,
+            solver,
+            y0=x,
+            has_aux=True,
+            args=aux,
+            options={
+                "lower": lo,
+                "upper": hi,
+                "maxstep": jnp.where(ok, budget, 0),
+                "roots": roots,
+            },
+            throw=False,
+            max_steps=maxiter,
+        )
+        x = sol.value
+        f = jnp.where(ok, sol.state.f / deflated_fun.regularizer(sol.value), f)
+        aux = sol.state.aux
+        k = k + sol.stats["num_steps"].astype(k.dtype)
+        diff = jnp.where(ok, sol.state.diff, diff)
+        ok = ok & (sol.result == RESULTS.successful)
         if verbose > 1:
             jax.debug.print(
                 "Search {i:3d}, phase {p:1d}, x={x: .4e}, f={f: .4e}, steps={k:3d}",

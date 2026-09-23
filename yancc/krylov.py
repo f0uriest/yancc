@@ -938,26 +938,28 @@ def _gcrot_init_UC(
         )(C)
 
         Q, R, P = jsp.linalg.qr(Carr, mode="economic", pivoting=True)
-        C = jax.vmap(unflatten, in_axes=1, out_axes=1)(Q)
         #   AUP = CP = Q R
         #   U' = U P R^-1
         tol = jnp.finfo(R.dtype).eps * jnp.abs(R[0, 0]) * max(Q.shape)
         mask = jnp.abs(jnp.diag(R)) > tol
-        # Solved with R on the right so U keeps its row-major layout.
-        # Solving the transposed system instead returns a transposed U, which XLA
-        # copies back to row-major, costing another array the size of U.
-        U = tree_map(
-            lambda x: jax.lax.linalg.triangular_solve(
-                R, x[:, P], left_side=False, lower=False
-            ),
-            U,
-        )
         # Columns of Q beyond the rank of C are orthonormal but not the image of
         # anything in U, so they are dropped from both. Leaving them in C would let the
         # projection onto C remove parts of the residual that x never accounts for, so
         # the residual would no longer be b - A x and could even look converged.
-        U = tree_map(lambda x: jnp.where(mask, x, 0), U)
-        C = tree_map(lambda x: jnp.where(mask, x, 0), C)
+        # Pivoting puts the dropped columns last, so R^-1 D only involves the leading,
+        # well conditioned block of R. The dropped pivots, which can be exactly zero,
+        # are replaced by one so the solve for the zero columns of D stays finite.
+        D = jnp.diag(mask.astype(R.dtype))
+        R = R + jnp.diag(jnp.where(mask, 0, 1 - jnp.diag(R)))
+        # The permutation, R^-1 and the dropped columns are combined into one small
+        # matrix, so that U' and C' are each a single product with the large arrays.
+        # Applying them separately would need a gather and a masking step, which XLA
+        # may fuse into later uses of U' and C', keeping the unmasked factors alive
+        # to recompute them for as long as U' and C' are needed.
+        Rinv_D = jax.lax.linalg.triangular_solve(R, D, left_side=True, lower=False)
+        M = jnp.zeros_like(Rinv_D).at[P].set(Rinv_D)
+        U = tree_map(lambda x: _dot(x, M), U)
+        C = jax.vmap(unflatten, in_axes=1, out_axes=1)(_dot(Q, D))
         # pad to full size
         U = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), U)
         C = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), C)
@@ -970,7 +972,7 @@ def _gcrot_initial_projection(x, r, beta, U, C):
     # Solve first the projection operation with respect to the C, U matrices
     #   y = argmin_y || b - A (x + U y) ||^2 = C^H (b - A x)
     #   x' = x + U y
-    y = jax.vmap(lambda x: _tree_vdot(x, r), in_axes=1)(C)
+    y = sum(tree_leaves(tree_map(lambda c, r: _einsum("nk,n->k", c.conj(), r), C, r)))
     x = _add(x, tree_map(lambda x: _dot(x, y), U))
     r = _sub(r, tree_map(lambda x: _dot(x, y), C))
     beta = _norm(r)
@@ -1013,9 +1015,12 @@ def _gcrotmk_solve(
 
     U, C, nmv, lc, k = _gcrot_init_UC(U, C, x, matvec, k, nmv)
 
-    x, r, beta = _cond_any(
-        lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
-    )
+    # Unused columns of U and C are zero, so the projection is a no-op without
+    # recycled vectors, and it is cheap enough to do unconditionally. Passing U and C
+    # into a lax.cond instead lets XLA give them a different layout inside the branch
+    # (it does on GPU), which costs a transposed copy of each that stays live for as
+    # long as U and C themselves.
+    x, r, beta = _gcrot_initial_projection(x, r, beta, U, C)
     if verbose:
         _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="GCROT  ")
 
