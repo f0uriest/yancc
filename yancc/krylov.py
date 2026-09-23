@@ -943,8 +943,14 @@ def _gcrot_init_UC(
         #   U' = U P R^-1
         tol = jnp.finfo(R.dtype).eps * jnp.abs(R[0, 0]) * max(Q.shape)
         mask = jnp.abs(jnp.diag(R)) > tol
+        # Solved with R on the right so U keeps its row-major layout.
+        # Solving the transposed system instead returns a transposed U, which XLA
+        # copies back to row-major, costing another array the size of U.
         U = tree_map(
-            lambda x: jsp.linalg.solve_triangular(R.T, x[:, P].T, lower=True).T, U
+            lambda x: jax.lax.linalg.triangular_solve(
+                R, x[:, P], left_side=False, lower=False
+            ),
+            U,
         )
         # Columns of Q beyond the rank of C are orthonormal but not the image of
         # anything in U, so they are dropped from both. Leaving them in C would let the
