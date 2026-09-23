@@ -1019,12 +1019,19 @@ def _gcrotmk_solve(
     if verbose:
         _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="GCROT  ")
 
+    # Recycled vectors are written into a free column, or over the oldest one once
+    # all k are in use, rather than shifting the others along to make room. A shift
+    # can't be done in place, so it would allocate new copies of U and C every outer
+    # iteration. age records the order the columns were added in, and the supplied
+    # columns count as older than any new ones, with the first the most recent.
+    age = -jnp.arange(k)
+
     def gcrotmk_cond(carry):
-        j_outer, _, _, _, beta, _, _, _, _ = carry
+        j_outer, _, _, _, beta, _, _, _, _, _ = carry
         return jnp.logical_and(j_outer < maxiter, beta > tol)
 
     def gcmotmk_loop(carry):
-        j_outer, nmv, x, r, beta, C, U, lc, ptol_max_factor = carry
+        j_outer, nmv, x, r, beta, C, U, lc, age, ptol_max_factor = carry
 
         v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
@@ -1098,8 +1105,11 @@ def _gcrotmk_solve(
         # Normalize cx, maintaining cx = A ux
         # This new cx is orthogonal to the previous C, by construction
         alpha = safediv(jnp.array(1.0), _norm(c))
-        U = tree_map(_roll_prepend, U, _mul(alpha, u))
-        C = tree_map(_roll_prepend, C, _mul(alpha, c))
+        # the first lc columns are the ones in use, so fill in order until all are
+        slot = jnp.where(lc < k, lc, jnp.argmin(age))
+        U = tree_map(lambda X, y: X.at[:, slot].set(y), U, _mul(alpha, u))
+        C = tree_map(lambda X, y: X.at[:, slot].set(y), C, _mul(alpha, c))
+        age = age.at[slot].set(j_outer + 1)
         lc = jnp.minimum(lc + 1, k)
 
         if verbose:
@@ -1111,15 +1121,21 @@ def _gcrotmk_solve(
                 safediv(beta, b_norm),
                 pre="GCROT  ",
             )
-        return j_outer + 1, nmv, x, r, beta, C, U, lc, ptol_max_factor
+        return j_outer + 1, nmv, x, r, beta, C, U, lc, age, ptol_max_factor
 
-    carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
+    carry = (0, nmv, x, r, beta, C, U, lc, age, ptol_max_factor)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
-    j_outer, nmv, x, r, beta, C, U, _, _ = carry
+    j_outer, nmv, x, r, beta, C, U, _, age, _ = carry
     success = beta <= tol
-    # Include the solution vector to the span
-    U = tree_map(_roll_prepend, U, x)
-    C = tree_map(_roll_prepend, C, _sub(b, r))
+    # Include the solution vector to the span, returning the columns newest first
+    # and dropping the oldest to make room.
+    order = jnp.argsort(-age)[:-1]
+    U = tree_map(lambda X, y: jnp.concatenate([y[:, None], X[:, order]], axis=1), U, x)
+    C = tree_map(
+        lambda X, y: jnp.concatenate([y[:, None], X[:, order]], axis=1),
+        C,
+        _sub(b, r),
+    )
 
     return x, (j_outer, nmv, beta, success, C, U)
 
