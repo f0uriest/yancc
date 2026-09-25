@@ -1,5 +1,6 @@
 """Linear algebra helpers."""
 
+import abc
 import functools
 from typing import Any, cast
 
@@ -8,6 +9,9 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+
+from .field import Field
+from .velocity_grids import UniformPitchAngleGrid
 
 
 def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
@@ -70,6 +74,78 @@ def _scale_banded_rows(p, q, A, s, periodic):
     i_linear = j_idx + r_idx - q
     i_dense = i_linear % n if periodic else jnp.clip(i_linear, 0, n - 1)
     return A * s[i_dense]
+
+
+class AbstractYanccOperator(lx.AbstractLinearOperator):
+    """Base class for yancc linear operators.
+
+    Subclasses must implement ``mv`` and ``in_structure``. By default the operator
+    is square, is materialized by applying it to the columns of the identity, and
+    is transposed with ``jax.linear_transpose``.
+    """
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        return dense_from_mv(self.mv, self.in_size())
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return self.in_structure()
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
+
+
+@lx.is_symmetric.register(AbstractYanccOperator)
+@lx.is_diagonal.register(AbstractYanccOperator)
+@lx.is_tridiagonal.register(AbstractYanccOperator)
+@lx.is_positive_semidefinite.register(AbstractYanccOperator)
+@lx.is_negative_semidefinite.register(AbstractYanccOperator)
+def _(operator):
+    return False
+
+
+class AbstractDKEOperator(AbstractYanccOperator):
+    """Base class for operators acting on a discretized distribution function.
+
+    Operators with ``speedgrid`` and ``species`` act on the full distribution
+    function of shape ``(ns, nx, na, nt, nz)``, others act on a single
+    ``(species, speed)`` slice of shape ``(na, nt, nz)``, flattened in both cases.
+    """
+
+    field: eqx.AbstractVar[Field]
+    pitchgrid: eqx.AbstractVar[UniformPitchAngleGrid]
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        n = self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha
+        # MDKE operators may carry a speedgrid for a single speed but never species,
+        # so the species determine whether the speed and species axes are present.
+        species = getattr(self, "species", None)
+        if species is not None:
+            n *= getattr(self, "speedgrid").nx * len(species)
+        return jax.ShapeDtypeStruct((n,), dtype=self.field.Bmag.dtype)
+
+    @abc.abstractmethod
+    def diagonal(self) -> jax.Array:
+        """Diagonal of the operator."""
+
+    @abc.abstractmethod
+    def block_diagonal(self, *args, **kwargs) -> jax.Array:
+        """Block diagonal of the operator as an (N, M, M) array."""
+
+    def abs_row_sum(self) -> jax.Array:
+        """Sum of absolute values of each row of the operator."""
+        raise NotImplementedError(
+            f"abs_row_sum is not implemented for {type(self).__name__}"
+        )
+
+    def block_diagonal2(self) -> jax.Array:
+        """Block diagonal of the operator as an (N, M, M) array, unfolding s and x."""
+        raise NotImplementedError(
+            f"block_diagonal2 is not implemented for {type(self).__name__}"
+        )
 
 
 class BorderedOperator(lx.AbstractLinearOperator):
@@ -223,12 +299,18 @@ class TransposedLinearOperator(lx.AbstractLinearOperator):
 @lx.is_symmetric.register(InverseBorderedOperator)
 @lx.is_diagonal.register(InverseBorderedOperator)
 @lx.is_tridiagonal.register(InverseBorderedOperator)
+@lx.is_positive_semidefinite.register(InverseBorderedOperator)
+@lx.is_negative_semidefinite.register(InverseBorderedOperator)
 @lx.is_symmetric.register(BorderedOperator)
 @lx.is_diagonal.register(BorderedOperator)
 @lx.is_tridiagonal.register(BorderedOperator)
+@lx.is_positive_semidefinite.register(BorderedOperator)
+@lx.is_negative_semidefinite.register(BorderedOperator)
 @lx.is_symmetric.register(TransposedLinearOperator)
 @lx.is_diagonal.register(TransposedLinearOperator)
 @lx.is_tridiagonal.register(TransposedLinearOperator)
+@lx.is_positive_semidefinite.register(TransposedLinearOperator)
+@lx.is_negative_semidefinite.register(TransposedLinearOperator)
 def _(operator):
     return False
 
@@ -360,6 +442,16 @@ def _(operator):
 @lx.is_diagonal.register(InverseLinearOperator)
 def _(operator):
     return lx.is_diagonal(operator.operator)
+
+
+@lx.is_positive_semidefinite.register(InverseLinearOperator)
+def _(operator):
+    return lx.is_positive_semidefinite(operator.operator)
+
+
+@lx.is_negative_semidefinite.register(InverseLinearOperator)
+def _(operator):
+    return lx.is_negative_semidefinite(operator.operator)
 
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])

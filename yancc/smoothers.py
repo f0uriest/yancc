@@ -8,7 +8,6 @@ import equinox as eqx
 import interpax
 import jax
 import jax.numpy as jnp
-import lineax as lx
 from jax import config
 from jaxtyping import ArrayLike, Bool, Float
 
@@ -16,7 +15,7 @@ from .collisions import RosenbluthPotentials
 from .field import Field
 from .finite_diff import fd2, fd_coeffs
 from .linalg import (
-    TransposedLinearOperator,
+    AbstractYanccOperator,
     cr_banded_factor,
     cr_banded_periodic_factor,
     cr_banded_periodic_solve,
@@ -213,7 +212,7 @@ def inverse_permute_f_4d(
     return f.flatten()
 
 
-class MDKEJacobiSmoother(lx.AbstractLinearOperator):
+class MDKEJacobiSmoother(AbstractYanccOperator):
     """Block diagonal smoother for MDKE.
 
     Parameters
@@ -349,11 +348,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             b = permute_f_3d(b.flatten(), self.field, self.pitchgrid, self.axorder)
             return self.weight * b
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -361,19 +355,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEJacobiSmoother(lx.AbstractLinearOperator):
+class DKEJacobiSmoother(AbstractYanccOperator):
     """Block diagonal smoother for DKE.
 
     Parameters
@@ -606,11 +589,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             )
             return self.weight * b
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -624,25 +602,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEJacobi2Smoother(lx.AbstractLinearOperator):
+class DKEJacobi2Smoother(AbstractYanccOperator):
     """Block diagonal smoother for DKE, keeping coupling in s,x.
 
     Parameters
@@ -791,11 +752,6 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             )
             return self.weight * b
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -809,25 +765,8 @@ class DKEJacobi2Smoother(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKELaplacian(lx.AbstractLinearOperator):
+class DKELaplacian(AbstractYanccOperator):
     """Normalized Laplacian operator on 4d phase space."""
 
     field: Field
@@ -890,11 +829,6 @@ class DKELaplacian(lx.AbstractLinearOperator):
         df /= self.norm
         return df.reshape(vector.shape)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -907,39 +841,6 @@ class DKELaplacian(lx.AbstractLinearOperator):
             ),
             dtype=self.field.Bmag.dtype,
         )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(DKELaplacian)
-@lx.is_diagonal.register(DKELaplacian)
-@lx.is_tridiagonal.register(DKELaplacian)
-@lx.is_symmetric.register(DKEJacobiSmoother)
-@lx.is_diagonal.register(DKEJacobiSmoother)
-@lx.is_tridiagonal.register(DKEJacobiSmoother)
-@lx.is_symmetric.register(DKEJacobi2Smoother)
-@lx.is_diagonal.register(DKEJacobi2Smoother)
-@lx.is_tridiagonal.register(DKEJacobi2Smoother)
-@lx.is_symmetric.register(MDKEJacobiSmoother)
-@lx.is_diagonal.register(MDKEJacobiSmoother)
-@lx.is_tridiagonal.register(MDKEJacobiSmoother)
-def _(operator):
-    return False
 
 
 def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):

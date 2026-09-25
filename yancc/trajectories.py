@@ -6,7 +6,6 @@ import itertools
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import lineax as lx
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float
 
@@ -18,7 +17,7 @@ from .collisions import (
 from .field import Field
 from .finite_diff import fd_coeffs, fdbwd, fdfwd
 from .linalg import (
-    TransposedLinearOperator,
+    AbstractDKEOperator,
     banded_mm,
     banded_to_dense,
     dense_to_banded,
@@ -69,7 +68,7 @@ def dkes_w_pitch(
     return w
 
 
-class MDKETheta(lx.AbstractLinearOperator):
+class MDKETheta(AbstractDKEOperator):
     """Advection operator in theta direction.
 
     Parameters
@@ -217,31 +216,8 @@ class MDKETheta(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
         return df
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKEZeta(lx.AbstractLinearOperator):
+class MDKEZeta(AbstractDKEOperator):
     """Advection operator in zeta direction.
 
     Parameters
@@ -389,31 +365,8 @@ class MDKEZeta(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
         return df
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKEPitch(lx.AbstractLinearOperator):
+class MDKEPitch(AbstractDKEOperator):
     """Advection operator in pitch angle direction.
 
     Parameters
@@ -559,31 +512,8 @@ class MDKEPitch(lx.AbstractLinearOperator):
         df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
         return df
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKE(lx.AbstractLinearOperator):
+class MDKE(AbstractDKEOperator):
     """Monoenergetic Drift Kinetic Equation operator.
 
     Parameters
@@ -697,45 +627,6 @@ class MDKE(lx.AbstractLinearOperator):
         d3 = self._opp.block_diagonal()
         return d0 + d1 + d2 + d3
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(MDKE)
-@lx.is_diagonal.register(MDKE)
-@lx.is_tridiagonal.register(MDKE)
-@lx.is_symmetric.register(MDKETheta)
-@lx.is_diagonal.register(MDKETheta)
-@lx.is_tridiagonal.register(MDKETheta)
-@lx.is_symmetric.register(MDKEZeta)
-@lx.is_diagonal.register(MDKEZeta)
-@lx.is_tridiagonal.register(MDKEZeta)
-@lx.is_symmetric.register(MDKEPitch)
-@lx.is_diagonal.register(MDKEPitch)
-@lx.is_tridiagonal.register(MDKEPitch)
-def _(operator):
-    return False
-
 
 #######
 # SFINCS trajectories
@@ -806,7 +697,7 @@ def sfincs_w_speed(
     return w
 
 
-class DKETheta(lx.AbstractLinearOperator):
+class DKETheta(AbstractDKEOperator):
     """Advection operator in theta direction.
 
     Parameters
@@ -1094,43 +985,8 @@ class DKETheta(lx.AbstractLinearOperator):
         M = self.field.ntheta * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEZeta(lx.AbstractLinearOperator):
+class DKEZeta(AbstractDKEOperator):
     """Advection operator in zeta direction.
 
     Parameters
@@ -1417,43 +1273,8 @@ class DKEZeta(lx.AbstractLinearOperator):
         M = self.field.nzeta * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEPitch(lx.AbstractLinearOperator):
+class DKEPitch(AbstractDKEOperator):
     """Advection operator in pitch angle direction.
 
     Parameters
@@ -1733,43 +1554,8 @@ class DKEPitch(lx.AbstractLinearOperator):
         M = self.pitchgrid.nalpha * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKESpeed(lx.AbstractLinearOperator):
+class DKESpeed(AbstractDKEOperator):
     """Advection operator in speed direction.
 
     Parameters
@@ -2009,43 +1795,8 @@ class DKESpeed(lx.AbstractLinearOperator):
             # unreachable, just kept to appease type checker
             raise ValueError()  # pragma: no cover
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKE(lx.AbstractLinearOperator):
+class DKE(AbstractDKEOperator):
     """Drift Kinetic Equation operator.
 
     Parameters
@@ -2287,57 +2038,3 @@ class DKE(lx.AbstractLinearOperator):
             lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal2(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(DKE)
-@lx.is_diagonal.register(DKE)
-@lx.is_tridiagonal.register(DKE)
-@lx.is_symmetric.register(DKESpeed)
-@lx.is_diagonal.register(DKESpeed)
-@lx.is_tridiagonal.register(DKESpeed)
-@lx.is_symmetric.register(DKEPitch)
-@lx.is_diagonal.register(DKEPitch)
-@lx.is_tridiagonal.register(DKEPitch)
-@lx.is_symmetric.register(DKEZeta)
-@lx.is_diagonal.register(DKEZeta)
-@lx.is_tridiagonal.register(DKEZeta)
-@lx.is_symmetric.register(DKETheta)
-@lx.is_diagonal.register(DKETheta)
-@lx.is_tridiagonal.register(DKETheta)
-def _(operator):
-    return False

@@ -11,7 +11,7 @@ from jaxtyping import Array, ArrayLike, Float
 from .collisions import RosenbluthPotentials
 from .field import Field
 from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from .linalg import InverseLinearOperator, dense_from_mv
+from .linalg import AbstractYanccOperator, InverseLinearOperator, dense_from_mv
 from .multigrid import (
     MultigridOperator,
     get_dke_jacobi2_smoothers,
@@ -180,13 +180,6 @@ class MDKEPreconditioner(MultigridOperator):
                 f"N={op.pitchgrid.nalpha * op.field.ntheta * op.field.nzeta:,d}",
                 ordered=True,
             )
-
-
-@lx.is_symmetric.register(MDKEPreconditioner)
-@lx.is_diagonal.register(MDKEPreconditioner)
-@lx.is_tridiagonal.register(MDKEPreconditioner)
-def _(operator):
-    return False
 
 
 def _dke_resolutions(field, pitchgrid, speedgrid, species, p1, p2, options):
@@ -433,14 +426,7 @@ class DKEPreconditioner(MultigridOperator):
         )
 
 
-@lx.is_symmetric.register(DKEPreconditioner)
-@lx.is_diagonal.register(DKEPreconditioner)
-@lx.is_tridiagonal.register(DKEPreconditioner)
-def _(operator):
-    return False
-
-
-class DKEMPreconditioner(lx.AbstractLinearOperator):
+class DKEMPreconditioner(AbstractYanccOperator):
     """Preconditioner for the DKE using block diagonal MDKE preconditioners.
 
     Parameters
@@ -557,19 +543,6 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
     def transpose(self):
         """Transpose of the operator.
 
@@ -611,10 +584,3 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )
-
-
-@lx.is_symmetric.register(DKEMPreconditioner)
-@lx.is_diagonal.register(DKEMPreconditioner)
-@lx.is_tridiagonal.register(DKEMPreconditioner)
-def _(operator):
-    return False

@@ -6,7 +6,6 @@ import itertools
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import lineax as lx
 import numpy as np
 import orthax
 import quadax
@@ -14,7 +13,7 @@ from jaxtyping import Array, ArrayLike, Bool, Float
 
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdfwd
-from .linalg import TransposedLinearOperator, banded_to_dense, dense_to_banded
+from .linalg import AbstractDKEOperator, banded_to_dense, dense_to_banded
 from .species import LocalMaxwellian, _species_pairs, gamma_ab, nuD_ab, nupar_ab
 from .utils import (
     _parse_axorder_shape_3d,
@@ -29,7 +28,7 @@ from .velocity_grids import (
 )
 
 
-class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
+class MDKEPitchAngleScattering(AbstractDKEOperator):
     """Diffusion operator in xi direction.
 
     Parameters
@@ -172,29 +171,6 @@ class MDKEPitchAngleScattering(lx.AbstractLinearOperator):
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
         return df
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
 
 
 # Fixed Gauss-Legendre rule for the speed integrals of the Rosenbluth potentials.
@@ -573,7 +549,7 @@ class RosenbluthPotentials(eqx.Module):
         return jax.grad(self._dI_4)(x, l, k)
 
 
-class PitchAngleScattering(lx.AbstractLinearOperator):
+class PitchAngleScattering(AbstractDKEOperator):
     """Diffusion operator in pitch angle direction.
 
     Parameters
@@ -817,43 +793,8 @@ class PitchAngleScattering(lx.AbstractLinearOperator):
         M = self.pitchgrid.nalpha * len(self.species) * self.speedgrid.nx
         return df.reshape(N // M, M, M)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class EnergyScattering(lx.AbstractLinearOperator):
+class EnergyScattering(AbstractDKEOperator):
     """Diffusion operator in speed direction.
 
     Parameters
@@ -1119,41 +1060,6 @@ class EnergyScattering(lx.AbstractLinearOperator):
         else:
             # unreachable, just kept to appease type checker
             raise ValueError()  # pragma: no cover
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
 
 
 # Shared field-particle math.
@@ -1591,7 +1497,7 @@ def _field_part_cd_block_diagonal2(op, C, scale):
         raise ValueError()  # pragma: no cover
 
 
-class FieldPartCD(lx.AbstractLinearOperator):
+class FieldPartCD(AbstractDKEOperator):
     """Diagonal part of the field particle collision operator.
 
     Parameters
@@ -1720,43 +1626,8 @@ class FieldPartCD(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         return _field_part_cd_block_diagonal2(self, self.C, self._scale)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class FieldPartCG(lx.AbstractLinearOperator):
+class FieldPartCG(AbstractDKEOperator):
     """Rosenbluth G part of the field particle collision operator.
 
     Parameters
@@ -1894,43 +1765,8 @@ class FieldPartCG(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         return _field_part_gh_block_diagonal2(self, self._Ghat, self._scale)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class FieldPartCH(lx.AbstractLinearOperator):
+class FieldPartCH(AbstractDKEOperator):
     """Rosenbluth H part of the field particle collision operator.
 
     Parameters
@@ -2079,43 +1915,8 @@ class FieldPartCH(lx.AbstractLinearOperator):
         """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
         return _field_part_gh_block_diagonal2(self, self._Hhat, self._scale)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class FieldParticleScattering(lx.AbstractLinearOperator):
+class FieldParticleScattering(AbstractDKEOperator):
     """Field-particle part of Fokker-Planck Landau collision operator.
 
     Parameters
@@ -2298,43 +2099,8 @@ class FieldParticleScattering(lx.AbstractLinearOperator):
             self, self._GHhat, self._scale_GH
         ) + _field_part_cd_block_diagonal2(self, self.C, self._scale_D)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class FokkerPlanckLandau(lx.AbstractLinearOperator):
+class FokkerPlanckLandau(AbstractDKEOperator):
     """Fokker-Planck Landau collision operator.
 
     Parameters
@@ -2572,66 +2338,3 @@ class FokkerPlanckLandau(lx.AbstractLinearOperator):
             lambda x: x + self.operator_weights[2] * self.CF.block_diagonal2(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(MDKEPitchAngleScattering)
-@lx.is_diagonal.register(MDKEPitchAngleScattering)
-@lx.is_tridiagonal.register(MDKEPitchAngleScattering)
-@lx.is_symmetric.register(FieldPartCH)
-@lx.is_diagonal.register(FieldPartCH)
-@lx.is_tridiagonal.register(FieldPartCH)
-@lx.is_symmetric.register(FieldPartCD)
-@lx.is_diagonal.register(FieldPartCD)
-@lx.is_tridiagonal.register(FieldPartCD)
-@lx.is_symmetric.register(FieldPartCG)
-@lx.is_diagonal.register(FieldPartCG)
-@lx.is_tridiagonal.register(FieldPartCG)
-@lx.is_symmetric.register(FieldParticleScattering)
-@lx.is_diagonal.register(FieldParticleScattering)
-@lx.is_tridiagonal.register(FieldParticleScattering)
-@lx.is_symmetric.register(EnergyScattering)
-@lx.is_diagonal.register(EnergyScattering)
-@lx.is_tridiagonal.register(EnergyScattering)
-@lx.is_symmetric.register(PitchAngleScattering)
-@lx.is_diagonal.register(PitchAngleScattering)
-@lx.is_tridiagonal.register(PitchAngleScattering)
-@lx.is_symmetric.register(FokkerPlanckLandau)
-@lx.is_diagonal.register(FokkerPlanckLandau)
-@lx.is_tridiagonal.register(FokkerPlanckLandau)
-def _(operator):
-    return False
