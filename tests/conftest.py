@@ -176,8 +176,8 @@ def potential_quad(xgrid, species2):
 
 
 @pytest.fixture(scope="session")
-def potential_gamma(xgrid, species2):
-    """Single species potential without quadrature."""
+def potential_gauss_legendre(xgrid, species2):
+    """Potentials with fixed Gauss-Legendre quadrature."""
     return RosenbluthPotentials(
         xgrid,
         species2,

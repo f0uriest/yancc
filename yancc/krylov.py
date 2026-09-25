@@ -3,6 +3,7 @@
 import operator
 from collections.abc import Callable
 from functools import partial
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -120,6 +121,42 @@ def _apply_givens_rotations(H_row, givens, k):
 ####
 
 
+def _weighted_problem(matvec, b, lpsolve, rpsolve, sqrtw):
+    """Rewrite a linear problem so the plain 2-norm is the sqrt(w)-weighted norm.
+
+    Solving ``D A x = D b`` with ``D = diag(sqrtw)`` leaves the solution space
+    unchanged, so only residual-space quantities are scaled: the operator output,
+    the rhs, and the input of the preconditioners (the right preconditioner maps
+    residuals to solutions, so it sees ``D^-1`` first).
+
+    Returns (matvec, b, lpsolve, rpsolve, scale, unscale) where scale/unscale act
+    on residual-space pytrees with a trailing (column) dimension.
+    """
+    if sqrtw is None:
+        return matvec, b, lpsolve, rpsolve, _identity, _identity
+
+    def mul(v):
+        return tree_map(lambda s, x: s * x, sqrtw, v)
+
+    def div(v):
+        return tree_map(lambda s, x: x / s, sqrtw, v)
+
+    def scale_cols(V):
+        return tree_map(lambda s, X: s.reshape((-1, 1)) * X, sqrtw, V)
+
+    def unscale_cols(V):
+        return tree_map(lambda s, X: X / s.reshape((-1, 1)), sqrtw, V)
+
+    return (
+        lambda v: mul(matvec(v)),
+        mul(b),
+        lambda r: mul(lpsolve(div(r))),
+        lambda r: rpsolve(div(r)),
+        scale_cols,
+        unscale_cols,
+    )
+
+
 def _roll_prepend(X: jax.Array, y: jax.Array) -> jax.Array:
     return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
 
@@ -129,6 +166,12 @@ def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
 
 
 def _maybe_print(flag, j, res, pre=""):
+    # Under vmap, print a single line for the whole batch instead of one per element,
+    # reporting the largest iteration count and residual among elements that print.
+    j = eqx.internal.unvmap_max(cast(jax.Array, jnp.where(flag, jnp.asarray(j), 0)))
+    res = eqx.internal.unvmap_max(cast(jax.Array, jnp.where(flag, res, -jnp.inf)))
+    flag = eqx.internal.unvmap_any(flag)
+
     def truefun():
         jax.debug.print(pre + "iter={j:3d}   res={res:.3e}", j=j, res=res, ordered=True)
 
@@ -136,6 +179,20 @@ def _maybe_print(flag, j, res, pre=""):
         pass
 
     jax.lax.cond(flag, truefun, falsefun)
+
+
+def _cond_any(pred, true_fun, false_fun, *operands):
+    """``lax.cond`` that stays lazy in its true branch under vmap.
+
+    Returns ``true_fun(*operands)`` where ``pred`` is True and ``false_fun(*operands)``
+    where it is False. ``false_fun`` is always evaluated, so it should be cheap.
+    """
+    # With a batched predicate, lax.cond evaluates both branches for every element.
+    # Here true_fun is skipped whenever pred is False for the whole batch, and the
+    # per-element choice is made with a select. Unbatched, this is just lax.cond.
+    out = lax.cond(eqx.internal.unvmap_any(pred), true_fun, false_fun, *operands)
+    other = false_fun(*operands)
+    return tree_map(lambda a, b: jnp.where(pred, a, b), out, other)
 
 
 def _gram_schmidt(Q, x, k, method="cgs2"):
@@ -229,20 +286,18 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
     return x_final, h_final
 
 
-def _solution_increment(flexible, V, Z, y: Array, count, rpsolve, lv=0, outer_v=None):
-    """Reconstruct the solution-space increment ``Z y``.
+def _increment_parts(flexible, V, Z, y: Array, count, lv, outer_v):
+    """Split the solution-space increment ``Z y`` around the right preconditioner.
 
-    Used both for the end-of-solve update in the gcrotmk/lgmres callers and for a
-    stabilization residual computed mid-Arnoldi inside ``_fgmres`` (so that the
-    residual corresponds to the update that would actually be applied). ``count``
-    is the number of completed Arnoldi steps (filled basis vectors).
-
-    ``outer_v``/``lv`` describe LGMRES-style augmentation vectors prepended to the
-    Krylov basis; pass ``outer_v=None`` (the gcrotmk case) when there is no
-    augmentation.
+    Returns ``(pre, post)`` such that ``Z y = post + rpsolve(pre)`` when
+    ``flexible=False``, and ``Z y = pre`` (with ``post`` zero) when
+    ``flexible=True``. ``count`` is the number of completed Arnoldi steps (filled
+    basis vectors). ``outer_v``/``lv`` describe LGMRES-style augmentation vectors
+    prepended to the Krylov basis.
     """
     if flexible:
-        return tree_map(lambda x: _dot(x, y), Z)
+        pre = tree_map(lambda x: _dot(x, y), Z)
+        return pre, tree_map(jnp.zeros_like, pre)
     # flexible=False: Z was never stored. Columns [0, lv) of the Krylov basis come
     # from outer_v directly; column lv is the special v0 step rpsolve(V[:, 0]);
     # columns (lv, count) are rpsolve(V[:, j]). By linearity of rpsolve the inner
@@ -253,17 +308,15 @@ def _solution_increment(flexible, V, Z, y: Array, count, rpsolve, lv=0, outer_v=
     v_basis_idx = jnp.where(js == lv, 0, js)
     V_basis = tree_map(lambda x: x[..., v_basis_idx], V)
     y_inner = jnp.where(filled & (js >= lv), y, jnp.zeros_like(y))
-    inner_part = rpsolve(tree_map(lambda x: _dot(x, y_inner), V_basis))
-    if outer_v is None:
-        return inner_part
+    pre = tree_map(lambda x: _dot(x, y_inner), V_basis)
 
     lv_pad = tree_leaves(outer_v)[0].shape[-1]
     js_pad = jnp.arange(lv_pad)
     y_outer = jnp.where(
         (js_pad < lv) & (js_pad < count), y[:lv_pad], jnp.zeros_like(y[:lv_pad])
     )
-    outer_part = tree_map(lambda x: _dot(x, y_outer), outer_v)
-    return _add(outer_part, inner_part)
+    post = tree_map(lambda x: _dot(x, y_outer), outer_v)
+    return pre, post
 
 
 @eqx.filter_jit
@@ -287,9 +340,8 @@ def _fgmres(  # noqa: C901
     flexible: bool = True,
     stabilize_every: ArrayLike = jnp.array(10),
     res_scale: ArrayLike = jnp.array(1.0),
-) -> tuple[
-    Array, Array, PyTree[Array], PyTree[Array], Array, int, int, Array, Array, Array
-]:
+    return_increment: bool = False,
+) -> tuple:
     """FGMRES Arnoldi process, with optional projection or augmentation
 
     Parameters
@@ -340,6 +392,10 @@ def _fgmres(  # noqa: C901
         by the outer loop (GCROT or LGMRES). Affects the printout only, never the
         stopping test or the returned res/res_arr, which are always normalized to start
         at 1.
+    return_increment : bool
+        If True, also return the solution-space increment ``Z y`` (for
+        ``flexible=False``, reconstructed with the right preconditioner) as an
+        additional final output.
 
     Returns
     -------
@@ -359,6 +415,12 @@ def _fgmres(  # noqa: C901
         Number of matrix vector products
     res : float
         Final residual.
+    breakdown : bool
+        Whether the Arnoldi process broke down.
+    res_arr : ndarray
+        Residual after each Arnoldi step.
+    dx : pytree of jax.Array
+        Solution-space increment ``Z y``. Only returned if ``return_increment``.
     """
     nmv = 0
     atol = jnp.asarray(atol)
@@ -432,90 +494,179 @@ def _fgmres(  # noqa: C901
 
     breakdown = jnp.array(False)
 
-    # FGMRES Arnoldi process
+    # FGMRES Arnoldi process.
+    #
+    # The loop is a small state machine so that the preconditioner and operator
+    # each appear at exactly one call site in the traced program. Every call site
+    # of rpsolve/matvec is compiled separately (branches of lax.cond included), and
+    # for an expensive matvec/preconditioner this dominates compile time. Modes:
+    #   ARNOLDI  : one Arnoldi step, applying the preconditioner to V[:, j] (or
+    #              using stored augmentation vectors for j < lv).
+    #   STABILIZE: recompute the true residual of the current iterate, replacing
+    #              the recursively updated Givens residual. Runs as a separate
+    #              iteration right after the step that requests it, and the stopping
+    #              test is only evaluated after it.
+    #   FINAL    : reconstruct the increment Z y (only if return_increment).
+    #   DONE     : exit.
+    ARNOLDI, STABILIZE, FINAL, DONE = (jnp.int32(i) for i in range(4))
+    finish = FINAL if return_increment else DONE
+
+    def _lstsq_y(R, beta_vec):
+        return jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
 
     def arnoldi_cond(carry):
-        j, _, _, _, _, _, _, _, _, res, breakdown, _ = carry
-        return jnp.logical_and(jnp.logical_and(j < maxiter, res > atol), ~breakdown)
+        return carry[12] != DONE
 
     def arnoldi_loop(carry):
         # L A Z = C B + V H
-        j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr = carry
+        mode = carry[12]
+        j, V, Z, y = carry[0], carry[2], carry[3], carry[13]
+        is_arnoldi = mode == ARNOLDI
+        is_stabilize = mode == STABILIZE
+        is_final = mode == FINAL
+        outer = is_arnoldi & (j < lv)
+        zero = tree_map(jnp.zeros_like, v0)
 
-        def outer_v_iteration(j, nmv, V):
-            z = lax.cond(
-                j < lv,
-                lambda: tree_map(lambda x: x[..., j], outer_v),
-                lambda: rpsolve(v0),
+        def arnoldi_input():
+            vj = tree_map(lambda x, x0: jnp.where(j == lv, x0, x[..., j]), V, v0)
+            return vj, zero
+
+        def increment_input():
+            return _increment_parts(flexible, V, Z, y, j, lv, outer_v)
+
+        # elements that are done need neither, so they don't trigger the increment
+        pre, post = _cond_any(is_stabilize | is_final, increment_input, arnoldi_input)
+        # flexible increments are already Z y, so only Arnoldi steps precondition
+        need_rp = ~outer & (is_arnoldi | ((is_stabilize | is_final) & (not flexible)))
+        z = _add(_cond_any(need_rp, lambda v: rpsolve(v), lambda v: v, pre), post)
+        w = _cond_any(
+            ~outer & (is_arnoldi | is_stabilize),
+            lambda z: lpsolve(matvec(z)),
+            lambda z: zero,
+            z,
+        )
+        # Each step only updates the elements that are in its mode, so the steps can
+        # be applied in sequence, each skipped unless some element is in its mode.
+        # Unbatched, exactly one of them runs. The mode masks are taken before any
+        # step runs, so a step's mode transition doesn't trigger a later step.
+        steps = [
+            (is_arnoldi, arnoldi_step),
+            (is_stabilize, stabilize_step),
+            (is_final, final_step),
+        ]
+        for active, step in steps:
+            carry = lax.cond(
+                eqx.internal.unvmap_any(active),
+                step,
+                lambda carry, z, w, active: carry,
+                carry,
+                z,
+                w,
+                active,
             )
-            w = lax.cond(
-                j < lv,
-                lambda: tree_map(lambda x: x[..., j], outer_Av),
-                lambda: lpsolve(matvec(z)),
-            )
-            nmv = jnp.where(j < lv, nmv, nmv + 1)
-            return z, w, nmv
+        return carry
 
-        def regular_iteration(j, nmv, V):
-            v = tree_map(lambda x: x[..., j], V)  # Gets V[:, k]
-            z = rpsolve(v)
-            w = lpsolve(matvec(z))
-            nmv += 1
-            return z, w, nmv
-
-        z, w, nmv = lax.cond(j <= lv, outer_v_iteration, regular_iteration, j, nmv, V)
+    def arnoldi_step(carry, z, w, active):
+        (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = carry  # fmt: skip
+        outer = j < lv
+        z = tree_map(lambda x, zz: jnp.where(outer, x[..., j], zz), outer_v, z)
+        w = tree_map(lambda x, ww: jnp.where(outer, x[..., j], ww), outer_Av, w)
         _, w_norm = _safe_normalize(w)
 
         # GCROT projection: L A -> (1 - C C^H) L A
         # i.e. orthogonalize against C
         w, Bj = _gram_schmidt(C, w, lc, gs_method)
-        B = B.at[:, j].set(Bj)
-
         w, h = _gram_schmidt(V, w, j + 1, gs_method)
         unit_w, w_norm_1 = _safe_normalize(w, thresh=eps * w_norm)
-        V = tree_map(lambda X, y: X.at[..., j + 1].set(y), V, unit_w)
-        if flexible:
-            Z = tree_map(lambda X, y: X.at[..., j].set(y), Z, z)
         h = h.at[j + 1].set(w_norm_1.astype(dtype))
-        R = R.at[j, :].set(h)
-        H = H.at[j, :].set(h)
-
-        R_row, givens = _apply_givens_rotations(R[j, :], givens, j)
-        R = R.at[j, :].set(R_row)
-        beta_vec = _rotate_vectors(beta_vec, j, *givens[j, :])
-        res = abs(beta_vec[j + 1])
+        R_row, new_givens = _apply_givens_rotations(h, givens, j)
+        new_R = R.at[j, :].set(R_row)
+        new_beta_vec = _rotate_vectors(beta_vec, j, *new_givens[j, :])
+        new_res = abs(new_beta_vec[j + 1])
+        new_breakdown = h[j + 1] < eps * w_norm
 
         # Periodically replace the cheap recursive residual norm with the genuine one
-        def _true_res(res, nmv):
-            y_cur = jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
-            dx = _solution_increment(flexible, V, Z, y_cur, j + 1, rpsolve, lv, outer_v)
-            w, _ = _gram_schmidt(C, lpsolve(matvec(dx)), lc, gs_method)
-            return _norm(_sub(v0, w)), nmv + 1
-
         do_stab = (stabilize_every > 0) & (
             jnp.mod(j + 1, jnp.maximum(stabilize_every, 1)) == 0
         )
-        res, nmv = lax.cond(do_stab, _true_res, lambda res, nmv: (res, nmv), res, nmv)
-
-        res_arr = res_arr.at[j + 1].set(res)
-
         if verbose:
             _maybe_print(
-                jnp.logical_and(print_every < jnp.inf, jnp.mod(j, print_every) == 0),
+                active
+                & ~do_stab
+                & (print_every < jnp.inf)
+                & (jnp.mod(j, print_every) == 0),
                 j,
-                res * res_scale,
+                new_res * res_scale,
                 pre="    FGMRES  ",
             )
-        breakdown = H[j, j + 1] < eps * w_norm
+        cont = (j + 1 < maxiter) & (new_res > atol) & ~new_breakdown
+        new_mode = jnp.where(do_stab, STABILIZE, jnp.where(cont, ARNOLDI, finish))
+        # y is only read outside of Arnoldi steps
+        y = _cond_any(
+            active & (new_mode != ARNOLDI),
+            lambda: _lstsq_y(new_R, new_beta_vec),
+            lambda: y,
+        )
 
-        return j + 1, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr
+        # commit the step for active elements only, updating just the touched slices
+        def put(X, i, value):
+            return X.at[..., i].set(jnp.where(active, value, X[..., i]))
 
-    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr)
-    j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr = lax.while_loop(
-        arnoldi_cond, arnoldi_loop, carry
-    )
-    y = jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
+        V = tree_map(lambda X, u: put(X, j + 1, u), V, unit_w)
+        if flexible:
+            Z = tree_map(lambda X, u: put(X, j, u), Z, z)
+        B = put(B, j, Bj)
+        R = R.at[j, :].set(jnp.where(active, R_row, R[j, :]))
+        H = H.at[j, :].set(jnp.where(active, h, H[j, :]))
+        givens = jnp.where(active, new_givens, givens)
+        beta_vec = jnp.where(active, new_beta_vec, beta_vec)
+        res_arr = put(res_arr, j + 1, new_res)
+        res = jnp.where(active, new_res, res)
+        breakdown = jnp.where(active, new_breakdown, breakdown)
+        mode = jnp.where(active, new_mode, mode)
+        nmv = jnp.where(active & ~outer, nmv + 1, nmv)
+        j = jnp.where(active, j + 1, j)
+        return (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
+                mode, y, dx)  # fmt: skip
 
+    def stabilize_step(carry, z, w, active):
+        (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = carry  # fmt: skip
+        w, _ = _gram_schmidt(C, w, lc, gs_method)
+        new_res = _norm(_sub(v0, w))
+        if verbose:
+            _maybe_print(
+                active & (print_every < jnp.inf) & (jnp.mod(j - 1, print_every) == 0),
+                j - 1,
+                new_res * res_scale,
+                pre="    FGMRES  ",
+            )
+        cont = (j < maxiter) & (new_res > atol) & ~breakdown
+        res_arr = res_arr.at[j].set(jnp.where(active, new_res, res_arr[j]))
+        res = jnp.where(active, new_res, res)
+        nmv = jnp.where(active, nmv + 1, nmv)
+        mode = jnp.where(active, jnp.where(cont, ARNOLDI, finish), mode)
+        return (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
+                mode, y, dx)  # fmt: skip
+
+    def final_step(carry, z, w, active):
+        mode = jnp.where(active, DONE, carry[12])
+        dx = tree_map(lambda new, old: jnp.where(active, new, old), z, carry[14])
+        return (*carry[:12], mode, carry[13], dx)
+
+    cont0 = (maxiter > 0) & (res > atol)
+    mode = jnp.where(cont0, ARNOLDI, finish)
+    y = jnp.zeros(size, dtype=dtype)
+    dx = tree_map(jnp.zeros_like, v0)
+    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
+             mode, y, dx)  # fmt: skip
+    carry = lax.while_loop(arnoldi_cond, arnoldi_loop, carry)
+    j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr, _, _, dx = carry
+    y = _lstsq_y(R, beta_vec)
+
+    if return_increment:
+        return H, B, V, Z, y, j, nmv, res, breakdown, res_arr, dx
     return H, B, V, Z, y, j, nmv, res, breakdown, res_arr
 
 
@@ -541,6 +692,7 @@ def gcrotmk(
     flexible: bool = True,
     stabilize_every: ArrayLike = 10,
     throw: bool = False,
+    weights: PyTree[ArrayLike] | None = None,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -606,6 +758,13 @@ def gcrotmk(
         untouched. Default: 10; set to 0 to disable.
     throw : bool, optional
         If True, raise an error if the solver does not converge. Default: False.
+    weights : pytree of jax.Array, optional
+        Positive weights ``w`` with the same structure as ``b``. If given, all
+        residual norms (both the minimization and the convergence test) use
+        ``sqrt(sum(w * r**2))`` instead of the 2-norm, and ``rtol``/``atol`` and the
+        returned residual refer to this norm. Transposed solves (e.g. for
+        derivatives) use the dual weights ``1/w``. ``C`` is given and returned in
+        the unweighted residual space. Default: unweighted.
 
     Returns
     -------
@@ -648,19 +807,28 @@ def gcrotmk(
     if k is None:
         k = m
 
-    def _solve(A, b):
+    if weights is None:
+        sqrtw = sqrtw_t = None
+    else:
+        sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
+        sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
+
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, sqrtw, msg):
+        matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
+            matvec, b, lpsolve, rpsolve, sqrtw
+        )
         xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
-            A,
+            matvec,
             b,
             x,
-            ML.mv,
-            MR.mv,
+            lpsolve,
+            rpsolve,
             rtol,
             atol,
             maxiter,
             m,
             k,
-            C,
+            None if C is None else scale(C),
             U,
             verbose,
             print_every,
@@ -670,33 +838,23 @@ def gcrotmk(
             stabilize_every,
         )
         if throw:
-            xsol = eqx.error_if(xsol, ~success, "GCROT forward solve did not converge")
-        return xsol, (j, nmv, beta, success, Cnew, Unew)
+            xsol = eqx.error_if(xsol, ~success, msg)
+        return xsol, (j, nmv, beta, success, unscale(Cnew), Unew)
+
+    def _solve(A, b):
+        return _solve_weighted(
+            A, b, ML.mv, MR.mv, sqrtw, "GCROT forward solve did not converge"
+        )
 
     def _transpose_solve(At, b):
-        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
+        return _solve_weighted(
             At,
             b,
-            x,
             ML.transpose().mv,
             MR.transpose().mv,
-            rtol,
-            atol,
-            maxiter,
-            m,
-            k,
-            C,
-            U,
-            verbose,
-            print_every,
-            print_every_inner,
-            refine,
-            flexible,
-            stabilize_every,
+            sqrtw_t,
+            "GCROT tangent solve did not converge",
         )
-        if throw:
-            xsol = eqx.error_if(xsol, ~success, "GCROT tangent solve did not converge")
-        return xsol, (j, nmv, beta, success, Cnew, Unew)
 
     x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
@@ -797,7 +955,7 @@ def _gcrotmk_solve(
 
     U, C, nmv, lc, k = _gcrot_init_UC(U, C, x, matvec, k, nmv)
 
-    x, r, beta = lax.cond(
+    x, r, beta = _cond_any(
         lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
     )
     if verbose:
@@ -816,7 +974,7 @@ def _gcrotmk_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr = _fgmres(
+        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr, Zy = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -831,6 +989,7 @@ def _gcrotmk_solve(
             flexible=flexible,
             stabilize_every=stabilize_every,
             res_scale=inner_res_0 / b_norm,
+            return_increment=True,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -842,9 +1001,8 @@ def _gcrotmk_solve(
             jnp.maximum(eps, 0.25 * ptol_max_factor),
         )
 
-        # u := (Z - U B) y. gcrotmk passes no outer_v, so lv=0 inside _fgmres and
-        # Z[:, j] = M_R(V[:, j]) for every iteration that ran.
-        Zy = _solution_increment(flexible, V, Z, y, j_inner, rpsolve)
+        # u := (Z - U B) y. _fgmres returns Z y for the unscaled y.
+        Zy = _mul(inner_res_0, Zy)
         By = B @ y
         UBy = tree_map(lambda x: _dot(x, By), U)
         u = _sub(Zy, UBy)
@@ -875,7 +1033,7 @@ def _gcrotmk_solve(
         def _norefine(u, c, x, r, x1, r1, nmv, beta):
             return u, c, x1, r1, nmv, beta
 
-        u, c, x, r, nmv, beta = jax.lax.cond(
+        u, c, x, r, nmv, beta = _cond_any(
             refine & (beta1 > beta), _refine, _norefine, u, c, x, r, x1, r1, nmv, beta1
         )
 
@@ -930,6 +1088,7 @@ def lgmres(
     flexible: bool = True,
     stabilize_every: ArrayLike = 10,
     throw: bool = False,
+    weights: PyTree[ArrayLike] | None = None,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -1002,6 +1161,13 @@ def lgmres(
         untouched. Default: 10; set to 0 to disable.
     throw : bool, optional
         If True, raise an error if the solver does not converge. Default: False.
+    weights : pytree of jax.Array, optional
+        Positive weights ``w`` with the same structure as ``b``. If given, all
+        residual norms (both the minimization and the convergence test) use
+        ``sqrt(sum(w * r**2))`` instead of the 2-norm, and ``rtol``/``atol`` and the
+        returned residual refer to this norm. Transposed solves (e.g. for
+        derivatives) use the dual weights ``1/w``. ``outer_Av`` is given and
+        returned in the unweighted residual space. Default: unweighted.
 
     Returns
     -------
@@ -1055,20 +1221,29 @@ def lgmres(
     else:
         x = x0
 
-    def _solve(A, b):
+    if weights is None:
+        sqrtw = sqrtw_t = None
+    else:
+        sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
+        sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
+
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, sqrtw, msg):
+        matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
+            matvec, b, lpsolve, rpsolve, sqrtw
+        )
         xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
-            A,
+            matvec,
             b,
             x,
-            ML.mv,
-            MR.mv,
+            lpsolve,
+            rpsolve,
             rtol,
             atol,
             maxiter,
             m,
             k,
             outer_v,
-            outer_Av,
+            None if outer_Av is None else scale(outer_Av),
             verbose,
             print_every,
             print_every_inner,
@@ -1077,33 +1252,23 @@ def lgmres(
             stabilize_every,
         )
         if throw:
-            xsol = eqx.error_if(xsol, ~success, "LGMRES forward solve did not converge")
-        return xsol, (j, nmv, beta, success, ov, oAv)
+            xsol = eqx.error_if(xsol, ~success, msg)
+        return xsol, (j, nmv, beta, success, ov, unscale(oAv))
+
+    def _solve(A, b):
+        return _solve_weighted(
+            A, b, ML.mv, MR.mv, sqrtw, "LGMRES forward solve did not converge"
+        )
 
     def _transpose_solve(At, b):
-        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
+        return _solve_weighted(
             At,
             b,
-            x,
             ML.transpose().mv,
             MR.transpose().mv,
-            rtol,
-            atol,
-            maxiter,
-            m,
-            k,
-            outer_v,
-            outer_Av,
-            verbose,
-            print_every,
-            print_every_inner,
-            refine,
-            flexible,
-            stabilize_every,
+            sqrtw_t,
+            "LGMRES tangent solve did not converge",
         )
-        if throw:
-            xsol = eqx.error_if(xsol, ~success, "LGMRES tangent solve did not converge")
-        return xsol, (j, nmv, beta, success, ov, oAv)
 
     x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
         A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
@@ -1176,7 +1341,7 @@ def _lgmres_solve(
         v0 = _mul(1.0 / inner_res_0, v0)
         ptol = jnp.minimum(ptol_max_factor, tol / beta)
 
-        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr = _fgmres(
+        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr, dx = _fgmres(
             matvec,
             v0=v0,
             m=m,
@@ -1192,6 +1357,7 @@ def _lgmres_solve(
             flexible=flexible,
             stabilize_every=stabilize_every,
             res_scale=inner_res_0 / b_norm,
+            return_increment=True,
         )
         y *= inner_res_0
         nmv += nmv_inner
@@ -1204,8 +1370,8 @@ def _lgmres_solve(
         )
 
         # -- GMRES terminated: eval solution
-        # dx = Z y
-        dx = _solution_increment(flexible, V, Z, y, j_inner, rpsolve, lv, outer_v)
+        # dx = Z y; _fgmres returns it for the unscaled y.
+        dx = _mul(inner_res_0, dx)
         # ax = V H y
         ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
 
@@ -1232,7 +1398,7 @@ def _lgmres_solve(
         def _norefine(dx, ax, x, r, x1, r1, nmv, beta):
             return dx, ax, x1, r1, nmv, beta
 
-        dx, ax, x, r, nmv, beta = jax.lax.cond(
+        dx, ax, x, r, nmv, beta = _cond_any(
             refine & (beta1 > beta),
             _refine,
             _norefine,

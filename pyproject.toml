@@ -1,6 +1,93 @@
 [build-system]
-requires = [ "setuptools>=40.8.0", "wheel", "versioneer-518" ]
+requires = [
+  "setuptools>=77",
+  # versioneer itself is vendored as ./versioneer.py; tomli lets it read its
+  # [tool.versioneer] config from this file on Python < 3.11
+  "tomli>=1.2.0; python_version < '3.11'",
+]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "yancc"
+description = "Yet Another NeoClassical Code"
+readme = "README.rst"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [ { name = "Rory Conlin", email = "mail@fouriest.net" } ]
+keywords = [
+  "neoclassical",
+  "transport",
+  "stellarator",
+  "tokamak",
+  "plasma",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Natural Language :: English",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+  "equinox >= 0.11.0, < 0.14",
+  "interpax >= 0.3.3, < 0.4",
+  "jax >= 0.4.30, < 0.11",
+  "jaxtyping >= 0.2.24, < 0.4",
+  "lineax >= 0.0.6, < 0.2",
+  "netcdf4 >= 1.5.4, < 1.8",
+  "numpy >= 1.20.0, < 2.5",
+  "orthax < 0.3",
+  "quadax >= 0.2.2, < 0.3",
+  "scipy >= 1.7.0, < 1.18",
+]
+# version is computed from git by versioneer
+dynamic = [ "version" ]
+
+[project.optional-dependencies]
+dev = [
+  # benchmarks and analytic test oracles
+  "sympy",
+  "desc-opt <= 0.17.1",
+  "mpmath",
+  # building the docs
+  "sphinx >= 3.0.0, <= 9.1",
+  "sphinx_copybutton <= 0.5.2",
+  "sphinx-rtd-theme >= 1.0, <= 3.1",
+  "sphinx-github-style >= 1.0, <= 1.2.2",
+  # linting
+  "ruff == 0.15.14",
+  "pre-commit <= 4.5.1",
+  "pyright < 1.2",
+  # testing and benchmarking
+  "pytest >= 5.0.0, <= 9.0.3",
+  "pytest-cov >= 2.6, <= 7.1.0",
+  "pytest-split >= 0.8.2, <= 0.11",
+  # building
+  "build",
+]
+
+[project.urls]
+Homepage = "https://github.com/f0uriest/yancc"
+Documentation = "https://yancc.readthedocs.io/"
+"Source Code" = "https://github.com/f0uriest/yancc/"
+"Issues Tracker" = "https://github.com/f0uriest/yancc/issues"
+
+[tool.setuptools.packages.find]
+exclude = [ "docs*", "tests*", "local*", "benchmarks*", "publications*" ]
+
+[tool.versioneer]
+VCS = "git"
+style = "pep440"
+versionfile_source = "yancc/_version.py"
+versionfile_build = "yancc/_version.py"
+tag_prefix = "v"
+parentdir_prefix = "yancc-"
 
 [tool.pyright]
 include = [ "yancc/*.py", "tests/*.py" ]
@@ -40,3 +127,35 @@ convention = "numpy"
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
+
+[tool.pytest.ini_options]
+markers = [
+  "unit: marks small unit tests",
+  "regression: marks end to end regression tests",
+  "slow: marks tests as slow (deselect with 'pytest -m \"not slow\"').",
+  "fast: mark tests as fast.",
+]
+filterwarnings = [
+  "error",
+  "ignore::pytest.PytestUnraisableExceptionWarning",
+  # ignore benign Cython warnings on ndarray size
+  "ignore:numpy.ndarray size changed:RuntimeWarning",
+  # ignore benign ml_dtypes DeprecationWarning
+  "ignore::DeprecationWarning:ml_dtypes.*",
+]
+
+[tool.coverage.run]
+# we only care about the coverage of the source itself
+# otherwise it measures coverage of the tests themselves as well
+source = [ "yancc/" ]
+# _version.py is generated code, no need to count it
+omit = [ "yancc/_version.py" ]
+
+[tool.coverage.report]
+# Regexes for lines to exclude from consideration
+exclude_lines = [
+  # Have to re-enable the standard pragma
+  "pragma: no cover",
+  "if __name__ == .__main__.:",
+]
+ignore_errors = true

@@ -631,6 +631,15 @@ def test_solve_mdke_tokamak_axisymmetric():
     # Onsager symmetry D31 = -D13
     np.testing.assert_allclose(Dij_axi[2, 0], -Dij_axi[0, 2], rtol=1e-2, atol=1e-4)
 
+    # each stored (na, nt, nz) solution component solves its own drive term
+    A = yancc.trajectories.MDKE(field_axi, pitchgrid, erhohat, nuhat, gauge=True)
+    for i in range(3):
+        np.testing.assert_allclose(
+            A.mv(sol_axi.f[i].flatten()),
+            sol_axi.rhs[i].flatten(),
+            atol=1e-4 * float(np.linalg.norm(sol_axi.rhs[i])),
+        )
+
 
 def test_solve_dke_tokamak_axisymmetric():
     """Axisymmetric (tokamak) DKE: nzeta=1 reproduces a zeta-resolved solve.
