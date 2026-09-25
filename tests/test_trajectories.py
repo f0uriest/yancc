@@ -462,11 +462,14 @@ def test_abs_row_sum_trajectory_exact(
     np.testing.assert_allclose(op.abs_row_sum(), exact, rtol=1e-10, atol=1e-8)
 
 
-@pytest.mark.parametrize("axorder", ["sxatz", "tzasx", "atzsx", "xatzs"])
+@pytest.mark.parametrize(
+    "axorder, gauge",
+    [("sxatz", False), ("tzasx", True), ("atzsx", False), ("xatzs", True)],
+)
 def test_abs_row_sum_collision_exact(
-    axorder, field, pitchgrid, speedgrid, species2, potentials2
+    axorder, gauge, field, pitchgrid, speedgrid, species2, potentials2
 ):
-    """FokkerPlanckLandau.abs_row_sum matches |C| @ 1 exactly, for any axorder."""
+    """Collision operators' abs_row_sum matches |C| @ 1 exactly, for any axorder."""
     C = FokkerPlanckLandau(
         field,
         pitchgrid,
@@ -476,11 +479,18 @@ def test_abs_row_sum_collision_exact(
         potentials2,
         4,
         axorder,
+        gauge=gauge,
         operator_weights=jnp.array([1.0, 2.0, 3.0]),
     )
-    A = np.asarray(C.as_matrix())
-    exact = np.abs(A).sum(axis=1)
-    np.testing.assert_allclose(C.abs_row_sum(), exact, rtol=1e-9, atol=1e-7)
+    args = (field, pitchgrid, speedgrid, species2, potentials2, axorder, gauge)
+    ops = [C, C.CL, C.CE, C.CF, FieldPartCD(*args), FieldPartCG(*args)]
+    ops += [FieldPartCH(*args)]
+    for op in ops:
+        A = np.asarray(op.as_matrix())
+        exact = np.abs(A).sum(axis=1)
+        np.testing.assert_allclose(
+            op.abs_row_sum(), exact, rtol=1e-9, atol=1e-7, err_msg=type(op).__name__
+        )
 
 
 # Span regimes where advection (~Erho) and collisions (~density) dominate in turn,

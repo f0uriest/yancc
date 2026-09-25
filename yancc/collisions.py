@@ -570,6 +570,25 @@ class RosenbluthPotentials(eqx.Module):
         return jax.grad(self._dI_4)(x, l, k)
 
 
+def _velocity_abs_row_sum(op, block, gauge_value):
+    """Row L1 norms of a collision operator from its velocity-space block."""
+    # Collision operators are local in (theta, zeta) and their velocity-space block
+    # is identical at every spatial point, so the row L1 norms depend only on the
+    # (species, speed, pitch) coordinates and are broadcast across the spatial grid.
+    # The gauge rows are replaced by a single diagonal entry.
+    ns, nx, na = block.shape[:3]
+    nt, nz = op.field.ntheta, op.field.nzeta
+    rsum = jnp.abs(block).sum(axis=(3, 4, 5))
+    df = jnp.broadcast_to(rsum[:, :, :, None, None], (ns, nx, na, nt, nz))
+    idxa = na // 2
+    idxx = op.speedgrid.gauge_idx
+    gval = jnp.where(op.gauge, jnp.abs(gauge_value), df[:, idxx, idxa, 0, 0])
+    df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
+    _, caxorder = _parse_axorder_shape_4d(nt, nz, na, nx, ns, op.axorder)
+    df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
+    return df.flatten()
+
+
 class PitchAngleScattering(AbstractDKEOperator):
     """Diffusion operator in pitch angle direction.
 
@@ -698,6 +717,21 @@ class PitchAngleScattering(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
         df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
+
+    @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        return _velocity_abs_row_sum(self, *self._velocity_block())
+
+    def _velocity_block(self):
+        # Velocity-space block, shape (ns, nx, na, ns, nx, na) with output indices
+        # first, and the coefficient that replaces the gauge rows.
+        ns, nx = len(self.species), self.speedgrid.nx
+        block = jnp.einsum(
+            "su,xv,sx,ab->sxauvb", jnp.eye(ns), jnp.eye(nx), -self.nus / 2, self._D
+        )
+        return block, self._scale
 
     @eqx.filter_jit
     @jax.named_scope("PitchAngleScattering.block_diagonal")
@@ -953,6 +987,19 @@ class EnergyScattering(AbstractDKEOperator):
         out = out.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
         out = jnp.moveaxis(out, (0, 1, 2, 3, 4), caxorder)
         return -out.flatten()
+
+    @eqx.filter_jit
+    @jax.named_scope("EnergyScattering.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        return _velocity_abs_row_sum(self, *self._velocity_block())
+
+    def _velocity_block(self):
+        # Velocity-space block, shape (ns, nx, na, ns, nx, na) with output indices
+        # first, and the coefficient that replaces the gauge rows.
+        ns, na = len(self.species), self.pitchgrid.nalpha
+        block = jnp.einsum("su,ab,syv->syauvb", jnp.eye(ns), jnp.eye(na), -self._M)
+        return block, -self._scale
 
     @eqx.filter_jit
     @jax.named_scope("EnergyScattering.block_diagonal")
@@ -1438,6 +1485,18 @@ class FieldPartCD(AbstractDKEOperator):
         return _field_part_cd_diagonal(self, self.C, self._scale)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldPartCD.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        return _velocity_abs_row_sum(self, *self._velocity_block())
+
+    def _velocity_block(self):
+        # Velocity-space block, shape (ns, nx, na, ns, nx, na) with output indices
+        # first, and the coefficient that replaces the gauge rows.
+        block = jnp.einsum("psyx,ab->pyasxb", self.C, jnp.eye(self.pitchgrid.nalpha))
+        return -block, -self._scale
+
+    @eqx.filter_jit
     @jax.named_scope("FieldPartCD.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None):
         """Block diagonal of operator as (N,M,M) array."""
@@ -1569,6 +1628,18 @@ class FieldPartCG(AbstractDKEOperator):
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         return _field_part_gh_diagonal(self, self._Ghat, self._scale)
+
+    @eqx.filter_jit
+    @jax.named_scope("FieldPartCG.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        return _velocity_abs_row_sum(self, *self._velocity_block())
+
+    def _velocity_block(self):
+        # Velocity-space block, shape (ns, nx, na, ns, nx, na) with output indices
+        # first, and the coefficient that replaces the gauge rows.
+        block = jnp.einsum("al,psxlk,lb->pxaskb", self.Txi, self._Ghat, self.Txi_inv)
+        return -block, -self._scale
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCG.block_diagonal")
@@ -1713,6 +1784,18 @@ class FieldPartCH(AbstractDKEOperator):
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         return _field_part_gh_diagonal(self, self._Hhat, self._scale)
+
+    @eqx.filter_jit
+    @jax.named_scope("FieldPartCH.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        return _velocity_abs_row_sum(self, *self._velocity_block())
+
+    def _velocity_block(self):
+        # Velocity-space block, shape (ns, nx, na, ns, nx, na) with output indices
+        # first, and the coefficient that replaces the gauge rows.
+        block = jnp.einsum("al,psxlk,lb->pxaskb", self.Txi, self._Hhat, self.Txi_inv)
+        return -block, -self._scale
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCH.block_diagonal")
@@ -1889,6 +1972,19 @@ class FieldParticleScattering(AbstractDKEOperator):
         ) + _field_part_cd_diagonal(self, self.C, self._scale_D)
 
     @eqx.filter_jit
+    @jax.named_scope("FieldParticleScattering.abs_row_sum")
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+        return _velocity_abs_row_sum(self, *self._velocity_block())
+
+    def _velocity_block(self):
+        # Velocity-space block, shape (ns, nx, na, ns, nx, na) with output indices
+        # first, and the coefficient that replaces the gauge rows.
+        gh = jnp.einsum("al,psxlk,lb->pxaskb", self.Txi, self._GHhat, self.Txi_inv)
+        cd = jnp.einsum("psyx,ab->pyasxb", self.C, jnp.eye(self.pitchgrid.nalpha))
+        return -(gh + cd), -(self._scale_GH + self._scale_D)
+
+    @eqx.filter_jit
     @jax.named_scope("FieldParticleScattering.block_diagonal")
     def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
@@ -2036,59 +2132,20 @@ class FokkerPlanckLandau(AbstractDKEOperator):
     @jax.named_scope("FokkerPlanckLandau.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        # The collision operator is local in (theta, zeta) and its velocity-space
-        # block is identical at every spatial point, so the row L1 norm depends
-        # only on the (species, speed, pitch) coordinates.  We build that single
-        # ``(ns*nx*na, ns*nx*na)`` block once, take its abs row sum, and broadcast
-        # the result across the spatial grid (axorder-agnostic).  CL/CE/CF are
-        # summed *before* taking absolute values so entries they share (e.g. CF
-        # overlaps CL in pitch and CE in speed) are not double counted.
+        return _velocity_abs_row_sum(self, *self._velocity_block())
 
-        # The gauge row (a single modified row per species, at one spatial point)
-        # is not special-cased here; this uses the generic interior block, which
-        # is exact when ``gauge`` is False.
-        ns = len(self.species)
-        nx = self.speedgrid.nx
-        na = self.pitchgrid.nalpha
+    def _velocity_block(self):
+        # CL/CE/CF are summed *before* taking absolute values so entries they share
+        # (e.g. CF overlaps CL in pitch and CE in speed) are not double counted.
         w = self.operator_weights
-        eye_s = jnp.eye(ns)
-        eye_x = jnp.eye(nx)
-        eye_a = jnp.eye(na)
-
-        # CL: -nus/2 * D, diagonal in (species, speed), couples pitch
-        cl = jnp.einsum(
-            "su,xv,sx,ab->sxauvb", eye_s, eye_x, -self.CL.nus / 2, self.CL._D
-        )
-        # CE: -M, diagonal in (species, pitch), couples speed
-        ce = jnp.einsum("su,ab,syv->syauvb", eye_s, eye_a, -self.CE._M)
-        # CF: -(GH + CD); dense in (speed, pitch), couples species
-        gh = jnp.einsum(
-            "Al,psxlk,lB->psxAkB", self.CF.Txi, self.CF._GHhat, self.CF.Txi_inv
-        )
-        cd = jnp.einsum("psyx,ab->psyaxb", self.CF.C, eye_a)
-        # both land as (out_s, in_s, out_x, out_a, in_x, in_a); reorder to
-        # (out_s, out_x, out_a, in_s, in_x, in_a) to match CL/CE.
-        cf = jnp.transpose(-(gh + cd), (0, 2, 3, 1, 4, 5))
-
-        block = w[0] * cl + w[1] * ce + w[2] * cf
-        rsum = jnp.abs(block).sum(axis=(3, 4, 5))  # (ns, nx, na)
-
-        # broadcast the (theta, zeta)-independent velocity row sums onto the
-        # full grid and lay them out in the requested axorder.
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            ns,
-            self.axorder,
-        )
-        df = jnp.broadcast_to(
-            rsum[:, :, :, None, None],
-            (ns, nx, na, self.field.ntheta, self.field.nzeta),
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        return df.flatten()
+        parts = [
+            self.CL._velocity_block(),
+            self.CE._velocity_block(),
+            self.CF._velocity_block(),
+        ]
+        block = sum(wi * b for wi, (b, _) in zip(w, parts))
+        gauge_value = sum(wi * g for wi, (_, g) in zip(w, parts))
+        return block, gauge_value
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.block_diagonal")
