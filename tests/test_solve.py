@@ -600,7 +600,13 @@ def test_solve_dke_ambipolar(field, pitchgrid, speedgrid, species2):
         )
     with pytest.raises(ValueError):
         solve_dke_ambipolar(
-            field, pitchgrid, speedgrid, species2, 1, bounds=bounds, scale="foo"
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            1,
+            bounds=bounds,
+            scale="foo",  # pyright: ignore[reportArgumentType]
         )
     with pytest.raises(RuntimeError, match="positive"):
         solve_dke_ambipolar(

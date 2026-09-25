@@ -593,9 +593,9 @@ def test_verify_collision_null_single_species(dummy_field):
 
     es = np.linalg.eigvals(C.as_matrix())
     # should have purely real eigvals
-    np.testing.assert_allclose(es.imag, 0, atol=1e-7)
+    np.testing.assert_allclose(np.imag(es), 0, atol=1e-7)
     # should all be positive, within fudge factor for zeros
-    np.testing.assert_array_less(-1e-14 * es.real.max(), es.real)
+    np.testing.assert_array_less(-1e-14 * np.real(es).max(), np.real(es))
     # should have a null space of dimension 3*nt*nz
     # maxwellian, v*maxwellian, v^2*maxwellian
     assert sum(np.abs(es) < 1e-14 * np.max(np.abs(es))) == 3 * nt * nz

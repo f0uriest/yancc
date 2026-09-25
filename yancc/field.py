@@ -1,6 +1,8 @@
 """Magnetic field data structures."""
 
 import functools
+import os
+from typing import Any
 
 import equinox as eqx
 import interpax
@@ -259,7 +261,13 @@ class Field(eqx.Module):
         )
 
     @classmethod
-    def from_vmec(cls, wout, rho: Float[ArrayLike, ""], ntheta: int, nzeta: int):
+    def from_vmec(
+        cls,
+        wout: str | os.PathLike,
+        rho: Float[ArrayLike, ""],
+        ntheta: int,
+        nzeta: int,
+    ) -> "Field":
         """Construct Field from VMEC equilibrium.
 
         Parameters
@@ -350,7 +358,7 @@ class Field(eqx.Module):
     @classmethod
     def from_booz_xform(
         cls,
-        booz: str,
+        booz: str | os.PathLike,
         rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
@@ -447,7 +455,7 @@ class Field(eqx.Module):
     @classmethod
     def from_ipp_bc(
         cls,
-        path: str,
+        path: str | os.PathLike,
         rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
@@ -533,7 +541,7 @@ class Field(eqx.Module):
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
         source: FieldSource = FieldSource.boozer,
-    ):
+    ) -> "Field":
         """Construct a field in Boozer coordinates.
 
         Parameters
@@ -629,7 +637,16 @@ class Field(eqx.Module):
         )
 
 
-def vmec_eval(t, z, xc, xs, m, n, dt=0, dz=0):
+def vmec_eval(
+    t: ArrayLike,
+    z: ArrayLike,
+    xc: ArrayLike,
+    xs: ArrayLike,
+    m: ArrayLike,
+    n: ArrayLike,
+    dt: ArrayLike = 0,
+    dz: ArrayLike = 0,
+) -> Array:
     """Evaluate a vmec style double-fourier series.
 
     eg sum_mn xc*cos(m*t-n*z) + xs*sin(m*t-n*z)
@@ -795,8 +812,8 @@ def _combine_surf_data(surf_data, global_data):
     return all_data
 
 
-def read_bc(path):
-    """Read an IPP boozer.bc file as a dict of ndarray."""
+def read_bc(path: str | os.PathLike) -> dict[str, Any]:
+    """Read an IPP boozer.bc file as a dict of global scalars and per-surface arrays."""
     lines = open(path).readlines()
     lines = _strip_comments(lines)
     global_data, lines = _read_globals(lines)

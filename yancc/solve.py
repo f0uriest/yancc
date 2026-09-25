@@ -2,7 +2,7 @@
 
 import copy
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import jax
@@ -621,7 +621,7 @@ def solve_dke_ambipolar(  # noqa: C901
     multigrid_options: dict | None = None,
     throw: bool = False,
     reuse_preconditioner: bool = False,
-    scale: str | float = "auto",
+    scale: Literal["auto"] | float | jax.Array = "auto",
     adaptive_rtol: bool = True,
     root_options: dict | None = None,
     **options,

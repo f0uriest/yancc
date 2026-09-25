@@ -3,7 +3,7 @@
 import operator
 from collections.abc import Callable
 from functools import partial
-from typing import cast
+from typing import Any, cast
 
 import equinox as eqx
 import jax
@@ -903,8 +903,12 @@ def gcrotmk(
             "GCROT tangent solve did not converge",
         )
 
-    x, (j_outer, nmv, res, success, C, U) = jax.lax.custom_linear_solve(
-        A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+    # custom_linear_solve is unannotated and pyright can infer NoReturn for it
+    x, (j_outer, nmv, res, success, C, U) = cast(
+        Any,
+        jax.lax.custom_linear_solve(
+            A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+        ),
     )
     return x, j_outer, nmv, res, success, C, U
 
@@ -1391,8 +1395,12 @@ def lgmres(
             "LGMRES tangent solve did not converge",
         )
 
-    x, (j_outer, nmv, res, success, outer_v, outer_Av) = jax.lax.custom_linear_solve(
-        A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+    # custom_linear_solve is unannotated and pyright can infer NoReturn for it
+    x, (j_outer, nmv, res, success, outer_v, outer_Av) = cast(
+        Any,
+        jax.lax.custom_linear_solve(
+            A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+        ),
     )
     return x, j_outer, nmv, res, success, outer_v, outer_Av
 

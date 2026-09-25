@@ -88,6 +88,9 @@ Documentation = "https://yancc.readthedocs.io/"
 [tool.setuptools.packages.find]
 exclude = [ "docs*", "tests*", "local*", "benchmarks*", "publications*" ]
 
+[tool.setuptools.package-data]
+yancc = [ "py.typed" ]
+
 [tool.versioneer]
 VCS = "git"
 style = "pep440"
@@ -101,7 +104,9 @@ include = [ "yancc/*.py", "tests/*.py" ]
 exclude = [
   "yancc/_version.py",
   "versioneer.py",
-  "docs/conf.py",
+  "setup.py",
+  "docs/*",
+  "build/*",
   "local/*",
   "*/.ipynb_checkpoints/*"
 ]

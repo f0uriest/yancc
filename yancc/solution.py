@@ -1,6 +1,7 @@
 """Solution objects and computation of output moments."""
 
 import re
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -52,7 +53,13 @@ def clean_units(s: str) -> str:
     return out.strip()
 
 
-def register_mdke_output(name, label, units, description, dim):
+def register_mdke_output(
+    name: str,
+    label: str,
+    units: str,
+    description: str,
+    dim: tuple[int | str, ...],
+) -> Callable[[Callable], Callable]:
     """Decorator to wrap a function and add it to the list of things we can compute.
 
     Parameters
@@ -66,8 +73,8 @@ def register_mdke_output(name, label, units, description, dim):
         Units of the quantity in LaTeX format.
     description : str
         Description of the quantity.
-    dim : int
-        Size of output array
+    dim : tuple of int or str
+        Shape of the output array, as sizes or names of grid dimensions.
     """
 
     def _decorator(func):
@@ -84,7 +91,13 @@ def register_mdke_output(name, label, units, description, dim):
     return _decorator
 
 
-def register_dke_output(name, label, units, description, dim):
+def register_dke_output(
+    name: str,
+    label: str,
+    units: str,
+    description: str,
+    dim: tuple[int | str, ...],
+) -> Callable[[Callable], Callable]:
     """Decorator to wrap a function and add it to the list of things we can compute.
 
     Parameters
@@ -98,8 +111,8 @@ def register_dke_output(name, label, units, description, dim):
         Units of the quantity in LaTeX format.
     description : str
         Description of the quantity.
-    dim : int
-        Size of output array
+    dim : tuple of int or str
+        Shape of the output array, as sizes or names of grid dimensions.
     """
 
     def _decorator(func):
@@ -218,14 +231,13 @@ class DKESolution(eqx.Module):
         sources = jnp.nan_to_num(sources, nan=0.0).flatten()
         return jnp.concatenate([f1, sources])
 
-    def get(self, qty, **kwargs):
+    def get(self, qty: str, **kwargs) -> jax.Array:
         """Compute desired moments of the solution.
 
         Parameters
         ----------
         qty : str
-            Quantity to compute. Currently only "Dij" is supported, to return the
-            monoenergetic transport coefficients.
+            Quantity to compute, one of ``qtys_list()``.
 
         Returns
         -------
@@ -304,7 +316,7 @@ class MDKESolution(eqx.Module):
         self.nuhat = nuhat
         self.erhohat = erhohat
 
-    def get(self, qty, **kwargs):
+    def get(self, qty: str, **kwargs) -> jax.Array:
         """Compute desired moments of the solution.
 
         Parameters

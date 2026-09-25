@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 import orthax
 from jax import config
+from jax.typing import ArrayLike
 
 # need this here as well so that const default_xrec uses 64 bit
 config.update("jax_enable_x64", True)
@@ -144,7 +145,7 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
         Normalized speed being considered.
     """
 
-    def __init__(self, x: jax.Array):
+    def __init__(self, x: ArrayLike):
         x = jnp.asarray(x)
         assert x.size == 1
         self.nx = 1
@@ -161,17 +162,13 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
 class MaxwellSpeedGrid(AbstractSpeedGrid):
     r"""Grid for speed variable :math:`x = v/v_{th}`.
 
-    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, x_{max}]` with the
-    weight function :math:`x^k \exp(-x^2)`
+    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, \infty)` with the
+    weight function :math:`\exp(-x^2)`
 
     Parameters
     ----------
     nx : int
         Number of grid points.
-    k : int, optional
-        Power of x in weight function
-    xmax : float, optional
-        Upper bound for orthogonality inner product.
 
     """
 
@@ -187,7 +184,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     D2x_pseudospectral: jax.Array
     gauge_idx: jax.Array
 
-    def __init__(self, nx, **kwargs):
+    def __init__(self, nx: int):
         assert nx >= 2, "MaxwellSpeedGrid requires nx >= 2"
         self.nx = nx
         if nx < 20:
@@ -248,12 +245,11 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         self.D2x = jax.jacfwd(_d2xfun)(self.x)
         self.D2x_pseudospectral = self.xvander @ self.D2x @ self.xvander_inv
 
-        gauge_idx = kwargs.get("gauge_idx", None)
-        if gauge_idx is None:
-            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
-        self.gauge_idx = jnp.sort(gauge_idx)
+        # the equations at these points are replaced to fix the gauge freedom in
+        # density and energy
+        self.gauge_idx = jnp.sort(jnp.argsort(jnp.abs(x - 1))[:2])
 
-    def resample(self, nx):
+    def resample(self, nx: int) -> "MaxwellSpeedGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nx)
 
@@ -281,7 +277,7 @@ class LegendrePitchAngleGrid(eqx.Module):
     Dxi_pseudospectral: jax.Array
     L: jax.Array
 
-    def __init__(self, nalpha):
+    def __init__(self, nalpha: int):
         self.nalpha = nalpha
         self.xirec = orthax.recurrence.Legendre()
         self.xi, self.wxi = orthax.orthgauss(nalpha, self.xirec)
@@ -300,7 +296,7 @@ class LegendrePitchAngleGrid(eqx.Module):
         # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv
 
-    def resample(self, nalpha):
+    def resample(self, nalpha: int) -> "LegendrePitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
 
@@ -322,7 +318,7 @@ class UniformPitchAngleGrid(eqx.Module):
     xi: jax.Array
     wxi: jax.Array
 
-    def __init__(self, nalpha):
+    def __init__(self, nalpha: int):
         self.nalpha = nalpha
         alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False)
         alpha += jnp.pi / (2 * nalpha)
@@ -345,6 +341,6 @@ class UniformPitchAngleGrid(eqx.Module):
         wxi = jnp.fft.ifft(beta)
         self.wxi = wxi.real
 
-    def resample(self, nalpha):
+    def resample(self, nalpha: int) -> "UniformPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)

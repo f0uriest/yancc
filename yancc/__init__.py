@@ -22,3 +22,20 @@ from .solve import solve_dke, solve_dke_ambipolar, solve_mdke
 config.update("jax_enable_x64", True)
 
 __version__ = _version.get_versions()["version"]
+
+__all__ = [
+    "__version__",
+    "collisions",
+    "field",
+    "krylov",
+    "linalg",
+    "misc",
+    "multigrid",
+    "smoothers",
+    "solve_dke",
+    "solve_dke_ambipolar",
+    "solve_mdke",
+    "species",
+    "trajectories",
+    "velocity_grids",
+]

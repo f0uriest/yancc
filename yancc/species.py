@@ -205,7 +205,7 @@ def collisionality(
     maxwellian_a: LocalMaxwellian,
     v: ArrayLike,
     *others: LocalMaxwellian,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Collisionality between species a and others.
 
@@ -236,7 +236,7 @@ def nuD_ab(
     maxwellian_a: LocalMaxwellian,
     maxwellian_b: LocalMaxwellian,
     v: ArrayLike,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Pairwise collision freq. for species a colliding with species b at velocity v.
 
@@ -266,7 +266,7 @@ def nuD_ab(
 def gamma_ab(
     maxwellian_a: LocalMaxwellian,
     maxwellian_b: LocalMaxwellian,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Prefactor for pairwise collisionality."""
     if lnlambda is None:
@@ -280,7 +280,7 @@ def nupar_ab(
     maxwellian_a: LocalMaxwellian,
     maxwellian_b: LocalMaxwellian,
     v: ArrayLike,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Parallel collisionality."""
     v = jnp.asarray(v)
@@ -374,7 +374,7 @@ def chandrasekhar(x: ArrayLike) -> jax.Array:
     )
 
 
-def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
+def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0) -> jax.Array:
     """Normalized gyroradius ρ* = ρ/a.
 
     Parameters
@@ -393,7 +393,9 @@ def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     return rhostar
 
 
-def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0):
+def Estar(
+    species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0
+) -> jax.Array:
     """Normalized electric field E* = E_r /(v <B>).
 
     Parameters
@@ -415,7 +417,7 @@ def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike 
 
 def poloidal_mach(
     species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0
-):
+) -> jax.Array:
     """Poloidal Mach number M_p = ω_E /ω_transit.
 
     Ratio of the E×B poloidal rotation frequency to the parallel-streaming
@@ -454,8 +456,8 @@ def nustar(
     field: Field,
     x: ArrayLike = 1.0,
     *others: LocalMaxwellian,
-    lnlambda=None,
-):
+    lnlambda: ArrayLike | None = None,
+) -> jax.Array:
     """Normalized collisionality ν* = ν R₀ /(v ι).
 
     Parameters
