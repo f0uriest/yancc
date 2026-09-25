@@ -147,8 +147,8 @@ class Field(eqx.Module):
         ) / self.sqrtg
         self.Bmag_fsa = self.flux_surface_average(self.Bmag)
         self.B2mag_fsa = self.flux_surface_average(self.Bmag**2)
-        self.I = self.flux_surface_average(self.B_sub_t)
-        self.G = self.flux_surface_average(self.B_sub_z)
+        self.I = self.B_sub_t.mean()
+        self.G = self.B_sub_z.mean()
         # Psi, iota, R_major and a_minor don't enter the solve (only diagnostics,
         # printing and output scaling), so recover them from the field geometry
         # when not supplied. Psi and iota come out (essentially) exactly since
