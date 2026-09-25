@@ -221,12 +221,6 @@ Cycle and smoothing
 DKE-only multigrid options
 --------------------------
 
-``smooth_type`` *(int, default 1)*
-   Selects between two structurally different smoothers for the DKE
-   preconditioner. ``1`` is the default; ``2`` uses a different block
-   factorization that occasionally helps for multiple species at high collisionality,
-   at the cost of significantly more memory.
-
 ``operator_weights``, ``smoother_weights``
    As above for the operator. The preconditioner defaults to the same
    weights as the main operator but allows them to be specified

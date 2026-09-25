@@ -141,12 +141,6 @@ class AbstractDKEOperator(AbstractYanccOperator):
             f"abs_row_sum is not implemented for {type(self).__name__}"
         )
 
-    def block_diagonal2(self) -> jax.Array:
-        """Block diagonal of the operator as an (N, M, M) array, unfolding s and x."""
-        raise NotImplementedError(
-            f"block_diagonal2 is not implemented for {type(self).__name__}"
-        )
-
 
 class BorderedOperator(lx.AbstractLinearOperator):
     """Operator for a bordered matrix.

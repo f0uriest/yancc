@@ -41,22 +41,3 @@ def test_preconditioner_interface(field, species1, build):
 
     AT = np.asarray(op.transpose().as_matrix())
     np.testing.assert_allclose(AT, A.T, atol=1e-2 * np.abs(A).max())
-
-
-def test_dke_preconditioner_smooth_type2(field, species1):
-    """smooth_type=2 builds the Jacobi-2 smoothers instead of the default."""
-    pitchgrid = UniformPitchAngleGrid(5)
-    speedgrid = MaxwellSpeedGrid(2)
-    potentials = RosenbluthPotentials(speedgrid, species1)
-    op = DKEPreconditioner(
-        field,
-        pitchgrid,
-        speedgrid,
-        species1,
-        100.0,
-        None,
-        potentials,
-        smooth_type=2,
-    )
-    A = np.asarray(op.as_matrix())
-    assert A.shape == (op.out_structure().shape[0], op.in_structure().shape[0])

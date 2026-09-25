@@ -1,6 +1,5 @@
 """Drift Kinetic Operators without collisions."""
 
-import functools
 import itertools
 
 import equinox as eqx
@@ -23,7 +22,7 @@ from .linalg import (
     dense_to_banded,
 )
 from .species import LocalMaxwellian
-from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _refold
+from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import (
     AbstractSpeedGrid,
     MaxwellSpeedGrid,
@@ -933,58 +932,6 @@ class DKETheta(AbstractDKEOperator):
             df = banded_to_dense(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKETheta.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
-            )
-        if self.axorder[2] == "z":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
-
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
-        fd = self._fd
-        bd = self._bd
-        Is = jnp.eye(len(self.species))
-        Ix = jnp.eye(self.speedgrid.nx)
-
-        ff = functools.reduce(jnp.kron, [fd, Is, Ix])
-        bb = functools.reduce(jnp.kron, [bd, Is, Ix])
-
-        w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
-        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
-        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(*shape, self.field.ntheta, len(self.species), self.speedgrid.nx)
-        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nalpha // 2
-        idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        N = self.in_size()
-        M = self.field.ntheta * len(self.species) * self.speedgrid.nx
-        return df.reshape(N // M, M, M)
-
 
 class DKEZeta(AbstractDKEOperator):
     """Advection operator in zeta direction.
@@ -1221,58 +1168,6 @@ class DKEZeta(AbstractDKEOperator):
             df = banded_to_dense(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKEZeta.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
-            )
-        if self.axorder[2] == "t":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
-        fd = self._fd
-        bd = self._bd
-        Is = jnp.eye(len(self.species))
-        Ix = jnp.eye(self.speedgrid.nx)
-
-        ff = functools.reduce(jnp.kron, [fd, Is, Ix])
-        bb = functools.reduce(jnp.kron, [bd, Is, Ix])
-
-        w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
-        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
-        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(*shape, self.field.nzeta, len(self.species), self.speedgrid.nx)
-        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nalpha // 2
-        idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        N = self.in_size()
-        M = self.field.nzeta * len(self.species) * self.speedgrid.nx
-        return df.reshape(N // M, M, M)
-
 
 class DKEPitch(AbstractDKEOperator):
     """Advection operator in pitch angle direction.
@@ -1502,58 +1397,6 @@ class DKEPitch(AbstractDKEOperator):
             df = banded_to_dense(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKEPitch.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "t":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        if self.axorder[2] == "z":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
-
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
-        fd = self._fd
-        bd = self._bd
-        Is = jnp.eye(len(self.species))
-        Ix = jnp.eye(self.speedgrid.nx)
-
-        ff = functools.reduce(jnp.kron, [fd, Is, Ix])
-        bb = functools.reduce(jnp.kron, [bd, Is, Ix])
-
-        w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
-        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
-        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(
-            *shape, self.pitchgrid.nalpha, len(self.species), self.speedgrid.nx
-        )
-        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nalpha // 2
-        idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        N = self.in_size()
-        M = self.pitchgrid.nalpha * len(self.species) * self.speedgrid.nx
-        return df.reshape(N // M, M, M)
-
 
 class DKESpeed(AbstractDKEOperator):
     """Advection operator in speed direction.
@@ -1778,23 +1621,6 @@ class DKESpeed(AbstractDKEOperator):
             df = dense_to_banded(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKESpeed.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
-            )
-        elif self.axorder[2] == "t":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        elif self.axorder[2] == "z":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
-        else:
-            # unreachable, just kept to appease type checker
-            raise ValueError()  # pragma: no cover
-
 
 class DKE(AbstractDKEOperator):
     """Drift Kinetic Equation operator.
@@ -2010,31 +1836,5 @@ class DKE(AbstractDKEOperator):
             lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal(fmt, bw),
             lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal(fmt, bw),
             lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal(fmt, bw),
-        ]
-        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
-
-    @eqx.filter_jit
-    @jax.named_scope("DKE.block_diagonal2")
-    def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
-        """Block diagonal of operator as (N,M,M) array."""
-        sizes = {
-            "s": len(self.species),
-            "x": self.speedgrid.nx,
-            "a": self.pitchgrid.nalpha,
-            "t": self.field.ntheta,
-            "z": self.field.nzeta,
-        }
-        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
-        n1 = np.prod(list(sizes.values())) // n2
-        x = self.operator_weights[-1] * jnp.broadcast_to(jnp.eye(n2), (n1, n2, n2))
-        intermediates = [
-            lambda x: x + self.operator_weights[0] * self._opx.block_diagonal2(),
-            lambda x: x + self.operator_weights[1] * self._opa.block_diagonal2(),
-            lambda x: x + self.operator_weights[2] * self._opt.block_diagonal2(),
-            lambda x: x + self.operator_weights[3] * self._opz.block_diagonal2(),
-            # could just call C.diagonal() but we prefer to flatten those extra loops
-            lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal2(),
-            lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal2(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal2(),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)

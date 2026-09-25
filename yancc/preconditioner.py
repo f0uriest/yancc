@@ -14,7 +14,6 @@ from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
 from .linalg import AbstractYanccOperator, InverseLinearOperator, dense_from_mv
 from .multigrid import (
     MultigridOperator,
-    get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     get_dke_operators,
     get_fields_grids,
@@ -305,7 +304,6 @@ class DKEPreconditioner(MultigridOperator):
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
-        smooth_type = options.pop("smooth_type", 1)
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -336,41 +334,22 @@ class DKEPreconditioner(MultigridOperator):
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
         )
-        if smooth_type == 1:
-            smoothers = get_dke_jacobi_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                coulomb_log=coulomb_log,
-            )
-        else:
-            smoothers = get_dke_jacobi2_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                coulomb_log=coulomb_log,
-                **options,
-            )
+        smoothers = get_dke_jacobi_smoothers(
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            Erho=Erho,
+            background=background,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            smooth_solver=smooth_solver,
+            weight=smooth_weights,
+            operator_weights=smoother_weights,
+            coulomb_log=coulomb_log,
+        )
         # The direct solve on the coarsest grid needs the operator as a dense matrix.
         # Building it a chunk of columns at a time keeps peak memory near the size of
         # the matrix itself, rather than that times the number of intermediates in a

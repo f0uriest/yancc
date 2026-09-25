@@ -39,13 +39,6 @@ def _parse_axorder_shape_4d(
     return tuple(shape), caxorder
 
 
-def _refold(a, k):
-    N, M, _ = a.shape
-    a = a.reshape((N // k, k, M, M))
-    # TODO: make this better
-    return jax.vmap(lambda x: jax.scipy.linalg.block_diag(*x))(a)
-
-
 ### misc utils
 
 
