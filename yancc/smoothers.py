@@ -270,16 +270,18 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        self.bandwidth = max(
-            fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+        sizes = {
+            "a": self.pitchgrid.nalpha,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        # the band can't be wider than the axis it lies along
+        self.bandwidth = min(
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+            sizes[self.axorder[-1]] // 2,
         )
         assert smooth_solver in {None, "banded", "cr", "dense"}
         if smooth_solver is None:
-            sizes = {
-                "a": self.pitchgrid.nalpha,
-                "t": self.field.ntheta,
-                "z": self.field.nzeta,
-            }
             # use cr solver once it actually saves memory. For the s/x axes bw = dim//2,
             # so 6*bw+1 >= dim keeps them dense.
             if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
@@ -461,23 +463,23 @@ class DKEJacobiSmoother(AbstractYanccOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        if self.axorder[-1] == "s":
-            self.bandwidth = len(self.species) // 2
-        elif self.axorder[-1] == "x":
-            self.bandwidth = self.speedgrid.nx // 2
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nalpha,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        if self.axorder[-1] in "sx":
+            self.bandwidth = sizes[self.axorder[-1]] // 2
         else:
-            self.bandwidth = max(
-                fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+            # the band can't be wider than the axis it lies along
+            self.bandwidth = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                sizes[self.axorder[-1]] // 2,
             )
         assert smooth_solver in {None, "banded", "cr", "dense"}
         if smooth_solver is None:
-            sizes = {
-                "s": len(self.species),
-                "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nalpha,
-                "t": self.field.ntheta,
-                "z": self.field.nzeta,
-            }
             # use cr solver once it actually saves memory. For the s/x axes bw = dim//2,
             # so 6*bw+1 >= dim keeps them dense.
             if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
