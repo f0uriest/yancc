@@ -16,9 +16,19 @@ from jax import scipy as jsp
 from jax.tree_util import tree_leaves, tree_map
 from jaxtyping import Array, ArrayLike, Float, Int, PyTree
 
+from .utils import safediv
+
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
 _vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)
 _einsum = partial(jnp.einsum, precision=lax.Precision.HIGHEST)
+
+
+def _norm(x: PyTree[Array], axis=None) -> jax.Array:
+    xs = tree_leaves(x)
+    return jnp.linalg.norm(
+        jnp.array(list(map(lambda y: jnp.linalg.norm(y, axis=axis), xs))), axis=axis
+    )
+
 
 ########
 # this stuff is from jax,
@@ -28,22 +38,6 @@ _einsum = partial(jnp.einsum, precision=lax.Precision.HIGHEST)
 # used under the apache license:
 #     https://www.apache.org/licenses/LICENSE-2.0
 ########
-
-
-def _vdot_real_part(x, y):
-    """Vector dot-product guaranteed to have a real valued result despite
-    possibly complex input. Thus neglects the real-imaginary cross-terms.
-    The result is a real float.
-    """
-    result = _vdot(x.real, y.real)
-    if jnp.iscomplexobj(x) or jnp.iscomplexobj(y):
-        result += _vdot(x.imag, y.imag)
-    return result
-
-
-def _norm(x):
-    xs = tree_leaves(x)
-    return jnp.sqrt(sum(map(_vdot_real_part, xs, xs)))
 
 
 def _tree_vdot(x, y):
@@ -70,9 +64,9 @@ def _safe_normalize(x, thresh=None):
         thresh = jnp.finfo(norm.dtype).eps
     thresh = thresh.astype(dtype).real
 
-    use_norm = norm > thresh
-    normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, 0.0), x)
-    norm = jnp.where(use_norm, norm, 0.0)
+    use_norm = jnp.array(norm > thresh)
+    normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, jnp.array(0.0)), x)
+    norm = jnp.where(use_norm, norm, jnp.array(0.0))
     return normalized_x, norm
 
 
@@ -163,6 +157,35 @@ def _roll_prepend(X: jax.Array, y: jax.Array) -> jax.Array:
 
 def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
     return x
+
+
+def _matvec_columns(matvec, X):
+    """Apply a linear matvec to each column (last axis) of every leaf of X.
+
+    Returns the result and the number of matvecs applied. Columns that are zero map
+    to zero without applying matvec.
+    """
+    # Mapping matvec over all columns at once with vmap makes every intermediate
+    # array inside the matvec as wide as X, which for an operator with many large
+    # intermediates costs several times the memory of X itself. Applying it to one
+    # column at a time bounds the extra memory at a single matvec's working set.
+    ncol = tree_leaves(X)[0].shape[-1]
+    col = tree_map(lambda x: x[..., 0], X)
+    out_struct = jax.eval_shape(matvec, col)
+    Y = tree_map(lambda s: jnp.zeros((*s.shape, ncol), dtype=s.dtype), out_struct)
+
+    def zero(x):
+        return tree_map(lambda s: jnp.zeros(s.shape, dtype=s.dtype), out_struct)
+
+    def body(i, carry):
+        Y, count = carry
+        x = tree_map(lambda x: x[..., i], X)
+        nonzero = jnp.any(jnp.array([jnp.any(leaf != 0) for leaf in tree_leaves(x)]))
+        y = _cond_any(nonzero, lambda x: matvec(x), zero, x)
+        Y = tree_map(lambda Y, y: Y.at[..., i].set(y), Y, y)
+        return Y, count + nonzero
+
+    return lax.fori_loop(0, ncol, body, (Y, jnp.array(0)))
 
 
 def _maybe_print(flag, j, res, pre=""):
@@ -447,8 +470,8 @@ def _fgmres(  # noqa: C901
     assert lv is not None
 
     if outer_Av is None:
-        outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
-        nmv += lv
+        outer_Av, nmv_Av = _matvec_columns(matvec, outer_v)
+        nmv += nmv_Av
 
     if C is None:
         assert lc is None, "if C is None, lc must also be None"
@@ -515,12 +538,12 @@ def _fgmres(  # noqa: C901
         return jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
 
     def arnoldi_cond(carry):
-        return carry[12] != DONE
+        return carry[0][10] != DONE
 
     def arnoldi_loop(carry):
         # L A Z = C B + V H
-        mode = carry[12]
-        j, V, Z, y = carry[0], carry[2], carry[3], carry[13]
+        state, V, Z = carry
+        j, mode, y = state[0], state[10], state[11]
         is_arnoldi = mode == ARNOLDI
         is_stabilize = mode == STABILIZE
         is_final = mode == FINAL
@@ -549,26 +572,44 @@ def _fgmres(  # noqa: C901
         # be applied in sequence, each skipped unless some element is in its mode.
         # Unbatched, exactly one of them runs. The mode masks are taken before any
         # step runs, so a step's mode transition doesn't trigger a later step.
+        #
+        # The bases V and Z are only read inside the steps, which return the new
+        # columns, and are written here outside of any lax.cond. If the bases were
+        # outputs of a cond, XLA may be unable to alias the branch outputs to the
+        # input buffers (it doesn't on GPU), and then copies the full basis every
+        # iteration, doubling its peak memory.
         steps = [
             (is_arnoldi, arnoldi_step),
             (is_stabilize, stabilize_step),
             (is_final, final_step),
         ]
+        cols = (zero, zero)
         for active, step in steps:
-            carry = lax.cond(
+            state, cols = lax.cond(
                 eqx.internal.unvmap_any(active),
                 step,
-                lambda carry, z, w, active: carry,
-                carry,
+                lambda state, cols, V, z, w, active: (state, cols),
+                state,
+                cols,
+                V,
                 z,
                 w,
                 active,
             )
-        return carry
 
-    def arnoldi_step(carry, z, w, active):
-        (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
-         dx) = carry  # fmt: skip
+        # commit the Arnoldi step's columns for Arnoldi elements only
+        def put(X, i, value):
+            return X.at[..., i].set(jnp.where(is_arnoldi, value, X[..., i]))
+
+        v_col, z_col = cols
+        V = tree_map(lambda X, u: put(X, j + 1, u), V, v_col)
+        if flexible:
+            Z = tree_map(lambda X, u: put(X, j, u), Z, z_col)
+        return state, V, Z
+
+    def arnoldi_step(state, cols, V, z, w, active):
+        (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = state  # fmt: skip
         outer = j < lv
         z = tree_map(lambda x, zz: jnp.where(outer, x[..., j], zz), outer_v, z)
         w = tree_map(lambda x, ww: jnp.where(outer, x[..., j], ww), outer_Av, w)
@@ -613,9 +654,6 @@ def _fgmres(  # noqa: C901
         def put(X, i, value):
             return X.at[..., i].set(jnp.where(active, value, X[..., i]))
 
-        V = tree_map(lambda X, u: put(X, j + 1, u), V, unit_w)
-        if flexible:
-            Z = tree_map(lambda X, u: put(X, j, u), Z, z)
         B = put(B, j, Bj)
         R = R.at[j, :].set(jnp.where(active, R_row, R[j, :]))
         H = H.at[j, :].set(jnp.where(active, h, H[j, :]))
@@ -627,12 +665,13 @@ def _fgmres(  # noqa: C901
         mode = jnp.where(active, new_mode, mode)
         nmv = jnp.where(active & ~outer, nmv + 1, nmv)
         j = jnp.where(active, j + 1, j)
-        return (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
-                mode, y, dx)  # fmt: skip
+        state = (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode,
+                 y, dx)  # fmt: skip
+        return state, (unit_w, z)
 
-    def stabilize_step(carry, z, w, active):
-        (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
-         dx) = carry  # fmt: skip
+    def stabilize_step(state, cols, V, z, w, active):
+        (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = state  # fmt: skip
         w, _ = _gram_schmidt(C, w, lc, gs_method)
         new_res = _norm(_sub(v0, w))
         if verbose:
@@ -647,22 +686,23 @@ def _fgmres(  # noqa: C901
         res = jnp.where(active, new_res, res)
         nmv = jnp.where(active, nmv + 1, nmv)
         mode = jnp.where(active, jnp.where(cont, ARNOLDI, finish), mode)
-        return (j, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
-                mode, y, dx)  # fmt: skip
+        state = (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode,
+                 y, dx)  # fmt: skip
+        return state, cols
 
-    def final_step(carry, z, w, active):
-        mode = jnp.where(active, DONE, carry[12])
-        dx = tree_map(lambda new, old: jnp.where(active, new, old), z, carry[14])
-        return (*carry[:12], mode, carry[13], dx)
+    def final_step(state, cols, V, z, w, active):
+        mode = jnp.where(active, DONE, state[10])
+        dx = tree_map(lambda new, old: jnp.where(active, new, old), z, state[12])
+        return (*state[:10], mode, state[11], dx), cols
 
     cont0 = (maxiter > 0) & (res > atol)
     mode = jnp.where(cont0, ARNOLDI, finish)
     y = jnp.zeros(size, dtype=dtype)
     dx = tree_map(jnp.zeros_like, v0)
-    carry = (0, nmv, V, Z, B, R, H, givens, beta_vec, res, breakdown, res_arr,
-             mode, y, dx)  # fmt: skip
-    carry = lax.while_loop(arnoldi_cond, arnoldi_loop, carry)
-    j, nmv, V, Z, B, R, H, _, beta_vec, res, breakdown, res_arr, _, _, dx = carry
+    state = (0, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+             dx)  # fmt: skip
+    state, V, Z = lax.while_loop(arnoldi_cond, arnoldi_loop, (state, V, Z))
+    j, nmv, B, R, H, _, beta_vec, res, breakdown, res_arr, _, _, dx = state
     y = _lstsq_y(R, beta_vec)
 
     if return_increment:
@@ -813,7 +853,7 @@ def gcrotmk(
         sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
         sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
 
-    def _solve_weighted(matvec, b, lpsolve, rpsolve, sqrtw, msg):
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, C, U, sqrtw, msg):
         matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
             matvec, b, lpsolve, rpsolve, sqrtw
         )
@@ -843,15 +883,22 @@ def gcrotmk(
 
     def _solve(A, b):
         return _solve_weighted(
-            A, b, ML.mv, MR.mv, sqrtw, "GCROT forward solve did not converge"
+            A, b, ML.mv, MR.mv, C, U, sqrtw, "GCROT forward solve did not converge"
         )
 
     def _transpose_solve(At, b):
+        # The recycled pair must satisfy C = A U for the operator being solved, which
+        # the projection and the re-orthogonalization of U both rely on. The pair built
+        # for A doesn't satisfy it for A^T (nor does the pair with C and U exchanged,
+        # which would need A^T A U = U), so the transposed system is solved without
+        # recycling rather than with vectors that would corrupt its residuals.
         return _solve_weighted(
             At,
             b,
             ML.transpose().mv,
             MR.transpose().mv,
+            None,
+            None,
             sqrtw_t,
             "GCROT tangent solve did not converge",
         )
@@ -880,8 +927,8 @@ def _gcrot_init_UC(
         lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
         k = max(k, lc)
         if C is None:
-            C = jax.vmap(matvec, in_axes=1, out_axes=1)(U)
-            nmv += lc
+            C, nmv_C = _matvec_columns(matvec, U)
+            nmv += nmv_C
         C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
         # re-orthogonalize old vectors
         c = tree_map(lambda x: x[..., 0], C)
@@ -891,15 +938,28 @@ def _gcrot_init_UC(
         )(C)
 
         Q, R, P = jsp.linalg.qr(Carr, mode="economic", pivoting=True)
-        C = jax.vmap(unflatten, in_axes=1, out_axes=1)(Q)
         #   AUP = CP = Q R
         #   U' = U P R^-1
         tol = jnp.finfo(R.dtype).eps * jnp.abs(R[0, 0]) * max(Q.shape)
         mask = jnp.abs(jnp.diag(R)) > tol
-        U = tree_map(
-            lambda x: jsp.linalg.solve_triangular(R.T, x[:, P].T, lower=True).T, U
-        )
-        U = tree_map(lambda x: jnp.where(mask, x, 0), U)
+        # Columns of Q beyond the rank of C are orthonormal but not the image of
+        # anything in U, so they are dropped from both. Leaving them in C would let the
+        # projection onto C remove parts of the residual that x never accounts for, so
+        # the residual would no longer be b - A x and could even look converged.
+        # Pivoting puts the dropped columns last, so R^-1 D only involves the leading,
+        # well conditioned block of R. The dropped pivots, which can be exactly zero,
+        # are replaced by one so the solve for the zero columns of D stays finite.
+        D = jnp.diag(mask.astype(R.dtype))
+        R = R + jnp.diag(jnp.where(mask, 0, 1 - jnp.diag(R)))
+        # The permutation, R^-1 and the dropped columns are combined into one small
+        # matrix, so that U' and C' are each a single product with the large arrays.
+        # Applying them separately would need a gather and a masking step, which XLA
+        # may fuse into later uses of U' and C', keeping the unmasked factors alive
+        # to recompute them for as long as U' and C' are needed.
+        Rinv_D = jax.lax.linalg.triangular_solve(R, D, left_side=True, lower=False)
+        M = jnp.zeros_like(Rinv_D).at[P].set(Rinv_D)
+        U = tree_map(lambda x: _dot(x, M), U)
+        C = jax.vmap(unflatten, in_axes=1, out_axes=1)(_dot(Q, D))
         # pad to full size
         U = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), U)
         C = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), C)
@@ -912,7 +972,7 @@ def _gcrot_initial_projection(x, r, beta, U, C):
     # Solve first the projection operation with respect to the C, U matrices
     #   y = argmin_y || b - A (x + U y) ||^2 = C^H (b - A x)
     #   x' = x + U y
-    y = jax.vmap(lambda x: _tree_vdot(x, r), in_axes=1)(C)
+    y = sum(tree_leaves(tree_map(lambda c, r: _einsum("nk,n->k", c.conj(), r), C, r)))
     x = _add(x, tree_map(lambda x: _dot(x, y), U))
     r = _sub(r, tree_map(lambda x: _dot(x, y), C))
     beta = _norm(r)
@@ -955,24 +1015,34 @@ def _gcrotmk_solve(
 
     U, C, nmv, lc, k = _gcrot_init_UC(U, C, x, matvec, k, nmv)
 
-    x, r, beta = _cond_any(
-        lc > 0, _gcrot_initial_projection, lambda *args: args[:3], x, r, beta, U, C
-    )
+    # Unused columns of U and C are zero, so the projection is a no-op without
+    # recycled vectors, and it is cheap enough to do unconditionally. Passing U and C
+    # into a lax.cond instead lets XLA give them a different layout inside the branch
+    # (it does on GPU), which costs a transposed copy of each that stays live for as
+    # long as U and C themselves.
+    x, r, beta = _gcrot_initial_projection(x, r, beta, U, C)
     if verbose:
-        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="GCROT  ")
+        _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="GCROT  ")
+
+    # Recycled vectors are written into a free column, or over the oldest one once
+    # all k are in use, rather than shifting the others along to make room. A shift
+    # can't be done in place, so it would allocate new copies of U and C every outer
+    # iteration. age records the order the columns were added in, and the supplied
+    # columns count as older than any new ones, with the first the most recent.
+    age = -jnp.arange(k)
 
     def gcrotmk_cond(carry):
-        j_outer, _, _, _, beta, _, _, _, _ = carry
+        j_outer, _, _, _, beta, _, _, _, _, _ = carry
         return jnp.logical_and(j_outer < maxiter, beta > tol)
 
     def gcmotmk_loop(carry):
-        j_outer, nmv, x, r, beta, C, U, lc, ptol_max_factor = carry
+        j_outer, nmv, x, r, beta, C, U, lc, age, ptol_max_factor = carry
 
         v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
 
-        v0 = _mul(1.0 / inner_res_0, v0)
-        ptol = jnp.minimum(ptol_max_factor, tol / beta)
+        v0 = _mul(safediv(jnp.array(1.0), inner_res_0, fill=jnp.array(1.0)), v0)
+        ptol = jnp.minimum(ptol_max_factor, safediv(tol, beta, jnp.array(1.0)))
 
         H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr, Zy = _fgmres(
             matvec,
@@ -1039,9 +1109,12 @@ def _gcrotmk_solve(
 
         # Normalize cx, maintaining cx = A ux
         # This new cx is orthogonal to the previous C, by construction
-        alpha = 1 / _norm(c)
-        U = tree_map(_roll_prepend, U, _mul(alpha, u))
-        C = tree_map(_roll_prepend, C, _mul(alpha, c))
+        alpha = safediv(jnp.array(1.0), _norm(c))
+        # the first lc columns are the ones in use, so fill in order until all are
+        slot = jnp.where(lc < k, lc, jnp.argmin(age))
+        U = tree_map(lambda X, y: X.at[:, slot].set(y), U, _mul(alpha, u))
+        C = tree_map(lambda X, y: X.at[:, slot].set(y), C, _mul(alpha, c))
+        age = age.at[slot].set(j_outer + 1)
         lc = jnp.minimum(lc + 1, k)
 
         if verbose:
@@ -1050,20 +1123,54 @@ def _gcrotmk_solve(
                     print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
                 ),
                 j_outer + 1,
-                beta / b_norm,
+                safediv(beta, b_norm),
                 pre="GCROT  ",
             )
-        return j_outer + 1, nmv, x, r, beta, C, U, lc, ptol_max_factor
+        return j_outer + 1, nmv, x, r, beta, C, U, lc, age, ptol_max_factor
 
-    carry = (0, nmv, x, r, beta, C, U, lc, ptol_max_factor)
+    carry = (0, nmv, x, r, beta, C, U, lc, age, ptol_max_factor)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
-    j_outer, nmv, x, r, beta, C, U, _, _ = carry
+    j_outer, nmv, x, r, beta, C, U, _, age, _ = carry
     success = beta <= tol
-    # Include the solution vector to the span
-    U = tree_map(_roll_prepend, U, x)
-    C = tree_map(_roll_prepend, C, _sub(b, r))
+    # Include the solution vector to the span, returning the columns newest first
+    # and dropping the oldest to make room.
+    order = jnp.argsort(-age)[:-1]
+    U = tree_map(lambda X, y: jnp.concatenate([y[:, None], X[:, order]], axis=1), U, x)
+    C = tree_map(
+        lambda X, y: jnp.concatenate([y[:, None], X[:, order]], axis=1),
+        C,
+        _sub(b, r),
+    )
 
     return x, (j_outer, nmv, beta, success, C, U)
+
+
+def _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv):
+    if outer_v is None:
+        assert outer_Av is None
+        lv = 0
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+    else:  # outer_v provided
+        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
+        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
+        if outer_Av is None:
+            outer_Av, nmv_Av = _matvec_columns(matvec, outer_v)
+            nmv += nmv_Av
+        # pad to full size
+        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
+        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+    # An augmentation vector is used as a basis vector together with its image, so a
+    # zero column would put a zero vector in the basis and break the inner iteration.
+    # A solve returns fewer vectors than were asked for whenever the space it built
+    # was smaller, so the columns actually carrying a vector are counted and moved to
+    # the front, and the rest are left out of the count.
+    mask = _norm(outer_v, axis=0) > 0
+    lv = jnp.sum(mask)
+    idx = jnp.argsort(mask, descending=True)
+    outer_v = tree_map(lambda x: x[:, idx], outer_v)
+    outer_Av = tree_map(lambda x: x[:, idx], outer_Av)
+    return outer_v, outer_Av, lv, nmv
 
 
 @eqx.filter_jit
@@ -1227,7 +1334,7 @@ def lgmres(
         sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
         sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
 
-    def _solve_weighted(matvec, b, lpsolve, rpsolve, sqrtw, msg):
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, outer_v, outer_Av, sqrtw, msg):
         matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
             matvec, b, lpsolve, rpsolve, sqrtw
         )
@@ -1257,15 +1364,29 @@ def lgmres(
 
     def _solve(A, b):
         return _solve_weighted(
-            A, b, ML.mv, MR.mv, sqrtw, "LGMRES forward solve did not converge"
+            A,
+            b,
+            ML.mv,
+            MR.mv,
+            outer_v,
+            outer_Av,
+            sqrtw,
+            "LGMRES forward solve did not converge",
         )
 
     def _transpose_solve(At, b):
+        # The augmentation vectors are used as a basis together with their images
+        # outer_Av = A outer_v, which are substituted for the operator application
+        # rather than recomputed. Those images are wrong for A^T, so the transposed
+        # system is solved without augmentation rather than with a basis whose Arnoldi
+        # relation doesn't hold.
         return _solve_weighted(
             At,
             b,
             ML.transpose().mv,
             MR.transpose().mv,
+            None,
+            None,
             sqrtw_t,
             "LGMRES tangent solve did not converge",
         )
@@ -1310,22 +1431,9 @@ def _lgmres_solve(
     nmv = 1
     beta = _norm(r)
     if verbose:
-        _maybe_print(print_every < jnp.inf, 0, beta / b_norm, pre="LGMRES  ")
+        _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="LGMRES  ")
 
-    if outer_v is None:
-        assert outer_Av is None
-        lv = 0
-        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
-        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
-    else:  # outer_v provided
-        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
-        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
-        if outer_Av is None:
-            outer_Av = jax.vmap(matvec, in_axes=1, out_axes=1)(outer_v)
-            nmv += lv
-        # pad to full size
-        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
-        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+    outer_v, outer_Av, lv, nmv = _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv)
 
     def lgmres_cond(carry):
         j_outer, nmv, x, r, beta, _, _, _, _ = carry
@@ -1338,8 +1446,8 @@ def _lgmres_solve(
         v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
 
-        v0 = _mul(1.0 / inner_res_0, v0)
-        ptol = jnp.minimum(ptol_max_factor, tol / beta)
+        v0 = _mul(safediv(jnp.array(1.0), inner_res_0, fill=jnp.array(1.0)), v0)
+        ptol = jnp.minimum(ptol_max_factor, safediv(tol, beta, fill=jnp.array(1.0)))
 
         H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr, dx = _fgmres(
             matvec,
@@ -1414,8 +1522,9 @@ def _lgmres_solve(
 
         # -- Store LGMRES augmentation vectors
         nx = _norm(dx)
-        outer_v = tree_map(_roll_prepend, outer_v, _mul(1 / nx, dx))
-        outer_Av = tree_map(_roll_prepend, outer_Av, _mul(1 / nx, ax))
+        nxinv = safediv(jnp.array(1.0), nx)
+        outer_v = tree_map(_roll_prepend, outer_v, _mul(nxinv, dx))
+        outer_Av = tree_map(_roll_prepend, outer_Av, _mul(nxinv, ax))
         lv = jnp.minimum(lv + 1, k)
 
         if verbose:
@@ -1424,7 +1533,7 @@ def _lgmres_solve(
                     print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
                 ),
                 j_outer + 1,
-                beta / b_norm,
+                safediv(beta, b_norm),
                 pre="LGMRES  ",
             )
 

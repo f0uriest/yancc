@@ -3,6 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from yancc.field import Field
 
@@ -31,7 +32,10 @@ def _compare_fields_local(field1, field2):
 
 def test_field_types():
     """Test solving the MDKE with the same field in different formats."""
-    import desc  # pyright: ignore[reportMissingImports]
+    # desc imports its submodules lazily, so import one that needs jax to check
+    # that the installed desc is compatible
+    pytest.importorskip("desc.equilibrium")
+    import desc.io  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
 

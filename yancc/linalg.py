@@ -1,18 +1,75 @@
 """Linear algebra helpers."""
 
+import abc
 import functools
-from typing import Any, cast
+from typing import cast
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Array, Float
+
+from .field import Field
+from .velocity_grids import UniformPitchAngleGrid
 
 
 def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
     # need this bc type checkers are stuuuuuupid
     return jnp.where(a, b, c)
+
+
+def dense_from_mv(mv, n, chunk=None):
+    """Materialize a linear operator by applying it to the columns of the identity.
+
+    Parameters
+    ----------
+    mv : callable
+        Matrix vector product of the operator.
+    n : int
+        Size of the operator.
+    chunk : int, optional
+        Number of columns to map over at a time. Default maps over all columns at
+        once.
+    """
+    # Mapping over all n columns at once makes every intermediate array inside the
+    # matvec n times larger, so peak memory is set by the working set of the matvec
+    # rather than by the n x n result, which for operators with many intermediates
+    # is an order of magnitude more. Mapping over chunks of columns bounds the
+    # intermediates at chunk x n and gives the same matrix.
+    x = jnp.eye(n)
+    if chunk is None or chunk >= n:
+        return jax.vmap(mv)(x).T
+    return jax.lax.map(mv, x, batch_size=chunk).T
+
+
+def _ruiz_scale(A, iters=5):
+    """Row and column equilibration factors for a dense matrix.
+
+    Returns ``(r, c)`` such that ``r[:, None] * A * c[None, :]`` has all row and
+    column maxima close to 1.
+    """
+    # Ruiz iteration: repeatedly divide each row and column by the square root of
+    # its largest magnitude entry. Unlike a single row scaling this also balances
+    # columns, which matters for multi-species operators where rows and columns of
+    # light species are orders of magnitude larger than those of heavy species.
+    # Partial pivoting LU has backward error ~eps*max|A|, so without balancing the
+    # large entries set an error floor that swamps the directions where the heavy
+    # species are nearly singular.
+    absA = jnp.abs(A)
+
+    def body(_, rc):
+        r, c = rc
+        scaled = r[:, None] * absA * c[None, :]
+        rmax = scaled.max(axis=1)
+        cmax = scaled.max(axis=0)
+        r = r * _where(rmax > 0, 1 / jnp.sqrt(rmax), jnp.ones_like(rmax))
+        c = c * _where(cmax > 0, 1 / jnp.sqrt(cmax), jnp.ones_like(cmax))
+        return r, c
+
+    ones = jnp.ones(A.shape[0], dtype=A.dtype)
+    return jax.lax.fori_loop(0, iters, body, (ones, ones))
 
 
 def _banded_row_scale(p, q, A, periodic):
@@ -46,6 +103,82 @@ def _scale_banded_rows(p, q, A, s, periodic):
     i_linear = j_idx + r_idx - q
     i_dense = i_linear % n if periodic else jnp.clip(i_linear, 0, n - 1)
     return A * s[i_dense]
+
+
+class AbstractYanccOperator(lx.AbstractLinearOperator):
+    """Base class for yancc linear operators.
+
+    Subclasses must implement ``mv`` and ``in_structure``. By default the operator
+    is square, is materialized by applying it to the columns of the identity, and
+    is transposed with ``jax.linear_transpose``.
+    """
+
+    def as_matrix(self):
+        """Materialize the operator as a dense matrix."""
+        return dense_from_mv(self.mv, self.in_size())
+
+    def out_structure(self):
+        """Pytree structure of expected output."""
+        return self.in_structure()
+
+    def transpose(self):
+        """Transpose of the operator."""
+        return TransposedLinearOperator(self)
+
+
+@lx.is_symmetric.register(AbstractYanccOperator)
+@lx.is_diagonal.register(AbstractYanccOperator)
+@lx.is_tridiagonal.register(AbstractYanccOperator)
+@lx.is_positive_semidefinite.register(AbstractYanccOperator)
+@lx.is_negative_semidefinite.register(AbstractYanccOperator)
+def _(operator):
+    return False
+
+
+class AbstractDKEOperator(AbstractYanccOperator):
+    """Base class for operators acting on a discretized distribution function.
+
+    Operators with ``speedgrid`` and ``species`` act on the full distribution
+    function of shape ``(ns, nx, na, nt, nz)``, others act on a single
+    ``(species, speed)`` slice of shape ``(na, nt, nz)``, flattened in both cases.
+    """
+
+    field: eqx.AbstractVar[Field]
+    pitchgrid: eqx.AbstractVar[UniformPitchAngleGrid]
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        n = self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha
+        # MDKE operators may carry a speedgrid for a single speed but never species,
+        # so the species determine whether the speed and species axes are present.
+        species = getattr(self, "species", None)
+        if species is not None:
+            n *= getattr(self, "speedgrid").nx * len(species)
+        return jax.ShapeDtypeStruct((n,), dtype=self.field.Bmag.dtype)
+
+    @abc.abstractmethod
+    def diagonal(self) -> Float[Array, " nf"]:
+        """Diagonal of the operator as a 1d array."""
+
+    @abc.abstractmethod
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
+
+    @abc.abstractmethod
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+        """Block diagonal of the operator.
+
+        Blocks are along the last axis of ``axorder``.
+
+        Parameters
+        ----------
+        fmt : {"dense", "banded"}
+            Return the blocks as dense ``(N, M, M)`` matrices, or in banded storage
+            as ``(N, 2*bw+1, M)``.
+        bw : int, optional
+            Lower and upper bandwidth of the banded storage. Defaults to a
+            bandwidth that holds all nonzero entries of the blocks.
+        """
 
 
 class BorderedOperator(lx.AbstractLinearOperator):
@@ -199,12 +332,18 @@ class TransposedLinearOperator(lx.AbstractLinearOperator):
 @lx.is_symmetric.register(InverseBorderedOperator)
 @lx.is_diagonal.register(InverseBorderedOperator)
 @lx.is_tridiagonal.register(InverseBorderedOperator)
+@lx.is_positive_semidefinite.register(InverseBorderedOperator)
+@lx.is_negative_semidefinite.register(InverseBorderedOperator)
 @lx.is_symmetric.register(BorderedOperator)
 @lx.is_diagonal.register(BorderedOperator)
 @lx.is_tridiagonal.register(BorderedOperator)
+@lx.is_positive_semidefinite.register(BorderedOperator)
+@lx.is_negative_semidefinite.register(BorderedOperator)
 @lx.is_symmetric.register(TransposedLinearOperator)
 @lx.is_diagonal.register(TransposedLinearOperator)
 @lx.is_tridiagonal.register(TransposedLinearOperator)
+@lx.is_positive_semidefinite.register(TransposedLinearOperator)
+@lx.is_negative_semidefinite.register(TransposedLinearOperator)
 def _(operator):
     return False
 
@@ -270,45 +409,53 @@ def _tridiag_solve(l, d, u, b, *args):
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
 
 
-class InverseLinearOperator(lx.AbstractLinearOperator):
-    """Inverse of another linear operator."""
+class DenseLUInverseOperator(lx.AbstractLinearOperator):
+    """Inverse of a dense matrix, via its LU factorization.
 
-    operator: lx.AbstractLinearOperator
-    solver: lx.AbstractLinearSolver
-    static_state: object = eqx.field(static=True)
-    dynamic_state: object
-    options: Any
-    throw: bool = eqx.field(static=True)
+    Parameters
+    ----------
+    matrix : jax.Array
+        Square matrix to invert.
+    equilibrate : bool
+        Whether to balance the rows and columns of the matrix before factoring it.
+        This does not change the inverse, but improves its accuracy for badly scaled
+        matrices.
+    """
 
-    def __init__(
-        self,
-        operator: lx.AbstractLinearOperator,
-        solver: lx.AbstractLinearSolver = lx.AutoLinearSolver(well_posed=True),
-        options=None,
-        throw=True,
-    ):
-        if options is None:
-            options = {}
-        self.operator = operator
-        self.solver = solver
-        state = solver.init(operator, options)
-        dynamic_state, static_state = eqx.partition(state, eqx.is_array)
-        dynamic_state = jax.lax.stop_gradient(dynamic_state)
-        self.static_state = static_state
-        self.dynamic_state = dynamic_state
-        self.options = options
-        self.throw = throw
+    _luT: jax.Array
+    _perm: jax.Array
+    _r: jax.Array
+    _c: jax.Array
+
+    def __init__(self, matrix: jax.Array, equilibrate: bool = True):
+        if equilibrate:
+            r, c = _ruiz_scale(matrix)
+            matrix = r[:, None] * matrix * c[None, :]
+        else:
+            r = c = jnp.ones(matrix.shape[0], dtype=matrix.dtype)
+        # Only the factors are kept, not the matrix itself, so the operator holds a
+        # single n x n array.
+        lu, _, perm = jax.lax.linalg.lu(matrix)
+        # triangular_solve needs its matrix operand in column-major layout, while
+        # arrays passed into a jitted function are row-major. Storing the factor
+        # transposed makes the ``.T`` in ``mv`` a free relabeling of the same
+        # buffer, rather than a full n^2 relayout copy on every solve.
+        self._luT = jax.lax.stop_gradient(lu.T)
+        self._perm = perm
+        self._r = jax.lax.stop_gradient(r)
+        self._c = jax.lax.stop_gradient(c)
 
     def mv(self, vector):
         """Matrix vector product."""
-        return lx.linear_solve(
-            self.operator,
-            vector,
-            solver=self.solver,
-            state=eqx.combine(self.dynamic_state, self.static_state),
-            options=self.options,
-            throw=self.throw,
-        ).value
+        lu = self._luT.T
+        # The factored matrix is diag(r) A diag(c), so A^-1 b = c * (LU)^-1 (r * b),
+        # and (diag(r) A diag(c))[perm] = L U.
+        b = (self._r * vector)[self._perm, None]
+        y = jax.lax.linalg.triangular_solve(
+            lu, b, left_side=True, lower=True, unit_diagonal=True
+        )
+        x = jax.lax.linalg.triangular_solve(lu, y, left_side=True, lower=False)
+        return self._c * x[:, 0]
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -317,30 +464,29 @@ class InverseLinearOperator(lx.AbstractLinearOperator):
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return self.operator.out_structure()
+        return jax.ShapeDtypeStruct((self._luT.shape[0],), dtype=self._luT.dtype)
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return self.operator.in_structure()
+        return jax.ShapeDtypeStruct((self._luT.shape[0],), dtype=self._luT.dtype)
 
     def transpose(self):
         """Transpose of the operator."""
-        return InverseLinearOperator(self.operator.T, self.solver)
+        return TransposedLinearOperator(self)
 
 
-@lx.is_symmetric.register(InverseLinearOperator)
+@lx.is_symmetric.register(DenseLUInverseOperator)
+@lx.is_positive_semidefinite.register(DenseLUInverseOperator)
+@lx.is_negative_semidefinite.register(DenseLUInverseOperator)
+@lx.is_diagonal.register(DenseLUInverseOperator)
+@lx.is_tridiagonal.register(DenseLUInverseOperator)
 def _(operator):
-    return lx.is_symmetric(operator.operator)
-
-
-@lx.is_diagonal.register(InverseLinearOperator)
-def _(operator):
-    return lx.is_diagonal(operator.operator)
+    return False
 
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])
 @functools.partial(jnp.vectorize, signature="(m,n)->(n,n)", excluded=(0, 1))
-def banded_to_dense(p, q, A):
+def banded_to_dense(p: int, q: int, A: jax.Array) -> jax.Array:
     """Convert from banded representation to dense.
 
     Parameters
@@ -372,7 +518,7 @@ def banded_to_dense(p, q, A):
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])
 @functools.partial(jnp.vectorize, signature="(n,n)->(m,n)", excluded=(0, 1))
-def dense_to_banded(p, q, A):
+def dense_to_banded(p: int, q: int, A: jax.Array) -> jax.Array:
     """Convert from dense representation to banded.
 
     Parameters
@@ -728,11 +874,11 @@ def lu_factor_banded_periodic(
 
     # Calculate virtual row indices to find wrap-around elements
     i_linear = j_idx + r_idx - q
-    is_wrap = (i_linear < 0) | (i_linear >= n)
+    is_wrap = jnp.array((i_linear < 0) | (i_linear >= n))
     i_cyclic = i_linear % n
 
     # A_band is the strictly banded part (wrap-around elements zeroed out)
-    A_band = _where(is_wrap, jnp.array(0.0), A)
+    A_band = jnp.where(is_wrap, jnp.array(0.0), A)
 
     # Row equilibration (no-op when equilibrate=False). Scaling the full-system
     # rows by s scales A_band and the low-rank columns U identically, leaving
@@ -757,13 +903,13 @@ def lu_factor_banded_periodic(
 
     # Construct V^T (k_dim x n): Contains the actual wrap-around values
     # Map the cyclic rows to the k_dim coordinate space
-    k_idx = _where(i_cyclic >= n - q, i_cyclic - (n - q), q + i_cyclic)
+    k_idx = jnp.where(i_cyclic >= n - q, i_cyclic - (n - q), q + i_cyclic)
 
     # We use scatter-add to build V^T while keeping static shapes.
     # Non-wrap elements add 0.0 to the 0-th index (harmless).
-    safe_k = _where(is_wrap, k_idx, jnp.array(0)).flatten()
+    safe_k = jnp.where(is_wrap, k_idx, jnp.array(0)).flatten()
     safe_j = jnp.broadcast_to(j_idx, (H, n)).flatten()
-    safe_vals = _where(is_wrap, A, jnp.array(0.0)).flatten()
+    safe_vals = jnp.where(is_wrap, A, jnp.array(0.0)).flatten()
 
     V_T = jnp.zeros((k_dim, n), dtype=A.dtype)
     V_T = V_T.at[safe_k, safe_j].add(safe_vals)
@@ -796,7 +942,7 @@ def lu_solve_banded_periodic(p, q, lu, b, *, unroll=None):
     ----------
     p, q : int
         Lower and upper bandwidth of A
-    lu : tuple of jax.Array
+    lu_info : tuple of jax.Array
         Output from ``lu_factor_banded_periodic``
     b : jax.Array, shape(...,N)
         RHS vector.
@@ -1316,7 +1462,7 @@ def cr_banded_periodic_solve(factors, b, *, trans=False):
 
 @functools.partial(jax.jit, static_argnames=("p", "q"))
 @functools.partial(jnp.vectorize, signature="(k,n),(n)->(n)", excluded=(0, 1))
-def banded_mv(p, q, A, x):
+def banded_mv(p: int, q: int, A: jax.Array, x: jax.Array) -> jax.Array:
     """Matrix vector product w/ banded matrix.
 
     Parameters
@@ -1356,7 +1502,9 @@ def banded_mv(p, q, A, x):
 @functools.partial(
     jnp.vectorize, signature="(k,n),(l,n)->(m,n),(),()", excluded=(0, 1, 2, 3)
 )
-def banded_mm(p1, q1, p2, q2, A, B):
+def banded_mm(
+    p1: int, q1: int, p2: int, q2: int, A: jax.Array, B: jax.Array
+) -> tuple[jax.Array, int, int]:
     """Matrix-matrix product w/ banded matrices.
 
     Parameters
@@ -1399,20 +1547,20 @@ def banded_mm(p1, q1, p2, q2, A, B):
     # and the specific row of B being evaluated (r2).
     col_idx = (j_idx - q2 + r2_idx) % n
 
-    def compute_row(r):
+    def compute_row(r: jax.Array):
         """Computes the r-th row (diagonal) of the output banded matrix."""
         r2 = jnp.arange(H_B)
         r1 = r - r2
 
         # Mask out indices where r1 falls outside the valid rows of A
         valid = (r1 >= 0) & (r1 < H_A)
-        r1_safe = _where(valid, r1, jnp.array(0))
+        r1_safe = jnp.where(valid, r1, jnp.array(0))
 
         # Gather elements from A. col_idx has shape (H_B, n)
         A_vals = A[r1_safe[:, None], col_idx]
 
         # Element-wise multiply by B and zero out invalid index contributions
-        product = _where(valid[:, None], A_vals * B, jnp.array(0.0))
+        product = jnp.where(valid[:, None], A_vals * B, jnp.array(0.0))
 
         # Summing over the intermediate dimension (r2) gives the dot product
         return jnp.sum(product, axis=0)
@@ -1422,7 +1570,7 @@ def banded_mm(p1, q1, p2, q2, A, B):
 
 
 @jax.jit
-def banded_transpose(p, q, A):
+def banded_transpose(p: int, q: int, A: jax.Array) -> tuple[jax.Array, int, int]:
     """Transposes a (periodic) banded matrix in compact format.
 
     Parameters

@@ -11,9 +11,8 @@ import numpy as np
 from jaxtyping import Array, Float, Int
 
 from .field import Field
-from .linalg import InverseLinearOperator, TransposedLinearOperator
+from .linalg import AbstractYanccOperator, DenseLUInverseOperator
 from .smoothers import (
-    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
@@ -149,51 +148,6 @@ def get_dke_jacobi_smoothers(
                 **options,
             )
             for order in ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"]
-        ]
-        smoothers.append(smooth)
-    return smoothers
-
-
-@eqx.filter_jit
-@jax.named_call
-def get_dke_jacobi2_smoothers(
-    fields,
-    pitchgrids,
-    speedgrid,
-    species,
-    Erho,
-    background,
-    potentials,
-    p1,
-    p2,
-    gauge,
-    smooth_solver,
-    weight,
-    coulomb_log=None,
-    **options,
-):
-    """Get multigrid smoothers for each field, pitchgrid."""
-    smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
-        smooth = [
-            DKEJacobi2Smoother(
-                field,
-                pitchgrid,
-                speedgrid,
-                species,
-                Erho,
-                background,
-                potentials,
-                p1=p1,
-                p2=p2,
-                axorder=order,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=weight,
-                coulomb_log=coulomb_log,
-                **options,
-            )
-            for order in ["atzsx", "tzasx", "zatsx"]
         ]
         smoothers.append(smooth)
     return smoothers
@@ -774,7 +728,7 @@ def _build_interp_matrix(x_src, x_query, method, period):
     return P_T.T
 
 
-class Prolongation(lx.AbstractLinearOperator):
+class Prolongation(AbstractYanccOperator):
     """Coarse-to-fine grid prolongation as a linear operator.
 
     Interpolates a flattened ``(prefix_size, nalpha, ntheta, nzeta)`` array from a
@@ -853,11 +807,6 @@ class Prolongation(lx.AbstractLinearOperator):
         f = jnp.transpose(f, (3, 2, 1, 0))
         return f.flatten()
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         n = (
@@ -878,12 +827,8 @@ class Prolongation(lx.AbstractLinearOperator):
         )
         return jax.ShapeDtypeStruct((n,), dtype=self.field_fine.Bmag.dtype)
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
 
-
-class Restriction(lx.AbstractLinearOperator):
+class Restriction(AbstractYanccOperator):
     """Fine-to-coarse grid restriction as a linear operator.
 
     Applies the volume-weighted transpose of piecewise-linear (or other)
@@ -968,11 +913,6 @@ class Restriction(lx.AbstractLinearOperator):
         f = jnp.transpose(f, (3, 2, 1, 0))
         return f.flatten()
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         n = (
@@ -992,20 +932,6 @@ class Restriction(lx.AbstractLinearOperator):
             * self.field_coarse.nzeta
         )
         return jax.ShapeDtypeStruct((n,), dtype=self.field_coarse.Bmag.dtype)
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(Prolongation)
-@lx.is_diagonal.register(Prolongation)
-@lx.is_tridiagonal.register(Prolongation)
-@lx.is_symmetric.register(Restriction)
-@lx.is_diagonal.register(Restriction)
-@lx.is_tridiagonal.register(Restriction)
-def _(operator):
-    return False
 
 
 def _multigrid_cycle_recursive(
@@ -1297,7 +1223,7 @@ def krylov2s_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose
     return x
 
 
-class MultigridOperator(lx.AbstractLinearOperator):
+class MultigridOperator(AbstractYanccOperator):
     """Multigrid cycle as a linear operator.
 
     Parameters
@@ -1379,7 +1305,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.v2 = jnp.asarray(v2)
         self.smooth_method = smooth_method
         if coarse_opinv is None:
-            coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            coarse_opinv = DenseLUInverseOperator(operators[0].as_matrix())
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
         self.coarse_weight = jnp.asarray(coarse_weight)
@@ -1450,10 +1376,3 @@ class MultigridOperator(lx.AbstractLinearOperator):
             self.coarse_weight,
             self.verbose,
         )
-
-
-@lx.is_symmetric.register(MultigridOperator)
-@lx.is_diagonal.register(MultigridOperator)
-@lx.is_tridiagonal.register(MultigridOperator)
-def _(operator):
-    return False
