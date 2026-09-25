@@ -531,7 +531,7 @@
     "tests/test_linalg.py::test_cr_banded_solve[True-12-3]": 0.15046634897589684,
     "tests/test_linalg.py::test_cr_banded_solve_unbatched": 0.6418056450784206,
     "tests/test_linalg.py::test_cr_block_tridiag_solve": 5.112908188952133,
-    "tests/test_linalg.py::test_inverse_linear_operator": 0.3311395619530231,
+    "tests/test_linalg.py::test_dense_lu_inverse_operator": 0.92,
     "tests/test_linalg.py::test_lu_factor_banded": 0.11444051284343004,
     "tests/test_linalg.py::test_lu_factor_banded_pivot_tol": 0.2761795870028436,
     "tests/test_linalg.py::test_lu_solve_banded_transpose[10-0-0]": 0.13,

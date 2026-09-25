@@ -11,7 +11,7 @@ import numpy as np
 from jaxtyping import Array, Float, Int
 
 from .field import Field
-from .linalg import AbstractYanccOperator, InverseLinearOperator
+from .linalg import AbstractYanccOperator, DenseLUInverseOperator
 from .smoothers import (
     DKEJacobiSmoother,
     DKELaplacian,
@@ -1305,7 +1305,7 @@ class MultigridOperator(AbstractYanccOperator):
         self.v2 = jnp.asarray(v2)
         self.smooth_method = smooth_method
         if coarse_opinv is None:
-            coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            coarse_opinv = DenseLUInverseOperator(operators[0].as_matrix())
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
         self.coarse_weight = jnp.asarray(coarse_weight)

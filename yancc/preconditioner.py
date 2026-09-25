@@ -11,7 +11,7 @@ from jaxtyping import Array, ArrayLike, Float
 from .collisions import RosenbluthPotentials
 from .field import Field
 from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from .linalg import AbstractYanccOperator, InverseLinearOperator, dense_from_mv
+from .linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
 from .multigrid import (
     MultigridOperator,
     get_dke_jacobi_smoothers,
@@ -357,9 +357,12 @@ class DKEPreconditioner(MultigridOperator):
         coarse_matrix = dense_from_mv(
             operators[0].mv, operators[0].in_size(), as_matrix_chunk
         )
-        coarse_opinv = InverseLinearOperator(
-            lx.MatrixLinearOperator(coarse_matrix), lx.LU(), throw=False
-        )
+        # The coarse matrix is factored after row/column equilibration. With several
+        # species its entries span many orders of magnitude, and an unscaled LU has
+        # an error floor large enough to leave the nearly singular heavy-species
+        # modes with no correct digits, which stalls the outer Krylov solve at a
+        # residual that depends on floating point details of the hardware.
+        coarse_opinv = DenseLUInverseOperator(coarse_matrix, equilibrate=True)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,

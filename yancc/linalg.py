@@ -2,7 +2,7 @@
 
 import abc
 import functools
-from typing import Any, cast
+from typing import cast
 
 import equinox as eqx
 import jax
@@ -42,6 +42,34 @@ def dense_from_mv(mv, n, chunk=None):
     if chunk is None or chunk >= n:
         return jax.vmap(mv)(x).T
     return jax.lax.map(mv, x, batch_size=chunk).T
+
+
+def _ruiz_scale(A, iters=5):
+    """Row and column equilibration factors for a dense matrix.
+
+    Returns ``(r, c)`` such that ``r[:, None] * A * c[None, :]`` has all row and
+    column maxima close to 1.
+    """
+    # Ruiz iteration: repeatedly divide each row and column by the square root of
+    # its largest magnitude entry. Unlike a single row scaling this also balances
+    # columns, which matters for multi-species operators where rows and columns of
+    # light species are orders of magnitude larger than those of heavy species.
+    # Partial pivoting LU has backward error ~eps*max|A|, so without balancing the
+    # large entries set an error floor that swamps the directions where the heavy
+    # species are nearly singular.
+    absA = jnp.abs(A)
+
+    def body(_, rc):
+        r, c = rc
+        scaled = r[:, None] * absA * c[None, :]
+        rmax = scaled.max(axis=1)
+        cmax = scaled.max(axis=0)
+        r = r * _where(rmax > 0, 1 / jnp.sqrt(rmax), jnp.ones_like(rmax))
+        c = c * _where(cmax > 0, 1 / jnp.sqrt(cmax), jnp.ones_like(cmax))
+        return r, c
+
+    ones = jnp.ones(A.shape[0], dtype=A.dtype)
+    return jax.lax.fori_loop(0, iters, body, (ones, ones))
 
 
 def _banded_row_scale(p, q, A, periodic):
@@ -381,45 +409,53 @@ def _tridiag_solve(l, d, u, b, *args):
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
 
 
-class InverseLinearOperator(lx.AbstractLinearOperator):
-    """Inverse of another linear operator."""
+class DenseLUInverseOperator(lx.AbstractLinearOperator):
+    """Inverse of a dense matrix, via its LU factorization.
 
-    operator: lx.AbstractLinearOperator
-    solver: lx.AbstractLinearSolver
-    static_state: object = eqx.field(static=True)
-    dynamic_state: object
-    options: Any
-    throw: bool = eqx.field(static=True)
+    Parameters
+    ----------
+    matrix : jax.Array
+        Square matrix to invert.
+    equilibrate : bool
+        Whether to balance the rows and columns of the matrix before factoring it.
+        This does not change the inverse, but improves its accuracy for badly scaled
+        matrices.
+    """
 
-    def __init__(
-        self,
-        operator: lx.AbstractLinearOperator,
-        solver: lx.AbstractLinearSolver = lx.AutoLinearSolver(well_posed=True),
-        options=None,
-        throw=True,
-    ):
-        if options is None:
-            options = {}
-        self.operator = operator
-        self.solver = solver
-        state = solver.init(operator, options)
-        dynamic_state, static_state = eqx.partition(state, eqx.is_array)
-        dynamic_state = jax.lax.stop_gradient(dynamic_state)
-        self.static_state = static_state
-        self.dynamic_state = dynamic_state
-        self.options = options
-        self.throw = throw
+    _luT: jax.Array
+    _perm: jax.Array
+    _r: jax.Array
+    _c: jax.Array
+
+    def __init__(self, matrix: jax.Array, equilibrate: bool = True):
+        if equilibrate:
+            r, c = _ruiz_scale(matrix)
+            matrix = r[:, None] * matrix * c[None, :]
+        else:
+            r = c = jnp.ones(matrix.shape[0], dtype=matrix.dtype)
+        # Only the factors are kept, not the matrix itself, so the operator holds a
+        # single n x n array.
+        lu, _, perm = jax.lax.linalg.lu(matrix)
+        # triangular_solve needs its matrix operand in column-major layout, while
+        # arrays passed into a jitted function are row-major. Storing the factor
+        # transposed makes the ``.T`` in ``mv`` a free relabeling of the same
+        # buffer, rather than a full n^2 relayout copy on every solve.
+        self._luT = jax.lax.stop_gradient(lu.T)
+        self._perm = perm
+        self._r = jax.lax.stop_gradient(r)
+        self._c = jax.lax.stop_gradient(c)
 
     def mv(self, vector):
         """Matrix vector product."""
-        return lx.linear_solve(
-            self.operator,
-            vector,
-            solver=self.solver,
-            state=eqx.combine(self.dynamic_state, self.static_state),
-            options=self.options,
-            throw=self.throw,
-        ).value
+        lu = self._luT.T
+        # The factored matrix is diag(r) A diag(c), so A^-1 b = c * (LU)^-1 (r * b),
+        # and (diag(r) A diag(c))[perm] = L U.
+        b = (self._r * vector)[self._perm, None]
+        y = jax.lax.linalg.triangular_solve(
+            lu, b, left_side=True, lower=True, unit_diagonal=True
+        )
+        x = jax.lax.linalg.triangular_solve(lu, y, left_side=True, lower=False)
+        return self._c * x[:, 0]
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
@@ -428,35 +464,24 @@ class InverseLinearOperator(lx.AbstractLinearOperator):
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return self.operator.out_structure()
+        return jax.ShapeDtypeStruct((self._luT.shape[0],), dtype=self._luT.dtype)
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return self.operator.in_structure()
+        return jax.ShapeDtypeStruct((self._luT.shape[0],), dtype=self._luT.dtype)
 
     def transpose(self):
         """Transpose of the operator."""
-        return InverseLinearOperator(self.operator.T, self.solver)
+        return TransposedLinearOperator(self)
 
 
-@lx.is_symmetric.register(InverseLinearOperator)
+@lx.is_symmetric.register(DenseLUInverseOperator)
+@lx.is_positive_semidefinite.register(DenseLUInverseOperator)
+@lx.is_negative_semidefinite.register(DenseLUInverseOperator)
+@lx.is_diagonal.register(DenseLUInverseOperator)
+@lx.is_tridiagonal.register(DenseLUInverseOperator)
 def _(operator):
-    return lx.is_symmetric(operator.operator)
-
-
-@lx.is_diagonal.register(InverseLinearOperator)
-def _(operator):
-    return lx.is_diagonal(operator.operator)
-
-
-@lx.is_positive_semidefinite.register(InverseLinearOperator)
-def _(operator):
-    return lx.is_positive_semidefinite(operator.operator)
-
-
-@lx.is_negative_semidefinite.register(InverseLinearOperator)
-def _(operator):
-    return lx.is_negative_semidefinite(operator.operator)
+    return False
 
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])

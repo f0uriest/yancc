@@ -9,7 +9,7 @@ import pytest
 import scipy
 
 from yancc.krylov import _fgmres, gcrotmk, lgmres
-from yancc.linalg import InverseLinearOperator
+from yancc.linalg import DenseLUInverseOperator
 
 
 def crop2(a, b):
@@ -808,7 +808,7 @@ def test_krylov_autodiff(flexible):
     def solve_gcrot(x):
         A = get_A(x)
         bx = b * x
-        M = InverseLinearOperator(A)
+        M = DenseLUInverseOperator(A.as_matrix())
         y, _, _, res, _, _, _ = gcrotmk(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
@@ -818,7 +818,7 @@ def test_krylov_autodiff(flexible):
     def solve_lgmres(x):
         A = get_A(x)
         bx = b * x
-        M = InverseLinearOperator(A)
+        M = DenseLUInverseOperator(A.as_matrix())
         y, _, _, res, _, _, _ = lgmres(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
