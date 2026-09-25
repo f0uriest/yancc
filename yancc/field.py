@@ -198,9 +198,26 @@ class Field(eqx.Module):
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         """
-        from desc.grid import LinearGrid  # pyright: ignore[reportMissingImports]
+        from desc.grid import Grid, QuadratureGrid  # pyright: ignore
 
-        grid = LinearGrid(rho=rho, theta=ntheta, zeta=nzeta, endpoint=False, NFP=eq.NFP)
+        def surface_grid(M, N):
+            # jitable so that rho may be traced
+            theta = jnp.linspace(0, 2 * np.pi, M, endpoint=False)
+            zeta = jnp.linspace(0, 2 * np.pi / eq.NFP, N, endpoint=False)
+            return Grid.create_meshgrid([rho, theta, zeta], NFP=eq.NFP, jitable=True)
+
+        # Volume and flux surface quantities are computed on full resolution grids,
+        # and flux surface quantities are passed as seed data to the final grid, so
+        # that DESC doesn't need to construct its own (non-jitable) grids internally.
+        vol_grid = QuadratureGrid(eq.L_grid, eq.M_grid, eq.N_grid, eq.NFP)
+        vol_data = eq.compute(["a", "R0"], grid=vol_grid)
+
+        fsa_grid = surface_grid(2 * eq.M_grid + 1, 2 * eq.N_grid + 1)
+        fsa_data = eq.compute(["iota"], grid=fsa_grid, override_grid=False)
+
+        grid = surface_grid(ntheta, nzeta)
+        seed = {"iota": jnp.broadcast_to(fsa_data["iota"][0], (grid.num_nodes,))}
+
         keys = [
             "B^theta",
             "B^zeta",
@@ -210,12 +227,9 @@ class Field(eqx.Module):
             "|B|_t",
             "|B|_z",
             "sqrt(g)",
-            "psi_r",
             "iota",
-            "a",
-            "R0",
         ]
-        desc_data = eq.compute(keys, grid=grid)
+        desc_data = eq.compute(keys, grid=grid, data=seed, override_grid=False)
 
         data = {
             "B_sup_t": desc_data["B^theta"],
@@ -229,13 +243,12 @@ class Field(eqx.Module):
         }
 
         data = {
-            key: val.reshape((grid.num_theta, grid.num_zeta), order="F")
-            for key, val in data.items()
+            key: val.reshape((ntheta, nzeta), order="F") for key, val in data.items()
         }
 
         data["Psi"] = eq.Psi
-        data["a_minor"] = desc_data["a"]
-        data["R_major"] = desc_data["R0"]
+        data["a_minor"] = vol_data["a"]
+        data["R_major"] = vol_data["R0"]
         data["iota"] = desc_data["iota"][0]
 
         return cls(
