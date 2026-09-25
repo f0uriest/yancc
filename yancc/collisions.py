@@ -13,7 +13,11 @@ from jaxtyping import Array, ArrayLike, Bool, Float
 
 from .field import Field
 from .finite_diff import fd2, fd_coeffs, fdfwd
-from .linalg import AbstractDKEOperator, banded_to_dense, dense_to_banded
+from .linalg import (
+    AbstractDKEOperator,
+    banded_to_dense,
+    dense_to_banded,
+)
 from .species import LocalMaxwellian, _species_pairs, gamma_ab, nuD_ab, nupar_ab
 from .utils import (
     _parse_axorder_shape_3d,
@@ -147,28 +151,46 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitchAngleScattering.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "z":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
-        if self.axorder[-1] == "t":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "a":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(fd_coeffs[2][self.p2].size // 2, self.pitchgrid.nalpha // 2)
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        df = self._D[:, None, None, :]
-        df = jnp.broadcast_to(
-            df, df.shape[:1] + (self.field.ntheta, self.field.nzeta) + df.shape[3:]
-        )
+        df = dense_to_banded(bw, bw, self._D)
+        df = jnp.broadcast_to(df, (self.field.ntheta, self.field.nzeta) + df.shape)
 
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, idx])
-        df = df.at[idx, 0, 0, idx].set(g1, unique_indices=True)
+        cols = (idx + bw - bands) % self.pitchgrid.nalpha
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
+        gval = jnp.where(self.gauge, self._scale * basis, df[0, 0, bands, cols])
+        df = df.at[0, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
+        df = jnp.moveaxis(df, 2, 0)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
+        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
 

@@ -190,29 +190,54 @@ class MDKETheta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "a":
-            return jax.vmap(jnp.diag)(
-                self.diagonal().reshape((-1, self.pitchgrid.nalpha))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "t":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                self.field.ntheta // 2,
             )
-        if self.axorder[-1] == "z":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        fd = self._fd[None, :, None, :]
-        bd = self._bd[None, :, None, :]
-        w = self._w[:, :, :, None]
-        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        fd = dense_to_banded(bw, bw, self._fd)
+        bd = dense_to_banded(bw, bw, self._bd)
+        # rows scaled by the upwinded wind, convolved axis last
+        w1 = jnp.moveaxis(self._w, 1, -1)[..., None, :]
+        dff, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 <= 0), fd)
+        dfb, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 > 0), bd)
+        df = dff + dfb
+
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
+        cols = (bw - bands) % self.field.ntheta
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, 0])
-        df = df.at[idx, 0, 0, 0].set(g1, indices_are_sorted=True, unique_indices=True)
+        gval = jnp.where(self.gauge, self._scale * basis, df[idx, 0, bands, cols])
+        df = df.at[idx, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
+        df = jnp.moveaxis(df, 2, 1)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
+        df = df.reshape((-1, 2 * bw + 1, self.field.ntheta))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
 
@@ -339,29 +364,53 @@ class MDKEZeta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "a":
-            return jax.vmap(jnp.diag)(
-                self.diagonal().reshape((-1, self.pitchgrid.nalpha))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "z":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                self.field.nzeta // 2,
             )
-        if self.axorder[-1] == "t":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        fd = self._fd[None, None, :, :]
-        bd = self._bd[None, None, :, :]
-        w = self._w[:, :, :, None]
-        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        fd = dense_to_banded(bw, bw, self._fd)
+        bd = dense_to_banded(bw, bw, self._bd)
+        # rows scaled by the upwinded wind, convolved axis last
+        w1 = self._w[..., None, :]
+        dff, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 <= 0), fd)
+        dfb, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 > 0), bd)
+        df = dff + dfb
+
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
+        cols = (bw - bands) % self.field.nzeta
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, 0])
-        df = df.at[idx, 0, 0, 0].set(g1, indices_are_sorted=True, unique_indices=True)
+        gval = jnp.where(self.gauge, self._scale * basis, df[idx, 0, bands, cols])
+        df = df.at[idx, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
+        df = df.reshape((-1, 2 * bw + 1, self.field.nzeta))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
 
@@ -488,27 +537,54 @@ class MDKEPitch(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "z":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
-        if self.axorder[-1] == "t":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "a":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                self.pitchgrid.nalpha // 2,
+            )
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        fd = self._fd[:, None, None, :]
-        bd = self._bd[:, None, None, :]
-        w = self._w[:, :, :, None]
-        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        fd = dense_to_banded(bw, bw, self._fd)
+        bd = dense_to_banded(bw, bw, self._bd)
+        # rows scaled by the upwinded wind, convolved axis last
+        w1 = jnp.moveaxis(self._w, 0, -1)[..., None, :]
+        dff, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 <= 0), fd)
+        dfb, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 > 0), bd)
+        df = dff + dfb
+
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, idx])
-        df = df.at[idx, 0, 0, idx].set(g1, indices_are_sorted=True, unique_indices=True)
+        cols = (idx + bw - bands) % self.pitchgrid.nalpha
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
+        gval = jnp.where(self.gauge, self._scale * basis, df[0, 0, bands, cols])
+        df = df.at[0, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
+        df = jnp.moveaxis(df, 2, 0)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
+        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
 
@@ -618,12 +694,25 @@ class MDKE(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKE.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d0 = self._opa.block_diagonal()
-        d1 = self._opt.block_diagonal()
-        d2 = self._opz.block_diagonal()
-        d3 = self._opp.block_diagonal()
+        if fmt == "banded" and bw is None:
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            bw = min(
+                max(
+                    fd_coeffs[1][self.p1].size // 2,
+                    fd_coeffs[2][self.p2].size // 2,
+                ),
+                sizes[self.axorder[-1]] // 2,
+            )
+        d0 = self._opa.block_diagonal(fmt, bw)
+        d1 = self._opt.block_diagonal(fmt, bw)
+        d2 = self._opz.block_diagonal(fmt, bw)
+        d3 = self._opp.block_diagonal(fmt, bw)
         return d0 + d1 + d2 + d3
 
 

@@ -19,7 +19,6 @@ from .linalg import (
     cr_banded_periodic_factor,
     cr_banded_periodic_solve,
     cr_banded_solve,
-    dense_to_banded,
     lu_factor_banded,
     lu_factor_banded_periodic,
     lu_solve_banded,
@@ -292,25 +291,40 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
             weight = optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder[-1])
         self.weight = jnp.atleast_1d(jnp.array(weight))
 
+        # "cr" consumes the same banded storage as "banded"
+        bd_fmt = "banded" if self.smooth_solver in ("banded", "cr") else "dense"
         mats = MDKE(
             field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge
-        ).block_diagonal()
-        # TODO: implement banded block diagonal for MDKE
+        ).block_diagonal(bd_fmt, self.bandwidth)
 
-        if self.smooth_solver == "banded":
-            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+        # The pitch line smoother (convolved axis "a") is the only case with a
+        # non-periodic band, so it uses the standard (non-periodic) banded/CR
+        # factor/solve rather than the periodic variant used for theta/zeta.
+        pitch = self.axorder[-1] == "a"
+        pivot_tol = jnp.finfo(mats.dtype).eps ** (1 / 2)
+        if self.smooth_solver == "banded" and not pitch:
             self.mats = lu_factor_banded_periodic(
                 self.bandwidth,
                 self.bandwidth,
                 mats,
                 equilibrate=True,
-                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                pivot_tol=pivot_tol,
                 # unroll has little effect on CPU but ~2x faster on GPU
                 unroll=4,
             )
-        elif self.smooth_solver == "cr":
-            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+        elif self.smooth_solver == "banded":
+            self.mats = lu_factor_banded(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibrate=True,
+                pivot_tol=pivot_tol,
+                unroll=4,
+            )
+        elif self.smooth_solver == "cr" and not pitch:
             self.mats = cr_banded_periodic_factor(mats, equilibrate=True)
+        elif self.smooth_solver == "cr":
+            self.mats = cr_banded_factor(mats, equilibrate=True)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -323,14 +337,21 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
             if self.smooth_solver == "banded":
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
-                b = lu_solve_banded_periodic(
-                    self.bandwidth,
-                    self.bandwidth,
-                    self.mats,
-                    x,
-                    # unroll here has little effect on GPU but modest gain on CPU
-                    unroll=8,
-                )
+                # pitch ("...a") is non-periodic -> standard banded solve; periodic axes
+                # (theta/zeta line smoothers) keep the wrap-aware periodic solve.
+                if self.axorder[-1] == "a":
+                    b = lu_solve_banded(
+                        self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    )
+                else:
+                    b = lu_solve_banded_periodic(
+                        self.bandwidth,
+                        self.bandwidth,
+                        self.mats,
+                        x,
+                        # unroll here has little effect on GPU but modest gain on CPU
+                        unroll=8,
+                    )
             elif self.smooth_solver == "cr":
                 M = {
                     "a": self.pitchgrid.nalpha,
@@ -338,7 +359,11 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
                     "z": self.field.nzeta,
                 }[self.axorder[-1]]
                 x = x.reshape(-1, M)
-                b = cr_banded_periodic_solve(self.mats, x)
+                # pitch ("...a") is non-periodic; theta/zeta are periodic line smoothers
+                if self.axorder[-1] == "a":
+                    b = cr_banded_solve(self.mats, x)
+                else:
+                    b = cr_banded_periodic_solve(self.mats, x)
             else:
                 size, N, M = self.mats.shape
                 x = x.reshape(size, M)

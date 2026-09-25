@@ -545,6 +545,10 @@ def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid, p1):
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -570,6 +574,10 @@ def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid, p1):
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -595,6 +603,10 @@ def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid, p1):
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -615,6 +627,10 @@ def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid,
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -642,6 +658,10 @@ def test_diagonals_mdke_full(gauge, axorder, field, pitchgrid):
     np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
     B = extract_blocks(A, sizes[axorder[-1]])
     np.testing.assert_allclose(B, f.block_diagonal(), err_msg=axorder)
+    D = f.block_diagonal("banded")
+    bw = D.shape[1] // 2
+    D = banded_to_dense(bw, bw, D)
+    np.testing.assert_allclose(B, D, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
