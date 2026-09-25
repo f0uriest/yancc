@@ -134,7 +134,7 @@ class MDKETheta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -311,7 +311,7 @@ class MDKEZeta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -481,7 +481,7 @@ class MDKEPitch(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -656,7 +656,7 @@ class MDKE(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKE.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f0 = self._opa.mv(vector)
         f1 = self._opt.mv(vector)
@@ -867,7 +867,7 @@ class DKETheta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -901,7 +901,7 @@ class DKETheta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -926,7 +926,7 @@ class DKETheta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -951,7 +951,7 @@ class DKETheta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1107,7 +1107,7 @@ class DKEZeta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1138,7 +1138,7 @@ class DKEZeta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1163,7 +1163,7 @@ class DKEZeta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1188,7 +1188,7 @@ class DKEZeta(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1340,7 +1340,7 @@ class DKEPitch(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1374,7 +1374,7 @@ class DKEPitch(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1399,7 +1399,7 @@ class DKEPitch(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1424,7 +1424,7 @@ class DKEPitch(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1549,7 +1549,7 @@ class DKESpeed(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1580,7 +1580,7 @@ class DKESpeed(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1612,7 +1612,7 @@ class DKESpeed(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1646,7 +1646,7 @@ class DKESpeed(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1822,7 +1822,7 @@ class DKE(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKE.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f0 = self._opx.mv(vector)
         f1 = self._opa.mv(vector)

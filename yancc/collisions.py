@@ -99,7 +99,7 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitchAngleScattering.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -665,7 +665,7 @@ class PitchAngleScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("PitchAngleScattering.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -696,7 +696,7 @@ class PitchAngleScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("PitchAngleScattering.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -735,7 +735,7 @@ class PitchAngleScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("PitchAngleScattering.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -931,7 +931,7 @@ class EnergyScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("EnergyScattering.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -959,7 +959,7 @@ class EnergyScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("EnergyScattering.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1003,7 +1003,7 @@ class EnergyScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("EnergyScattering.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1452,7 +1452,7 @@ class FieldPartCD(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCD.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1498,7 +1498,7 @@ class FieldPartCD(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCD.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         return _field_part_cd_block_diagonal(self, self.C, self._scale, fmt, bw)
 
@@ -1588,7 +1588,7 @@ class FieldPartCG(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCG.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f0 = vector
         shp = f0.shape
@@ -1643,7 +1643,7 @@ class FieldPartCG(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCG.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         return _field_part_gh_block_diagonal(self, self._Ghat, self._scale, fmt, bw)
 
@@ -1744,7 +1744,7 @@ class FieldPartCH(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCH.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f0 = vector
         shp = f0.shape
@@ -1799,7 +1799,7 @@ class FieldPartCH(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldPartCH.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         return _field_part_gh_block_diagonal(self, self._Hhat, self._scale, fmt, bw)
 
@@ -1924,7 +1924,7 @@ class FieldParticleScattering(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FieldParticleScattering.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         # The Rosenbluth G and H pieces share an identical nodal<->modal-pitch
         # pipeline differing only in the potential tensor, so they are fused into a
@@ -2097,7 +2097,7 @@ class FokkerPlanckLandau(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         out1 = self.CL.mv(vector)
         out2 = self.CE.mv(vector)

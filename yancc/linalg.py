@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jaxtyping import Array, Float
 
 from .field import Field
 from .velocity_grids import UniformPitchAngleGrid
@@ -128,18 +129,28 @@ class AbstractDKEOperator(AbstractYanccOperator):
         return jax.ShapeDtypeStruct((n,), dtype=self.field.Bmag.dtype)
 
     @abc.abstractmethod
-    def diagonal(self) -> jax.Array:
-        """Diagonal of the operator."""
+    def diagonal(self) -> Float[Array, " nf"]:
+        """Diagonal of the operator as a 1d array."""
 
     @abc.abstractmethod
-    def block_diagonal(self, *args, **kwargs) -> jax.Array:
-        """Block diagonal of the operator as an (N, M, M) array."""
+    def abs_row_sum(self) -> Float[Array, " nf"]:
+        """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
 
-    def abs_row_sum(self) -> jax.Array:
-        """Sum of absolute values of each row of the operator."""
-        raise NotImplementedError(
-            f"abs_row_sum is not implemented for {type(self).__name__}"
-        )
+    @abc.abstractmethod
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+        """Block diagonal of the operator.
+
+        Blocks are along the last axis of ``axorder``.
+
+        Parameters
+        ----------
+        fmt : {"dense", "banded"}
+            Return the blocks as dense ``(N, M, M)`` matrices, or in banded storage
+            as ``(N, 2*bw+1, M)``.
+        bw : int, optional
+            Lower and upper bandwidth of the banded storage. Defaults to a
+            bandwidth that holds all nonzero entries of the blocks.
+        """
 
 
 class BorderedOperator(lx.AbstractLinearOperator):
