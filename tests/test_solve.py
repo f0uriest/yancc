@@ -141,7 +141,10 @@ def test_solve_field_types(nuhat, erhohat):
     """Test solving the MDKE with the same physical field in different coordinates."""
     if os.environ.get("CI"):
         jax.clear_caches()
-    import desc  # pyright: ignore[reportMissingImports]
+    # desc imports its submodules lazily, so import one that needs jax to check
+    # that the installed desc is compatible
+    pytest.importorskip("desc.equilibrium")
+    import desc.io  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
 
@@ -579,7 +582,7 @@ def test_solve_dke_ambipolar(field, pitchgrid, speedgrid, species2):
         jax.clear_caches()
     # bracket around the ion root, in Erho [V], from bounds in E*
     Escale = float(field.a_minor * species2[0].v_thermal * field.Bmag_fsa)
-    bounds = (-3e-2 * Escale, -1e-2 * Escale)
+    bounds = (-4e-2 * Escale, -2e-2 * Escale)
     with pytest.raises(RuntimeError, match="lower < upper"):
         solve_dke_ambipolar(
             field, pitchgrid, speedgrid, species2, 1, bounds=(bounds[1], bounds[0])
@@ -644,7 +647,7 @@ def test_solve_dke_ambipolar(field, pitchgrid, speedgrid, species2):
     )
     # the cost of each root excludes the solves before it, which are all in the total
     assert 0 < info["nmv"].sum() <= info["nmv_total"]
-    assert abs(currents.sum()) < 1e-4 * np.abs(currents).sum()
+    assert abs(currents.sum()) < 1e-4 * info["scale"]
 
     # independent, tightly converged solve at the returned root. The radial current is
     # a small difference of the species currents, so the Krylov tolerance of the search
@@ -695,16 +698,14 @@ def test_solve_mdke_tokamak_axisymmetric():
     """
     if os.environ.get("CI"):
         jax.clear_caches()
-    import desc.examples  # pyright: ignore[reportMissingImports]
-
-    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
+    wout = "tests/data/wout_DSHAPE.nc"  # axisymmetric tokamak, NFP=1
     pitchgrid = UniformPitchAngleGrid(31)
     nuhat = 1e-1
     erhohat = 0.0
 
-    field_axi = Field.from_desc(eq, 0.5, 11, 1)
+    field_axi = Field.from_vmec(wout, 0.5, 11, 1)
     # nzeta=5 is the smallest zeta-resolved grid the default p1="4d" stencil allows
-    field_res = Field.from_desc(eq, 0.5, 11, 5)
+    field_res = Field.from_vmec(wout, 0.5, 11, 5)
     assert field_axi.nzeta == 1
     # the field really is axisymmetric: no toroidal variation of |B|
     np.testing.assert_allclose(field_axi.dBdz, 0.0, atol=1e-12)
@@ -739,14 +740,12 @@ def test_solve_dke_tokamak_axisymmetric():
     """
     if os.environ.get("CI"):
         jax.clear_caches()
-    import desc.examples  # pyright: ignore[reportMissingImports]
-
-    eq = desc.examples.get("DSHAPE")  # axisymmetric tokamak, NFP=1
+    wout = "tests/data/wout_DSHAPE.nc"  # axisymmetric tokamak, NFP=1
     pitchgrid = UniformPitchAngleGrid(31)
     speedgrid = MaxwellSpeedGrid(5)
 
     def solve(nz):
-        field = Field.from_desc(eq, 0.5, 15, nz)
+        field = Field.from_vmec(wout, 0.5, 15, nz)
         species = [
             LocalMaxwellian(
                 yancc.species.Hydrogen,
