@@ -2,10 +2,11 @@
 Advanced Tuning
 ================
 
-This page documents the kwargs accepted by :func:`~yancc.solve.solve_dke` and
-:func:`~yancc.solve.solve_mdke` beyond the ones shown in the quickstart, and
-the keys of the ``multigrid_options`` dictionary that controls the
-preconditioner. These are intended for users who already have a working
+This page documents the kwargs accepted by :func:`~yancc.solve.solve_dke`,
+:func:`~yancc.solve.solve_mdke` and :func:`~yancc.solve.solve_dke_ambipolar` beyond
+the ones shown in the quickstart, the keys of the ``multigrid_options`` dictionary
+that controls the preconditioner, and the keys of the ``root_options`` dictionary that
+controls the search for ambipolar roots. These are intended for users who already have a working
 solve and want to make it faster or push it into a regime where the defaults
 no longer converge.
 
@@ -225,6 +226,119 @@ DKE-only multigrid options
    As above for the operator. The preconditioner defaults to the same
    weights as the main operator but allows them to be specified
    independently.
+
+Ambipolar root finding options
+==============================
+
+:func:`~yancc.solve.solve_dke_ambipolar` searches for the values of ``Erho`` where the
+radial current :math:`J_\rho = \sum_s q_s \Gamma_s` vanishes, solving the DKE at every
+trial value. Each solve is done by :func:`~yancc.solve.solve_dke`, so the Krylov and
+DKE-only options above, and ``multigrid_options``, apply to every solve of the search
+and can be passed as ``**options``, with the following differences:
+
+- ``rtol`` defaults to ``1e-2 * ftol`` (``ftol`` is described below). It sets the
+  accuracy of the converged roots.
+- ``k`` defaults to ``10 * num_roots``. The recycled subspace is carried across every
+  solve of the search, so it pays to make it larger than for a single solve.
+- ``f1`` and ``U`` are not accepted, since the search manages the warm start between
+  solves itself. ``M``, ``B`` and ``C`` are accepted as for
+  :func:`~yancc.solve.solve_dke`; note that a given ``M`` is used at every value of
+  ``Erho``.
+
+The search itself is controlled by the following kwargs:
+
+``reuse_preconditioner`` *(bool, default False)*
+   Build the preconditioner once, at the first guess, and use it for every solve
+   instead of rebuilding it at each value of ``Erho``. This saves the setup cost of
+   each solve, at the cost of more iterations far from the first guess, since the
+   preconditioner depends on ``Erho``. Most useful when the bounds are narrow or the
+   preconditioner build dominates the cost of a solve.
+
+``scale`` *("auto" or float, default "auto")*
+   Scale :math:`J` used to normalize the radial current, so that roots are found for
+   :math:`\sum_s q_s \Gamma_s / J`. With ``"auto"``,
+   :math:`J = \sum_s |q_s \Gamma_s|` at the first guess, which costs one extra solve
+   (it also warm starts the search, so it is not wasted). Pass a value in A·m⁻³ to
+   skip that solve, or to make ``ftol`` mean the same thing across a set of runs.
+
+``adaptive_rtol`` *(bool, default True)*
+   Solve the DKE loosely while the normalized radial current is far from zero, and
+   tighten the tolerance to ``rtol`` as a root is approached. Away from a root the
+   solve only has to locate the next step of the search, so this saves iterations
+   without affecting the accuracy of the roots. Set to False to solve every step to
+   ``rtol``.
+
+Root finding options
+--------------------
+
+Roots are found one at a time by a Newton type iteration, using deflation to avoid
+converging again to roots already found. The first searches start from the guesses in
+``Erho0``. Afterwards, the points already evaluated are used to look for sign changes
+of the radial current that the roots found so far do not explain, and a search is
+started inside each such interval. When none are left, the bounds are sampled, then
+points in the widest unexplored intervals (which is how a pair of roots with no sign
+change between them is found), and finally a search is started from the point that came
+closest to a root. The search stops once ``num_roots`` roots are found or all of this
+is exhausted. Pass options as a dict via the ``root_options`` argument:
+
+.. code-block:: python
+
+    Erho, sols, info = solve_dke_ambipolar(
+        field, pitchgrid, speedgrid, species, num_roots=3,
+        root_options={"ftol": 1e-4, "method": "secant", "interior_samples": 6},
+    )
+
+``ftol`` *(float, default 1e-4)*
+   A search has converged when the absolute value of the normalized radial current
+   (see ``scale``) is below ``ftol``.
+
+``xrtol`` *(float, default 1e-6)*, ``xatol`` *(float, default 0.0)*
+   A search has also converged when the step in ``Erho`` is smaller than
+   ``xrtol * |Erho|`` or ``xatol`` (in Volts).
+
+``maxiter`` *(int, default 20)*
+   Maximum number of iterations per search. Each iteration costs at least one DKE
+   solve.
+
+``method`` *("secant" or "newton", default "secant")*
+   How the derivative of the radial current with respect to ``Erho`` is found.
+   ``"newton"`` differentiates the DKE solve at every iteration, which costs roughly
+   another solve. ``"secant"`` estimates the derivative from the last two iterations
+   while the search is making progress, and only differentiates otherwise. It usually
+   needs a similar number of iterations for a much smaller cost, but is less reliable
+   at finding roots that are close together; try ``"newton"`` if a pair of close roots
+   is being missed.
+
+``max_stall`` *(int, default 3)*
+   A search is abandoned once this many consecutive iterations fail to reduce the
+   radial current below the smallest value that search has reached, such as when the
+   iterates cycle or are pushed against a bound. A search whose iterates bracket a
+   root is never abandoned this way.
+
+``probe_steps`` *(int, default 1)*
+   Number of iterations allowed when sampling a bound, which is done to look for a
+   sign change rather than to converge to a root.
+
+``interior_samples`` *(int, default 6)*
+   Number of points inside the bounds sampled once the guesses, sign changes and
+   bounds are exhausted, each splitting the widest interval not yet explored. The
+   samples are concentrated towards the first guess while still covering the whole
+   interval. Increase this if roots are close together compared to the bounds and
+   some are being missed.
+
+``best_searches`` *(int, default 2)*
+   Number of searches started from the point with the smallest radial current found
+   so far, run after the interior samples.
+
+``history_size`` *(int, default None — every point evaluated)*
+   Number of evaluated points kept for detecting sign changes. The history is small
+   compared to the DKE solutions, so there is rarely a reason to change this.
+
+A search that does not find a new root still costs DKE solves, so when fewer than
+``num_roots`` roots exist the whole fallback sequence above is run before the function
+returns. Setting ``num_roots`` to the number of roots you expect, and narrowing
+``bounds`` when you know where they are, is the most effective way to keep the cost
+down.
 
 Diagnosing convergence problems
 ===============================

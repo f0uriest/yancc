@@ -684,21 +684,20 @@ def solve_dke_ambipolar(  # noqa: C901
         preconditioner is rebuilt at each value of Erho.
     scale : "auto" or float, optional
         Scale J used to normalize the radial current, so that roots are found for the
-        residual Σ_s q_s Γ_s / J. With "auto", J = Σ_s |q_s Γ_s| at the initial guess.
-        Otherwise the value given is used, in A·m⁻³. Either way J is a constant, so
-        the residual is proportional to the radial current; ``ftol`` is then measured
-        relative to the rescaled value.
+        residual Σ_s q_s Γ_s / J. With "auto", J = ``Σ_s |q_s Γ_s|`` at the initial
+        guess. Otherwise the value given is used, in A·m⁻³. Either way J is a
+        constant, so the residual is proportional to the radial current; ``ftol`` is
+        then measured relative to the rescaled value.
     adaptive_rtol : bool, optional
         Whether to solve the DKE more loosely while the radial current is far from
         zero, tightening to ``rtol`` as a root is approached.
     root_options : dict, optional
-        Options passed to ``deflated_root_scalar``, such as ``ftol`` (stopping
-        tolerance on the normalized radial current, default ``1e-4``,
-        ``xrtol``/``xatol`` (stopping tolerance on the Newton step in Erho, ``xatol``
-        in Volts), ``maxiter`` (maximum iterations per search), ``method`` (``"secant"``
-        or ``"newton"``), ``max_stall``, ``probe_steps``, ``interior_samples``,
-        ``best_searches`` and ``history_size``. See that function for details; the
-        defaults suit most cases.
+        Optional parameters to control the root finding, such as ``ftol`` (stopping
+        tolerance on the normalized radial current, default ``1e-4``),
+        ``xrtol``/``xatol`` (stopping tolerance on the step in Erho, ``xatol`` in
+        Volts), ``maxiter`` (maximum iterations per search) and ``method``
+        (``"secant"`` or ``"newton"``). See the Advanced Tuning page of the
+        documentation for the full list; the defaults suit most cases.
     **options : dict, optional
         Additional options passed to ``solve_dke``. The Krylov tolerance ``rtol``
         defaults to ``1e-2 * ftol``, and sets the accuracy of the converged roots. The
