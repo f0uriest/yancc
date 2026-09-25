@@ -28,6 +28,30 @@ Changelog
   resolution. The remaining axes now absorb the extra coarsening, so each coarse level
   is close to its target size rather than being under-coarsened.
 - ``Field`` creation methods can now be ``vmap``ed over radial position ``rho``.
+- New function ``solve_dke_ambipolar`` to find the ambipolar radial electric field(s)
+  where the radial current vanishes, along with the corresponding DKE solutions. Multiple
+  roots are found using a Newton/secant iteration with deflation, reusing the Krylov
+  solution and recycled subspace between solves. See the "Ambipolar root finding
+  options" section of the advanced tuning docs for details.
+- Fix calculation of the covariant field components ``I`` and ``G`` for fields that are
+  not in Boozer coordinates.
+- The direct solve on the coarsest multigrid level now equilibrates the coarse matrix
+  before factoring it. This improves robustness for multispecies problems, where the
+  coarse matrix can be badly scaled and previously could stall the outer Krylov solve.
+- The dense coarse grid operator is now built a chunk of columns at a time, which
+  significantly reduces peak memory. The chunk size can be set with the
+  ``as_matrix_chunk`` key of ``multigrid_options``.
+- Reduced GPU memory usage in the Krylov solvers, avoiding duplicate copies of the
+  Krylov basis and recycled subspace.
+- Fix Krylov subspace recycling for transposed solves (used for reverse mode AD), and
+  for recycled subspaces containing zero or linearly dependent vectors, which could
+  previously corrupt the residual.
+- Krylov solvers no longer return NaN when the initial guess is already the exact
+  solution.
+- MDKE smoothers now support ``smooth_solver="banded"`` and ``"cr"`` storage formats
+  for the pitch angle line smoother.
+- New dependency on ``optimistix``. Added support for python 3.14, and extended the
+  supported version ranges of ``jax``, ``numpy``, ``quadax`` and ``scipy``.
 
 v0.0.1
 ------
