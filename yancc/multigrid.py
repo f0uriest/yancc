@@ -11,9 +11,8 @@ import numpy as np
 from jaxtyping import Array, Float, Int
 
 from .field import Field
-from .linalg import InverseLinearOperator, TransposedLinearOperator
+from .linalg import AbstractYanccOperator, DenseLUInverseOperator
 from .smoothers import (
-    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
@@ -154,54 +153,39 @@ def get_dke_jacobi_smoothers(
     return smoothers
 
 
-@eqx.filter_jit
-@jax.named_call
-def get_dke_jacobi2_smoothers(
-    fields,
-    pitchgrids,
-    speedgrid,
-    species,
-    Erho,
-    background,
-    potentials,
-    p1,
-    p2,
-    gauge,
-    smooth_solver,
-    weight,
-    coulomb_log=None,
-    **options,
-):
-    """Get multigrid smoothers for each field, pitchgrid."""
-    smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
-        smooth = [
-            DKEJacobi2Smoother(
-                field,
-                pitchgrid,
-                speedgrid,
-                species,
-                Erho,
-                background,
-                potentials,
-                p1=p1,
-                p2=p2,
-                axorder=order,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=weight,
-                coulomb_log=coulomb_log,
-                **options,
-            )
-            for order in ["atzsx", "tzasx", "zatsx"]
-        ]
-        smoothers.append(smooth)
-    return smoothers
-
-
 def _nearest(x: float, minval: int) -> int:
     """Round x to the nearest integer, floored at minval"""
     return max(int(round(x)), minval)
+
+
+def _water_fill_coarsen(sizes, floors, target_ratio):
+    """Shrink ``sizes`` so their product drops by ``target_ratio``, spread as
+    evenly as possible in log-space, without taking any axis below its floor.
+
+    An axis already close to its floor can't absorb its share of a uniform
+    per-axis factor; naively applying that factor anyway (and letting it clip)
+    silently under-coarsens, since the clipped axis then does not contribute
+    its assumed share of the reduction. Instead, an axis that would fall below
+    its floor at the current shared factor is clamped there, and the ratio it
+    failed to contribute is redistributed over the remaining axes.
+    """
+    sizes = list(sizes)
+    out: list[int] = [0] * len(sizes)
+    remaining = target_ratio
+    # Axes closest to their floor (smallest sizes[i]/floors[i]) clip first.
+    order = sorted(range(len(sizes)), key=lambda i: sizes[i] / floors[i])
+    for idx, i in enumerate(order):
+        s = remaining ** (1 / (len(sizes) - idx))
+        if sizes[i] / s < floors[i]:
+            out[i] = floors[i]
+            remaining = max(remaining / (sizes[i] / floors[i]), 1.0)
+        else:
+            free = order[idx:]
+            s = remaining ** (1 / len(free))
+            for j in free:
+                out[j] = _nearest(sizes[j] / s, floors[j])
+            return out
+    return out
 
 
 def get_grid_resolutions(
@@ -286,18 +270,17 @@ def get_grid_resolutions(
         factor = R ** (1 / (dim * nsteps))
 
     # Build fine -> coarse by uniform geometric scaling of every axis (which
-    # preserves the finest grid's aspect ratio) with a per-axis floor. Skip a
-    # level if integer rounding makes it identical to the previous one.
+    # preserves the finest grid's aspect ratio), water-filled across na, nt, nz
+    # so a floor-clipped axis (eg. nt already near min_nt) doesn't silently
+    # under-coarsen the level. The remaining axes take up its share instead,
+    # keeping each level's total size close to its target. Skip a level if
+    # integer rounding makes it identical to the previous one.
     resolutions = [finest]
     for i in range(1, nsteps + 1):
-        s = factor**i
-        res = (
-            ns,
-            nx,
-            _nearest(na / s, min_na),
-            _nearest(nt / s, min_nt),
-            _nearest(nz / s, min_nz),
+        na_i, nt_i, nz_i = _water_fill_coarsen(
+            (na, nt, nz), (min_na, min_nt, min_nz), R ** (i / nsteps)
         )
+        res = (ns, nx, na_i, nt_i, nz_i)
         if res != resolutions[-1]:
             resolutions.append(res)
     return resolutions[::-1]
@@ -745,7 +728,7 @@ def _build_interp_matrix(x_src, x_query, method, period):
     return P_T.T
 
 
-class Prolongation(lx.AbstractLinearOperator):
+class Prolongation(AbstractYanccOperator):
     """Coarse-to-fine grid prolongation as a linear operator.
 
     Interpolates a flattened ``(prefix_size, nalpha, ntheta, nzeta)`` array from a
@@ -824,11 +807,6 @@ class Prolongation(lx.AbstractLinearOperator):
         f = jnp.transpose(f, (3, 2, 1, 0))
         return f.flatten()
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         n = (
@@ -849,12 +827,8 @@ class Prolongation(lx.AbstractLinearOperator):
         )
         return jax.ShapeDtypeStruct((n,), dtype=self.field_fine.Bmag.dtype)
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
 
-
-class Restriction(lx.AbstractLinearOperator):
+class Restriction(AbstractYanccOperator):
     """Fine-to-coarse grid restriction as a linear operator.
 
     Applies the volume-weighted transpose of piecewise-linear (or other)
@@ -939,11 +913,6 @@ class Restriction(lx.AbstractLinearOperator):
         f = jnp.transpose(f, (3, 2, 1, 0))
         return f.flatten()
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         n = (
@@ -963,20 +932,6 @@ class Restriction(lx.AbstractLinearOperator):
             * self.field_coarse.nzeta
         )
         return jax.ShapeDtypeStruct((n,), dtype=self.field_coarse.Bmag.dtype)
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(Prolongation)
-@lx.is_diagonal.register(Prolongation)
-@lx.is_tridiagonal.register(Prolongation)
-@lx.is_symmetric.register(Restriction)
-@lx.is_diagonal.register(Restriction)
-@lx.is_tridiagonal.register(Restriction)
-def _(operator):
-    return False
 
 
 def _multigrid_cycle_recursive(
@@ -1268,7 +1223,7 @@ def krylov2s_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose
     return x
 
 
-class MultigridOperator(lx.AbstractLinearOperator):
+class MultigridOperator(AbstractYanccOperator):
     """Multigrid cycle as a linear operator.
 
     Parameters
@@ -1350,7 +1305,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.v2 = jnp.asarray(v2)
         self.smooth_method = smooth_method
         if coarse_opinv is None:
-            coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            coarse_opinv = DenseLUInverseOperator(operators[0].as_matrix())
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
         self.coarse_weight = jnp.asarray(coarse_weight)
@@ -1421,10 +1376,3 @@ class MultigridOperator(lx.AbstractLinearOperator):
             self.coarse_weight,
             self.verbose,
         )
-
-
-@lx.is_symmetric.register(MultigridOperator)
-@lx.is_diagonal.register(MultigridOperator)
-@lx.is_tridiagonal.register(MultigridOperator)
-def _(operator):
-    return False

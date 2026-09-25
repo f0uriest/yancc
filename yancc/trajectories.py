@@ -1,12 +1,10 @@
 """Drift Kinetic Operators without collisions."""
 
-import functools
 import itertools
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import lineax as lx
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float
 
@@ -18,13 +16,13 @@ from .collisions import (
 from .field import Field
 from .finite_diff import fd_coeffs, fdbwd, fdfwd
 from .linalg import (
-    TransposedLinearOperator,
+    AbstractDKEOperator,
     banded_mm,
     banded_to_dense,
     dense_to_banded,
 )
 from .species import LocalMaxwellian
-from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _refold
+from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import (
     AbstractSpeedGrid,
     MaxwellSpeedGrid,
@@ -69,7 +67,7 @@ def dkes_w_pitch(
     return w
 
 
-class MDKETheta(lx.AbstractLinearOperator):
+class MDKETheta(AbstractDKEOperator):
     """Advection operator in theta direction.
 
     Parameters
@@ -136,7 +134,7 @@ class MDKETheta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -192,56 +190,58 @@ class MDKETheta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "a":
-            return jax.vmap(jnp.diag)(
-                self.diagonal().reshape((-1, self.pitchgrid.nalpha))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "t":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                self.field.ntheta // 2,
             )
-        if self.axorder[-1] == "z":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        fd = self._fd[None, :, None, :]
-        bd = self._bd[None, :, None, :]
-        w = self._w[:, :, :, None]
-        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        fd = dense_to_banded(bw, bw, self._fd)
+        bd = dense_to_banded(bw, bw, self._bd)
+        # rows scaled by the upwinded wind, convolved axis last
+        w1 = jnp.moveaxis(self._w, 1, -1)[..., None, :]
+        dff, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 <= 0), fd)
+        dfb, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 > 0), bd)
+        df = dff + dfb
+
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
+        cols = (bw - bands) % self.field.ntheta
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, 0])
-        df = df.at[idx, 0, 0, 0].set(g1, indices_are_sorted=True, unique_indices=True)
+        gval = jnp.where(self.gauge, self._scale * basis, df[idx, 0, bands, cols])
+        df = df.at[idx, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
+        df = jnp.moveaxis(df, 2, 1)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.field.ntheta, self.field.ntheta))
+        df = df.reshape((-1, 2 * bw + 1, self.field.ntheta))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKEZeta(lx.AbstractLinearOperator):
+class MDKEZeta(AbstractDKEOperator):
     """Advection operator in zeta direction.
 
     Parameters
@@ -311,7 +311,7 @@ class MDKEZeta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -364,56 +364,57 @@ class MDKEZeta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "a":
-            return jax.vmap(jnp.diag)(
-                self.diagonal().reshape((-1, self.pitchgrid.nalpha))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "z":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                self.field.nzeta // 2,
             )
-        if self.axorder[-1] == "t":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        fd = self._fd[None, None, :, :]
-        bd = self._bd[None, None, :, :]
-        w = self._w[:, :, :, None]
-        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        fd = dense_to_banded(bw, bw, self._fd)
+        bd = dense_to_banded(bw, bw, self._bd)
+        # rows scaled by the upwinded wind, convolved axis last
+        w1 = self._w[..., None, :]
+        dff, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 <= 0), fd)
+        dfb, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 > 0), bd)
+        df = dff + dfb
+
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
+        cols = (bw - bands) % self.field.nzeta
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, 0])
-        df = df.at[idx, 0, 0, 0].set(g1, indices_are_sorted=True, unique_indices=True)
+        gval = jnp.where(self.gauge, self._scale * basis, df[idx, 0, bands, cols])
+        df = df.at[idx, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.field.nzeta, self.field.nzeta))
+        df = df.reshape((-1, 2 * bw + 1, self.field.nzeta))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKEPitch(lx.AbstractLinearOperator):
+class MDKEPitch(AbstractDKEOperator):
     """Advection operator in pitch angle direction.
 
     Parameters
@@ -480,7 +481,7 @@ class MDKEPitch(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -536,54 +537,58 @@ class MDKEPitch(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        if self.axorder[-1] == "z":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.nzeta)))
-        if self.axorder[-1] == "t":
-            return jax.vmap(jnp.diag)(self.diagonal().reshape((-1, self.field.ntheta)))
+        assert fmt in ["dense", "banded"]
+
+        if self.axorder[-1] != "a":  # its just diagonal
+            if bw is None:
+                bw = 0
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            if fmt == "dense":
+                return jax.vmap(jnp.diag)(df)
+            return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
+
+        if bw is None:
+            bw = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                self.pitchgrid.nalpha // 2,
+            )
 
         _, caxorder = _parse_axorder_shape_3d(
             self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
         )
-        fd = self._fd[:, None, None, :]
-        bd = self._bd[:, None, None, :]
-        w = self._w[:, :, :, None]
-        df = w * ((w > 0) * bd + (w <= 0) * fd)
+        fd = dense_to_banded(bw, bw, self._fd)
+        bd = dense_to_banded(bw, bw, self._bd)
+        # rows scaled by the upwinded wind, convolved axis last
+        w1 = jnp.moveaxis(self._w, 0, -1)[..., None, :]
+        dff, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 <= 0), fd)
+        dfb, _, _ = banded_mm(0, 0, bw, bw, w1 * (w1 > 0), bd)
+        df = dff + dfb
+
+        # gauge row is replaced by a single diagonal entry
+        bandwidth = 2 * bw + 1
+        bands = jnp.arange(bandwidth)
         idx = self.pitchgrid.nalpha // 2
-        g0 = jnp.where(self.gauge, 0.0, df[idx, 0, 0, :])
-        df = df.at[idx, 0, 0, :].set(g0, indices_are_sorted=True, unique_indices=True)
-        g1 = jnp.where(self.gauge, self._scale, df[idx, 0, 0, idx])
-        df = df.at[idx, 0, 0, idx].set(g1, indices_are_sorted=True, unique_indices=True)
+        cols = (idx + bw - bands) % self.pitchgrid.nalpha
+        basis = jnp.zeros(bandwidth, dtype=df.dtype).at[bw].set(1.0)
+        gval = jnp.where(self.gauge, self._scale * basis, df[0, 0, bands, cols])
+        df = df.at[0, 0, bands, cols].set(gval, unique_indices=True)
+        # band axis takes the place of the convolved axis, which stays last
+        df = jnp.moveaxis(df, 2, 0)
         df = jnp.moveaxis(df, (0, 1, 2), caxorder)
-        df = df.reshape((-1, self.pitchgrid.nalpha, self.pitchgrid.nalpha))
+        df = df.reshape((-1, 2 * bw + 1, self.pitchgrid.nalpha))
+        if fmt == "dense":
+            df = banded_to_dense(bw, bw, df)
         return df
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
 
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKE(lx.AbstractLinearOperator):
+class MDKE(AbstractDKEOperator):
     """Monoenergetic Drift Kinetic Equation operator.
 
     Parameters
@@ -651,7 +656,7 @@ class MDKE(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKE.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f0 = self._opa.mv(vector)
         f1 = self._opt.mv(vector)
@@ -689,52 +694,26 @@ class MDKE(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKE.block_diagonal")
-    def block_diagonal(self) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
-        d0 = self._opa.block_diagonal()
-        d1 = self._opt.block_diagonal()
-        d2 = self._opz.block_diagonal()
-        d3 = self._opp.block_diagonal()
+        if fmt == "banded" and bw is None:
+            sizes = {
+                "a": self.pitchgrid.nalpha,
+                "t": self.field.ntheta,
+                "z": self.field.nzeta,
+            }
+            bw = min(
+                max(
+                    fd_coeffs[1][self.p1].size // 2,
+                    fd_coeffs[2][self.p2].size // 2,
+                ),
+                sizes[self.axorder[-1]] // 2,
+            )
+        d0 = self._opa.block_diagonal(fmt, bw)
+        d1 = self._opt.block_diagonal(fmt, bw)
+        d2 = self._opz.block_diagonal(fmt, bw)
+        d3 = self._opp.block_diagonal(fmt, bw)
         return d0 + d1 + d2 + d3
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(MDKE)
-@lx.is_diagonal.register(MDKE)
-@lx.is_tridiagonal.register(MDKE)
-@lx.is_symmetric.register(MDKETheta)
-@lx.is_diagonal.register(MDKETheta)
-@lx.is_tridiagonal.register(MDKETheta)
-@lx.is_symmetric.register(MDKEZeta)
-@lx.is_diagonal.register(MDKEZeta)
-@lx.is_tridiagonal.register(MDKEZeta)
-@lx.is_symmetric.register(MDKEPitch)
-@lx.is_diagonal.register(MDKEPitch)
-@lx.is_tridiagonal.register(MDKEPitch)
-def _(operator):
-    return False
 
 
 #######
@@ -806,7 +785,7 @@ def sfincs_w_speed(
     return w
 
 
-class DKETheta(lx.AbstractLinearOperator):
+class DKETheta(AbstractDKEOperator):
     """Advection operator in theta direction.
 
     Parameters
@@ -888,7 +867,7 @@ class DKETheta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -922,7 +901,7 @@ class DKETheta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -947,7 +926,7 @@ class DKETheta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -972,7 +951,7 @@ class DKETheta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1042,95 +1021,8 @@ class DKETheta(lx.AbstractLinearOperator):
             df = banded_to_dense(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKETheta.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
-            )
-        if self.axorder[2] == "z":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
 
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
-        fd = self._fd
-        bd = self._bd
-        Is = jnp.eye(len(self.species))
-        Ix = jnp.eye(self.speedgrid.nx)
-
-        ff = functools.reduce(jnp.kron, [fd, Is, Ix])
-        bb = functools.reduce(jnp.kron, [bd, Is, Ix])
-
-        w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
-        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
-        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(*shape, self.field.ntheta, len(self.species), self.speedgrid.nx)
-        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nalpha // 2
-        idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        N = self.in_size()
-        M = self.field.ntheta * len(self.species) * self.speedgrid.nx
-        return df.reshape(N // M, M, M)
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEZeta(lx.AbstractLinearOperator):
+class DKEZeta(AbstractDKEOperator):
     """Advection operator in zeta direction.
 
     Parameters
@@ -1215,7 +1107,7 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1246,7 +1138,7 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1271,7 +1163,7 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1296,7 +1188,7 @@ class DKEZeta(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1365,95 +1257,8 @@ class DKEZeta(lx.AbstractLinearOperator):
             df = banded_to_dense(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKEZeta.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
-            )
-        if self.axorder[2] == "t":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
 
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
-        fd = self._fd
-        bd = self._bd
-        Is = jnp.eye(len(self.species))
-        Ix = jnp.eye(self.speedgrid.nx)
-
-        ff = functools.reduce(jnp.kron, [fd, Is, Ix])
-        bb = functools.reduce(jnp.kron, [bd, Is, Ix])
-
-        w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
-        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
-        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(*shape, self.field.nzeta, len(self.species), self.speedgrid.nx)
-        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nalpha // 2
-        idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, 0, idxs, idxx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        N = self.in_size()
-        M = self.field.nzeta * len(self.species) * self.speedgrid.nx
-        return df.reshape(N // M, M, M)
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEPitch(lx.AbstractLinearOperator):
+class DKEPitch(AbstractDKEOperator):
     """Advection operator in pitch angle direction.
 
     Parameters
@@ -1535,7 +1340,7 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1569,7 +1374,7 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1594,7 +1399,7 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1619,7 +1424,7 @@ class DKEPitch(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1681,95 +1486,8 @@ class DKEPitch(lx.AbstractLinearOperator):
             df = banded_to_dense(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKEPitch.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "t":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        if self.axorder[2] == "z":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
 
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
-        fd = self._fd
-        bd = self._bd
-        Is = jnp.eye(len(self.species))
-        Ix = jnp.eye(self.speedgrid.nx)
-
-        ff = functools.reduce(jnp.kron, [fd, Is, Ix])
-        bb = functools.reduce(jnp.kron, [bd, Is, Ix])
-
-        w1 = jnp.moveaxis(self._w, (0, 1, 2, 3, 4), caxorder)
-        w1 = w1.reshape(w1.shape[0] * w1.shape[1], -1, 1)
-        df = w1 * ((w1 > 0) * bb + (w1 <= 0) * ff)
-        df = df.reshape(
-            *shape, self.pitchgrid.nalpha, len(self.species), self.speedgrid.nx
-        )
-        df = jnp.moveaxis(df, caxorder, (0, 1, 2, 3, 4))
-        idxa = self.pitchgrid.nalpha // 2
-        idxx = self.speedgrid.gauge_idx
-        idxs = jnp.arange(len(self.species))
-        idxsx = idxs[:, None] * self.speedgrid.nx + idxx
-        idxs, idxx = jnp.unravel_index(idxsx, (len(self.species), self.speedgrid.nx))
-
-        df = jnp.where(
-            self.gauge,
-            df.at[:, idxx, idxa, 0, 0, :, :, :]
-            .set(0, indices_are_sorted=True, unique_indices=True)
-            .at[idxs, idxx, idxa, 0, 0, idxa, idxs, idxx]
-            .set(self._scale, indices_are_sorted=True, unique_indices=True),
-            df,
-        )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
-        N = self.in_size()
-        M = self.pitchgrid.nalpha * len(self.species) * self.speedgrid.nx
-        return df.reshape(N // M, M, M)
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKESpeed(lx.AbstractLinearOperator):
+class DKESpeed(AbstractDKEOperator):
     """Advection operator in speed direction.
 
     Parameters
@@ -1831,7 +1549,7 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f = vector
         shp = f.shape
@@ -1862,7 +1580,7 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.diagonal")
-    def diagonal(self):
+    def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
         shape, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1894,7 +1612,7 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.abs_row_sum")
-    def abs_row_sum(self):
+    def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
         _, caxorder = _parse_axorder_shape_4d(
             self.field.ntheta,
@@ -1928,7 +1646,7 @@ class DKESpeed(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None):
+    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
@@ -1992,60 +1710,8 @@ class DKESpeed(lx.AbstractLinearOperator):
             df = dense_to_banded(bw, bw, df)
         return df
 
-    @eqx.filter_jit
-    @jax.named_scope("DKESpeed.block_diagonal2")
-    def block_diagonal2(self):
-        """Block diagonal of operator as (N,M,M) array. Unfolds s,x"""
-        assert self.axorder[-2:] == "sx"
-        if self.axorder[2] == "a":
-            return _refold(
-                self.block_diagonal(), len(self.species) * self.pitchgrid.nalpha
-            )
-        elif self.axorder[2] == "t":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.ntheta)
-        elif self.axorder[2] == "z":
-            return _refold(self.block_diagonal(), len(self.species) * self.field.nzeta)
-        else:
-            # unreachable, just kept to appease type checker
-            raise ValueError()  # pragma: no cover
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKE(lx.AbstractLinearOperator):
+class DKE(AbstractDKEOperator):
     """Drift Kinetic Equation operator.
 
     Parameters
@@ -2156,7 +1822,7 @@ class DKE(lx.AbstractLinearOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKE.mv")
-    def mv(self, vector):
+    def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
         f0 = self._opx.mv(vector)
         f1 = self._opa.mv(vector)
@@ -2261,83 +1927,3 @@ class DKE(lx.AbstractLinearOperator):
             lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal(fmt, bw),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)
-
-    @eqx.filter_jit
-    @jax.named_scope("DKE.block_diagonal2")
-    def block_diagonal2(self) -> Float[Array, "n1 n2 n2"]:
-        """Block diagonal of operator as (N,M,M) array."""
-        sizes = {
-            "s": len(self.species),
-            "x": self.speedgrid.nx,
-            "a": self.pitchgrid.nalpha,
-            "t": self.field.ntheta,
-            "z": self.field.nzeta,
-        }
-        n2 = sizes[self.axorder[-1]] * sizes[self.axorder[-2]] * sizes[self.axorder[-3]]
-        n1 = np.prod(list(sizes.values())) // n2
-        x = self.operator_weights[-1] * jnp.broadcast_to(jnp.eye(n2), (n1, n2, n2))
-        intermediates = [
-            lambda x: x + self.operator_weights[0] * self._opx.block_diagonal2(),
-            lambda x: x + self.operator_weights[1] * self._opa.block_diagonal2(),
-            lambda x: x + self.operator_weights[2] * self._opt.block_diagonal2(),
-            lambda x: x + self.operator_weights[3] * self._opz.block_diagonal2(),
-            # could just call C.diagonal() but we prefer to flatten those extra loops
-            lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal2(),
-            lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal2(),
-            lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal2(),
-        ]
-        return eqx.internal.scan_trick(lambda x: x, intermediates, x)
-
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
-    def in_structure(self):
-        """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(DKE)
-@lx.is_diagonal.register(DKE)
-@lx.is_tridiagonal.register(DKE)
-@lx.is_symmetric.register(DKESpeed)
-@lx.is_diagonal.register(DKESpeed)
-@lx.is_tridiagonal.register(DKESpeed)
-@lx.is_symmetric.register(DKEPitch)
-@lx.is_diagonal.register(DKEPitch)
-@lx.is_tridiagonal.register(DKEPitch)
-@lx.is_symmetric.register(DKEZeta)
-@lx.is_diagonal.register(DKEZeta)
-@lx.is_tridiagonal.register(DKEZeta)
-@lx.is_symmetric.register(DKETheta)
-@lx.is_diagonal.register(DKETheta)
-@lx.is_tridiagonal.register(DKETheta)
-def _(operator):
-    return False

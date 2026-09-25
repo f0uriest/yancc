@@ -187,18 +187,19 @@ def test_banded_transpose(p, q, n, periodic):
     np.testing.assert_allclose(A.T, yancc.linalg.banded_to_dense(int(pt), int(qt), at))
 
 
-def test_inverse_linear_operator():
-    """Interface coverage for InverseLinearOperator."""
+def test_dense_lu_inverse_operator():
+    """Interface coverage for DenseLUInverseOperator."""
     rng = np.random.default_rng(0)
     n = 6
-    A = rng.standard_normal((n, n)) + n * np.eye(n)  # well-conditioned
+    # well-conditioned, with rows shuffled so that LU needs pivoting
+    A = (rng.standard_normal((n, n)) + n * np.eye(n))[rng.permutation(n)]
     Aop = lx.MatrixLinearOperator(jnp.array(A))
-    Ainv = yancc.linalg.InverseLinearOperator(Aop)
+    Ainv = yancc.linalg.DenseLUInverseOperator(Aop.as_matrix())
 
     np.testing.assert_allclose(Ainv.as_matrix(), np.linalg.inv(A), atol=1e-10)
     assert Ainv.in_structure().shape == (n,)
     assert Ainv.out_structure().shape == (n,)
-    # is_diagonal dispatches to the wrapped operator
+    # the inverse of a non-diagonal operator is not diagonal
     assert lx.is_diagonal(Ainv) == lx.is_diagonal(Aop)
     # transpose is the inverse of the transpose
     np.testing.assert_allclose(
