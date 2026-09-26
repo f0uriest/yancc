@@ -1,0 +1,281 @@
+name: Benchmarks
+
+# Compares the convergence benchmarks (benchmarks/) on the PR against master and posts
+# the result as a PR comment, updated in place on every run.
+#
+# Runs the full benchmark suite. Trigger by adding the run_benchmarks label to the PR
+# (re-runs on every push while the label is present), or run manually from the Actions
+# tab (results go to the job summary only).
+#
+# The suite is split into groups that run on separate runners. Each group runs the PR
+# and then master back to back on the SAME runner, so the two are always compared on
+# identical hardware. A final job merges the groups into one report.
+
+on:
+  pull_request:
+    branches:
+      - master
+    types: [labeled, synchronize]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # number of groups, keep in sync with the matrix below. Groups are balanced using the
+  # case durations in benchmarks/durations.json
+  SPLITS: 4
+
+jobs:
+  benchmark:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' &&
+      github.event.label.name == 'run_benchmarks') ||
+      (github.event.action == 'synchronize' &&
+      contains(github.event.pull_request.labels.*.name, 'run_benchmarks')) }}
+    runs-on: ubuntu-latest
+    # hosted runners are capped at 6 hours
+    timeout-minutes: 350
+    strategy:
+      # a failing group shouldn't stop the others, the report says which ones failed
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
+    permissions:
+      contents: read
+    steps:
+      # The PR code and the master code live in separate directories. The benchmarks are
+      # always run from pr/benchmarks, so master is measured with the PR's version of the
+      # benchmark cases and scripts and only the solver code differs between the runs.
+      # Full history is needed so versioneer can compute the package version.
+      - name: Checkout PR
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: pr
+          fetch-depth: 0
+      - name: Checkout master
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          path: base
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: pr/pyproject.toml
+
+      - name: Install PR code
+        run: |
+          python -m pip install --upgrade pip
+          # the benchmark cases load DESC example equilibria
+          pip install --upgrade -e "./pr[desc]"
+          pip list
+          lscpu
+
+      - name: Run benchmarks (PR)
+        id: bench_pr
+        continue-on-error: true
+        working-directory: pr
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          python -I -c "import yancc; print(yancc.__file__)"
+          mkdir -p "$GITHUB_WORKSPACE/results"
+          python benchmarks/bench_dke.py run --tier nightly --splits "$SPLITS" --group "$GROUP" \
+            --out "$GITHUB_WORKSPACE/results/pr_dke_$GROUP.json"
+          python benchmarks/bench_mdke.py run --tier nightly --splits "$SPLITS" --group "$GROUP" \
+            --out "$GITHUB_WORKSPACE/results/pr_mdke_$GROUP.json"
+
+      # Re-point the editable install at master, then run the same benchmark files on
+      # the same group of cases.
+      - name: Install master code
+        run: pip install --upgrade -e "./base[desc]"
+
+      - name: Run benchmarks (master)
+        id: bench_base
+        continue-on-error: true
+        working-directory: pr
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          # make sure the solver code really comes from master while the benchmark
+          # scripts are the PR's. Isolated mode keeps the working directory (the PR
+          # checkout) off sys.path, which is also true when running a script by path.
+          python -I - <<'PY'
+          import os
+          import sys
+
+          sys.path.insert(0, "benchmarks")
+          import yancc
+
+          base = os.path.join(os.environ["GITHUB_WORKSPACE"], "base")
+          print(yancc.__file__)
+          assert os.path.realpath(yancc.__file__).startswith(base), yancc.__file__
+          PY
+          python benchmarks/bench_dke.py run --tier nightly --splits "$SPLITS" --group "$GROUP" \
+            --out "$GITHUB_WORKSPACE/results/base_dke_$GROUP.json"
+          python benchmarks/bench_mdke.py run --tier nightly --splits "$SPLITS" --group "$GROUP" \
+            --out "$GITHUB_WORKSPACE/results/base_mdke_$GROUP.json"
+
+      # Tells the report job how this group went (a crashed run leaves no results file)
+      - name: Record group status
+        if: always()
+        env:
+          GROUP: ${{ matrix.group }}
+          PR_OUTCOME: ${{ steps.bench_pr.outcome }}
+          BASE_OUTCOME: ${{ steps.bench_base.outcome }}
+        run: |
+          mkdir -p results
+          echo "group=$GROUP pr=$PR_OUTCOME base=$BASE_OUTCOME base_sha=$(git -C base rev-parse HEAD)" \
+            > "results/status_$GROUP.txt"
+          cat "results/status_$GROUP.txt"
+
+      - name: Upload group results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark_results_${{ matrix.group }}
+          path: results/
+
+      - name: Fail if the PR benchmarks did not complete
+        if: steps.bench_pr.outcome == 'failure'
+        run: |
+          echo "The benchmarks failed on the PR code, see the run steps above." >&2
+          exit 1
+
+  report:
+    needs: benchmark
+    # also when a group failed, but not when the benchmark job was skipped (no label)
+    if: ${{ always() && needs.benchmark.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write # allows updating the benchmark comment on the PR
+    steps:
+      # only the comparison script is needed, which only uses the standard library
+      - name: Checkout PR
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Download group results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark_results_*
+          path: results
+          merge-multiple: true
+
+      - name: Build report
+        id: report
+        env:
+          PR_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # groups that failed on either side, or never reported (e.g. cancelled)
+          problems=""
+          for g in $(seq 1 "$SPLITS"); do
+            f="results/status_$g.txt"
+            if [ ! -f "$f" ]; then
+              problems="$problems\n- group $g did not report"
+              continue
+            fi
+            grep -q "pr=success" "$f" || problems="$problems\n- group $g: the PR benchmarks failed"
+            grep -q "base=success" "$f" || problems="$problems\n- group $g: the master benchmarks failed"
+          done
+          echo "problems<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$problems" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          base_sha=$(grep -ho 'base_sha=[0-9a-f]*' results/status_*.txt | head -1 | cut -d= -f2)
+          # ls -v gives group order 1, 2, ..., 10; missing files are skipped by the script
+          files() { ls -v results/"$1"_*.json 2>/dev/null || echo "results/none"; }
+          {
+            echo "### Benchmark results"
+            echo ""
+            echo "PR \`${PR_SHA:0:9}\` vs master \`${base_sha:0:9}\`, full suite in $SPLITS groups."
+            echo "Each group ran the PR and master back to back on the same runner."
+            echo ""
+            if [ -n "$(echo -e "$problems")" ]; then
+              echo "⚠️ Some benchmarks did not complete, so cases may be missing below:"
+              echo -e "$problems"
+              echo ""
+            fi
+            python benchmarks/compare_markdown.py \
+              --base $(files base_dke) --current $(files pr_dke) --title "DKE"
+            python benchmarks/compare_markdown.py \
+              --base $(files base_mdke) --current $(files pr_mdke) --title "Monoenergetic DKE"
+            echo "🟢 improvement, 🔴 regression. Success and matvec count (\`nmv\`) are"
+            echo "deterministic and are what count as regressions (\`nmv\` changes over 5%)."
+            echo "Compile time and run time (one run of the ahead-of-time compiled solve) depend"
+            echo "on the shared runner, so they are only marked when they change by over 15% and"
+            echo "2 s. The compiled memory is XLA's estimate for the executable (arguments,"
+            echo "outputs and temporaries), marked when it changes by over 10%. Both are"
+            echo "informational."
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Add or update comment on PR
+        # fork PRs get a read-only token and can't comment, the job summary has the report
+        if: >-
+          ${{ always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            // The benchmarks are re-run on every push while the label is present. Tag
+            // the report with a hidden marker so later runs overwrite the stale one in
+            // place instead of stacking up a new comment each time. Only comments
+            // written by a bot are candidates, so quoting the report back doesn't
+            // hijack it.
+            const marker = '<!-- yancc-benchmark-results -->';
+            let report = fs.readFileSync(
+              process.env.GITHUB_WORKSPACE + '/report.md', 'utf8'
+            );
+            // GitHub rejects comments over 65536 characters
+            if (report.length > 60000) {
+              report = report.slice(0, 60000) + '\n\n_(report truncated)_\n';
+            }
+            const body = `${marker}\n${report}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number },
+            );
+            const existing = comments.find(
+              (c) => c.user?.type === 'Bot' && c.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark_report
+          path: report.md
+
+      # A failed master run still gives a useful report (the PR results alone), but a
+      # failed or missing PR run means the benchmarks are broken and the check should
+      # show it.
+      - name: Fail if any PR benchmark group did not complete
+        env:
+          PROBLEMS: ${{ steps.report.outputs.problems }}
+        run: |
+          if echo "$PROBLEMS" | grep -qE "did not report|PR benchmarks failed"; then
+            echo "$PROBLEMS" >&2
+            exit 1
+          fi
