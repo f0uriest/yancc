@@ -62,7 +62,27 @@ NMV_REL_TOL = 0.05
 
 # Descriptive columns (field / species / nu* / E* / grid) shared by run and
 # compare so the case being solved is legible without cross-referencing cases_dke.py.
-_CASE_HDR = f"{'field':>12} {'sp':>2} {'nu*':>10} {'E*':>10} {'grid':>13}"
+_CASE_HDR = (
+    f"{'field':>12} {'species':>11} {'Ti/Te':>5} {'nu*':>10} {'E*':>10} {'grid':>13}"
+)
+
+
+def _species_label(case: Case) -> str:
+    """Species count as-is; explicit kinds as e.g. 'e+He' or 'm12q6+H'.
+
+    When some species are background only, kinetic and background species are separated
+    by '/', e.g. 'e/H' for kinetic electrons on an ion background.
+    """
+    if isinstance(case.species, int):
+        if case.nkinetic is None:
+            return str(case.species)
+        kinds = ("H",) if case.species == 1 else ("e", "H")
+    else:
+        kinds = case.species
+    names = [k if isinstance(k, str) else f"m{k[0]:g}q{k[1]:g}" for k in kinds]
+    if case.nkinetic is None:
+        return "+".join(names)
+    return "+".join(names[: case.nkinetic]) + "/" + "+".join(names[case.nkinetic :])
 
 
 def _case_cols(case: Case) -> str:
@@ -70,7 +90,7 @@ def _case_cols(case: Case) -> str:
     nx, na, nt, nz = case.res
     grid = f"{nx}x{na}x{nt}x{nz}"
     return (
-        f"{case.field:>12} {case.species:>2} "
+        f"{case.field:>12} {_species_label(case):>11} {case.tratio:>5.2f} "
         f"{case.nustar:>10.1e} {case.estar:>10.2e} {grid:>13}"
     )
 
@@ -88,13 +108,14 @@ def _env_header() -> dict:
 
 def run_case(case: Case, verbose: int = 0) -> dict:
     """Solve one case with production defaults; return its deterministic metrics."""
-    field, pg, sg, sp, Erho = case.build()
+    field, pg, sg, sp, Erho, bg = case.build()
     _sol, info = solve_dke(
         field,
         pg,
         sg,
         sp,
         Erho,
+        background=bg or None,
         rtol=case.rtol,
         coulomb_log=case.coulomb_log,
         verbose=verbose,
@@ -143,7 +164,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         flush=True,
     )
     print(
-        f"  {'case':>22} {_CASE_HDR} {'nmv':>6} {'nit':>4} {'ok':>3} "
+        f"  {'case':>26} {_CASE_HDR} {'nmv':>6} {'nit':>4} {'ok':>3} "
         f"{'res':>10}  {'sec':>5}",
         flush=True,
     )
@@ -163,12 +184,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         nmv = "ERR" if r["nmv"] is None else r["nmv"]
         res = "-" if r["res"] is None else f"{r['res']:.2e}"
         print(
-            f"  {case.name:>22} {_case_cols(case)} {str(nmv):>6} "
+            f"  {case.name:>26} {_case_cols(case)} {str(nmv):>6} "
             f"{str(r['niter']):>4} {okstr:>3} {res:>10}  {r['wall_s']:>5.0f}",
             flush=True,
         )
         if err:
             print(f"      -> {err}", flush=True)
+        # compiled functions are per-case, so drop them rather than let memory grow
+        # over a long run
+        jax.clear_caches()
 
     if args.out:
         out = {"header": header, "tier": label, "results": results}
@@ -202,7 +226,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         f"# baseline {bh['yancc_version']} ({bh['device']})  vs  current "
         f"{ch['yancc_version']} ({ch['device']})"
     )
-    print(f"  {'case':>22} {_CASE_HDR} {'base':>12} {'cur':>12}  verdict")
+    print(f"  {'case':>26} {_CASE_HDR} {'base':>12} {'cur':>12}  verdict")
 
     # Case params aren't stored in the results JSON; recover them from the current
     # catalog by name (blank for cases no longer present, e.g. dropped baselines).
@@ -217,17 +241,17 @@ def cmd_compare(args: argparse.Namespace) -> int:
         b = base["results"].get(name)
         c = cur["results"].get(name)
         if b is None:
-            print(f"  {name:>22} {info} {'--':>12} {'(new case)':>12}  info")
+            print(f"  {name:>26} {info} {'--':>12} {'(new case)':>12}  info")
             continue
         if c is None:
-            print(f"  {name:>22} {info} {'(dropped)':>12} {'--':>12}  info")
+            print(f"  {name:>26} {info} {'(dropped)':>12} {'--':>12}  info")
             continue
         bstr = _fmt(b)
         cstr = _fmt(c)
         verdict, is_reg = _verdict(b, c)
         if is_reg:
             regressions += 1
-        print(f"  {name:>22} {info} {bstr:>12} {cstr:>12}  {verdict}")
+        print(f"  {name:>26} {info} {bstr:>12} {cstr:>12}  {verdict}")
 
     if regressions:
         print(f"\n# {regressions} REGRESSION(S)")

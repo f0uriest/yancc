@@ -175,6 +175,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         if err:
             print(f"      -> {err}", flush=True)
+        # compiled functions are per-case, so drop them rather than let memory grow
+        # over a long run
+        jax.clear_caches()
 
     if args.out:
         out = {"header": header, "tier": label, "results": results}

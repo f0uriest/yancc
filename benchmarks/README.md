@@ -68,8 +68,23 @@ deliberately when the shipped behavior changes for a known-good reason.
 
 ## The case matrix
 
-Defined in `cases_dke.py` as a list of `Case` dataclasses (equilibrium, species
-count, target ion `nustar`, Er, grid resolution, tolerances).
+Defined in `cases_dke.py` as a list of `Case` dataclasses (equilibrium, species,
+target `nustar` and `estar` of the reference species, grid resolution, tolerances).
+`species` is a count (1 -> H, 2 -> e + H) or a tuple of kinds such as `("H", (12, 6))`,
+and the last species is the reference for `nustar`/`estar` unless `reference` says
+otherwise. Optional fields:
+
+- `tratio`: temperature of the last species relative to the first.
+- `nkinetic`: solve only the first `nkinetic` species; the rest enter the collision
+  operator as static backgrounds (`solve_dke(background=...)`).
+- `density_ratios`: species densities relative to the reference species, replacing the
+  quasineutral default (e.g. for a dilute impurity). Required for more than two species.
+- `reference`: index of the species that sets `nustar`, `estar` and the density scale
+  (e.g. the main ion while an impurity trails as a background).
+
+The matrix includes temperature-ratio, kinetic-electron-on-ion-background, extreme
+mass/temperature-ratio, and impurity (light, heavy, dilute, background-only) cases
+alongside the equilibrium / collisionality / resolution scans.
 
 ## The monoenergetic benchmark
 
