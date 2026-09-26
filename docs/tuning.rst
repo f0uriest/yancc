@@ -2,8 +2,8 @@
 Advanced Tuning
 ================
 
-This page documents the kwargs accepted by :func:`~yancc.solve.solve_dke`,
-:func:`~yancc.solve.solve_mdke` and :func:`~yancc.solve.solve_dke_ambipolar` beyond
+This page documents the kwargs accepted by :func:`~yancc.solve_dke`,
+:func:`~yancc.solve_mdke` and :func:`~yancc.solve_dke_ambipolar` beyond
 the ones shown in the quickstart, the keys of the ``multigrid_options`` dictionary
 that controls the preconditioner, and the keys of the ``root_options`` dictionary that
 controls the search for ambipolar roots. These are intended for users who already have a working
@@ -22,7 +22,7 @@ Krylov solver options
 
 Both solvers run a flexible GCROT(m,k) Krylov method preconditioned by a
 multigrid sweep to solve the linear system :math:`Af=b`. The kwargs below are accepted
-by both :func:`~yancc.solve.solve_dke` and :func:`~yancc.solve.solve_mdke` (passed as
+by both :func:`~yancc.solve_dke` and :func:`~yancc.solve_mdke` (passed as
 ``**options``):
 
 ``rtol`` *(float, default 1e-5)*
@@ -230,9 +230,9 @@ DKE-only multigrid options
 Ambipolar root finding options
 ==============================
 
-:func:`~yancc.solve.solve_dke_ambipolar` searches for the values of ``Erho`` where the
+:func:`~yancc.solve_dke_ambipolar` searches for the values of ``Erho`` where the
 radial current :math:`J_\rho = \sum_s q_s \Gamma_s` vanishes, solving the DKE at every
-trial value. Each solve is done by :func:`~yancc.solve.solve_dke`, so the Krylov and
+trial value. Each solve is done by :func:`~yancc.solve_dke`, so the Krylov and
 DKE-only options above, and ``multigrid_options``, apply to every solve of the search
 and can be passed as ``**options``, with the following differences:
 
@@ -242,7 +242,7 @@ and can be passed as ``**options``, with the following differences:
   solve of the search, so it pays to make it larger than for a single solve.
 - ``f1`` and ``U`` are not accepted, since the search manages the warm start between
   solves itself. ``M``, ``B`` and ``C`` are accepted as for
-  :func:`~yancc.solve.solve_dke`; note that a given ``M`` is used at every value of
+  :func:`~yancc.solve_dke`; note that a given ``M`` is used at every value of
   ``Erho``.
 
 The search itself is controlled by the following kwargs:

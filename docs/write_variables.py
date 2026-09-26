@@ -97,15 +97,15 @@ block = """
 
 write_csv(_DKE_OUTPUTS, "DKE")
 header += block.format(
-    "Drift Kinetic Equation (``yancc.solution.DKESolution``)",
-    "-" * len("Drift Kinetic Equation (``yancc.solution.DKESolution``)"),
+    "Drift Kinetic Equation (``yancc.DKESolution``)",
+    "-" * len("Drift Kinetic Equation (``yancc.DKESolution``)"),
     "DKE",
     "DKE",
 )
 write_csv(_MDKE_OUTPUTS, "MDKE")
 header += block.format(
-    "Monoenergetic Drift Kinetic Equation (``yancc.solution.MDKESolution``)",
-    "-" * len("Monoenergetic Drift Kinetic Equation (``yancc.solution.MDKESolution``)"),
+    "Monoenergetic Drift Kinetic Equation (``yancc.MDKESolution``)",
+    "-" * len("Monoenergetic Drift Kinetic Equation (``yancc.MDKESolution``)"),
     "MDKE",
     "MDKE",
 )

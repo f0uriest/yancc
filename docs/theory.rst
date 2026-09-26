@@ -21,7 +21,7 @@ magnetic equilibrium:
   more recently, MONKES [5]_;
 
 Both problems are linear and time-independent: each call to
-:func:`~yancc.solve.solve_dke` or :func:`~yancc.solve.solve_mdke` is a single
+:func:`~yancc.solve_dke` or :func:`~yancc.solve_mdke` is a single
 sparse linear solve.
 
 Coordinates
@@ -42,7 +42,7 @@ output in yancc is in :math:`\rho` (see :ref:`/quickstart.ipynb#radial-coordinat
 quickstart for conversions from :math:`s` or :math:`r`).
 
 The on-surface grid sizes are ``ntheta`` and ``nzeta``, set when the
-:class:`~yancc.field.Field` is constructed.
+:class:`~yancc.Field` is constructed.
 
 Velocity space
 --------------
@@ -69,9 +69,9 @@ With these conventions the local Maxwellian for species :math:`s` is
     F_{M,s}(\rho, x_s) = n_s \left( \frac{m_s}{2 \pi T_s} \right)^{3/2}
                         e^{-x_s^2}.
 
-The pitch-angle grid (:class:`~yancc.velocity_grids.UniformPitchAngleGrid`)
+The pitch-angle grid (:class:`~yancc.UniformPitchAngleGrid`)
 has ``nalpha`` uniformly spaced points on :math:`\alpha \in [0, \pi]`. The speed
-grid (:class:`~yancc.velocity_grids.MaxwellSpeedGrid`) has ``nx`` collocation
+grid (:class:`~yancc.MaxwellSpeedGrid`) has ``nx`` collocation
 nodes chosen as the roots of polynomials orthogonal under the Maxwellian
 weight :math:`e^{-x^2}` on :math:`[0, \infty)`; this is what makes a small
 ``nx`` (typically 5–8) sufficient to resolve thermal moments.
@@ -99,7 +99,7 @@ where :math:`\mathbf{b} = \mathbf{B}/B`, :math:`\mathbf{v}_E` is the
 flux-surface :math:`\mathbf{E} \times \mathbf{B}` drift driven by
 :math:`E_\rho`, and :math:`C_s` is the linearized Fokker–Planck collision
 operator including both test-particle and field-particle pieces, summed over
-all kinetic species and any additional :class:`~yancc.species.LocalMaxwellian`
+all kinetic species and any additional :class:`~yancc.LocalMaxwellian`
 ``background`` species.
 
 In terms of our chosen coordinates and field components this takes the form
@@ -189,7 +189,7 @@ parallel electric field (usually zero in stellarators).
 Mapping onto the API
 --------------------
 
-The public inputs to :func:`~yancc.solve.solve_dke` correspond to
+The public inputs to :func:`~yancc.solve_dke` correspond to
 equation :eq:`dke` and :eq:`forces` as follows:
 
 ================================================ ==============================================================
@@ -204,7 +204,7 @@ API input                                        Term in the equations
 ``field``                                        :math:`B,\, \mathbf{b},\, \mathbf{v}_{m,s},\, \mathbf{v}_E`
 ================================================ ==============================================================
 
-The returned :class:`~yancc.solution.DKESolution` stores
+The returned :class:`~yancc.DKESolution` stores
 :math:`f_{1,s}` on the full ``(ns, nx, na, nt, nz)`` grid; flux-surface
 moments are computed on demand via ``sol.get(name)``.
 
@@ -236,7 +236,7 @@ After dividing through by :math:`v`, only two scalar parameters remain:
     \quad [\mathrm{m^{-1}}],
 
 passed as ``erhohat`` and ``nuhat`` to
-:func:`~yancc.solve.solve_mdke`. yancc solves :eq:`mdke` two times - once
+:func:`~yancc.solve_mdke`. yancc solves :eq:`mdke` two times - once
 per unique drive (the first and second are the same when speed is ignored) - and
 assembles the 3×3 monoenergetic transport matrix
 

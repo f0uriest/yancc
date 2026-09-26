@@ -13,14 +13,14 @@ Picking grid resolutions
 A yancc solve has four resolution parameters:
 
 - ``nx`` — collocation nodes in the speed coordinate :math:`x = v / v_{th}`.
-  Set on :class:`~yancc.velocity_grids.MaxwellSpeedGrid`. Used by the full
+  Set on :class:`~yancc.MaxwellSpeedGrid`. Used by the full
   DKE only; the MDKE is monoenergetic and has no speed grid.
 - ``nalpha`` — points along the pitch-angle :math:`\alpha \in [0, \pi]`. Set
-  on :class:`~yancc.velocity_grids.UniformPitchAngleGrid`.
+  on :class:`~yancc.UniformPitchAngleGrid`.
 - ``ntheta`` — points along the poloidal angle :math:`\theta \in [0, 2\pi]`
-  on the flux surface. Set when constructing :class:`~yancc.field.Field`.
+  on the flux surface. Set when constructing :class:`~yancc.Field`.
 - ``nzeta`` — points along the toroidal angle :math:`\zeta \in [0, 2\pi/NFP]`
-  on the flux surface. Also set on :class:`~yancc.field.Field`.
+  on the flux surface. Also set on :class:`~yancc.Field`.
 
 What each grid actually resolves
 --------------------------------
@@ -56,7 +56,7 @@ about (e.g. ``<particle_flux>`` or ``Dij[1,1]``):
 .. code-block:: python
 
     import jax
-    from yancc.solve import solve_mdke
+    from yancc import UniformPitchAngleGrid, solve_mdke
 
     def D11(na):
         pitchgrid = UniformPitchAngleGrid(na)
@@ -91,7 +91,7 @@ Several less obvious scalings are worth knowing:
   from 1 species to 2 typically increases solve time by more than 2×;
   going from 2 to 3 by less.
 - **Background species** (the ``background`` argument to
-  :func:`~yancc.solve.solve_dke`) only appear in the collision operator and
+  :func:`~yancc.solve_dke`) only appear in the collision operator and
   are much cheaper than promoting them to kinetic species. Use ``background``
   for impurities you don't need flux information about.
 - **Low collisionality.** Iteration counts grow as :math:`\nu^* \to 0`. If
@@ -105,7 +105,7 @@ Several less obvious scalings are worth knowing:
 JAX, JIT, and vmap
 ==================
 
-:func:`~yancc.solve.solve_dke` and :func:`~yancc.solve.solve_mdke` are JAX
+:func:`~yancc.solve_dke` and :func:`~yancc.solve_mdke` are JAX
 functions, which has a few practical consequences.
 
 Compilation cost
@@ -131,7 +131,7 @@ fuses the solves into a single batched linear solve:
 .. code-block:: python
 
     import jax, jax.numpy as jnp
-    from yancc.solve import solve_mdke
+    from yancc import solve_mdke
 
     def one(erhohat, nuhat):
         sol, _ = solve_mdke(field, pitchgrid, erhohat, nuhat)
@@ -150,15 +150,14 @@ Differentiation
 The solvers are differentiable; ``jax.jacfwd`` / ``jax.jacrev`` work for
 gradients of fluxes with respect to input parameters (e.g. field strength, temperature,
 density, electric field). Differentiating with respect to a
-:class:`~yancc.species.LocalMaxwellian` or :class:`~yancc.field.Field` also works, but
+:class:`~yancc.LocalMaxwellian` or :class:`~yancc.Field` also works, but
 will return a pytree of gradients, so it may be helpful to define a helper function to
 differentiate first:
 
 .. code-block:: python
 
     import jax
-    from yancc.field import Field
-    from yancc.solve import solve_mdke
+    from yancc import Field, solve_mdke
 
     def solve(B):
         field = Field.from_boozer(Bmag=B, **other_field_inputs)
@@ -191,7 +190,7 @@ Other tips
   iteration; this is the first thing to look at when a solve is slow or not
   converging. ``verbose=3`` adds multigrid-level residuals if you want to
   debug preconditioner behavior.
-- **Reuse the field.** :class:`~yancc.field.Field` construction (especially
+- **Reuse the field.** :class:`~yancc.Field` construction (especially
   via ``from_vmec`` / ``from_booz_xform``) reads the file from disk and does
   Fourier work; build it once per surface and pass it to as many solves as
   you need.
