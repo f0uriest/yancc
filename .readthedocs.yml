@@ -10,6 +10,9 @@ build:
   os: ubuntu-24.04
   tools:
     python: "3.12"
+  apt_packages:
+    # used by nbsphinx to render the markdown cells of notebooks
+    - pandoc
   jobs:
     pre_build:
       - cd docs/ && python write_variables.py

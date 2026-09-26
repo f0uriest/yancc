@@ -10,14 +10,14 @@ import lineax as lx
 import numpy as np
 from jaxtyping import Array, Float, Int
 
-from .field import Field
-from .linalg import AbstractYanccOperator, DenseLUInverseOperator
-from .smoothers import (
+from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
+from ._smoothers import (
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
 )
-from .trajectories import DKE, MDKE
+from ._trajectories import DKE, MDKE
+from .field import Field
 from .velocity_grids import UniformPitchAngleGrid
 
 

@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from yancc.collisions import RosenbluthPotentials
-from yancc.preconditioner import (
+from yancc._collisions import RosenbluthPotentials
+from yancc._preconditioner import (
     DKEMPreconditioner,
     DKEPreconditioner,
     MDKEPreconditioner,

@@ -10,7 +10,7 @@ from scipy.constants import elementary_charge
 
 from .field import Field
 from .species import LocalMaxwellian
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
 
 
 def _dr(field):
@@ -48,14 +48,14 @@ class DKESources(lx.MatrixLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
 
     def __init__(
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
     ):
         self.field = field
@@ -107,7 +107,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     normalize: bool
 
@@ -115,7 +115,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         normalize=True,
     ):
@@ -149,7 +149,7 @@ class DKEConstraint(lx.MatrixLinearOperator):
 
 def radial_magnetic_drift(
     field: Field,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     pitchgrid: UniformPitchAngleGrid,
     species: list[LocalMaxwellian],
 ) -> jax.Array:
@@ -186,7 +186,7 @@ def radial_magnetic_drift(
 def dke_rhs(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: float | Float[Any, ""],
     EparB: float | Float[Any, ""] = 0.0,
@@ -251,7 +251,7 @@ def _dke_thermodynamic_forces(species, field, Erho, EparB):
 def _dke_rhs_3(
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     species: list[LocalMaxwellian],
 ) -> Float[jax.Array, "3 ns ns nx na nt nz"]:
     vmadotgradrho = radial_magnetic_drift(field, speedgrid, pitchgrid, species)

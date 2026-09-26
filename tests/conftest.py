@@ -7,7 +7,7 @@ import warnings
 _original_warn = warnings.warn
 
 
-def smart_warn(message, category=None, stacklevel=1, source=None):
+def smart_warn(message, category=None, stacklevel=1, source=None, **kwargs):
     # ignore deprecation warnings from 3rd party libraries, if we aren't calling them
     # directly.
     # ie, if we call foo, which calls bar, and bar emits a deprecation warning, we
@@ -49,7 +49,8 @@ def smart_warn(message, category=None, stacklevel=1, source=None):
                     return
 
     # otherwise, fall back to original behavior (which pytest turns into an error)
-    return _original_warn(message, category, stacklevel, source)
+    # kwargs holds keyword-only arguments of newer pythons, eg skip_file_prefixes
+    return _original_warn(message, category, stacklevel, source, **kwargs)
 
 
 # Need to do this here before any other imports in order to catch import time
@@ -64,7 +65,7 @@ import numpy as np  # noqa: E402, I001
 import pytest  # noqa: E402, I001
 import sympy  # noqa: E402, I001
 
-from yancc.collisions import RosenbluthPotentials  # noqa: E402, I001
+from yancc._collisions import RosenbluthPotentials  # noqa: E402, I001
 from yancc.field import Field  # noqa: E402, I001
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen  # noqa: E402, I001
 from yancc.velocity_grids import (  # noqa: E402, I001

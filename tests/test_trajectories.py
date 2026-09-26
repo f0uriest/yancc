@@ -4,9 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import yancc.trajectories as trajectories
-import yancc.trajectories_scipy as trajectories_scipy
-from yancc.collisions import (
+import yancc._trajectories as trajectories
+import yancc._trajectories_scipy as trajectories_scipy
+from yancc._collisions import (
     EnergyScattering,
     FieldPartCD,
     FieldPartCG,
@@ -17,8 +17,8 @@ from yancc.collisions import (
     PitchAngleScattering,
     RosenbluthPotentials,
 )
-from yancc.linalg import banded_to_dense
-from yancc.species import Electron, Estar, GlobalMaxwellian, Hydrogen, nustar
+from yancc._linalg import banded_to_dense
+from yancc.species import Electron, GlobalMaxwellian, Hydrogen, _Estar, _nustar
 
 
 def extract_blocks(a, m):
@@ -521,8 +521,8 @@ def test_abs_row_sum_dke_upper_bound(Erho, n0, axorder, field, pitchgrid, speedg
     # it must actually be an upper bound (allow tiny fp slack)
     np.testing.assert_array_less(exact * (1 - 1e-7), ub)
 
-    estars = [Estar(spec, field, Erho) for spec in species]
-    nustars = [nustar(spec, field) for spec in species]
+    estars = [_Estar(spec, field, Erho) for spec in species]
+    nustars = [_nustar(spec, field) for spec in species]
 
     ratio = ub / np.where(exact == 0, 1.0, exact)
     print(

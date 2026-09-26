@@ -121,7 +121,7 @@ class AbstractYanccOperator(lx.AbstractLinearOperator):
         """Pytree structure of expected output."""
         return self.in_structure()
 
-    def transpose(self):
+    def transpose(self) -> lx.AbstractLinearOperator:
         """Transpose of the operator."""
         return TransposedLinearOperator(self)
 
@@ -810,7 +810,7 @@ def solve_banded(p, q, A, b, *, unroll=None, pivot_tol=0.0, equilibrate=False):
 )
 @jax.named_call
 def lu_factor_banded_periodic(
-    p, q, A, *, unroll=None, pivot_tol=0.0, equilibrate=False
+    p: int, q: int, A, *, unroll=None, pivot_tol=0.0, equilibrate=False
 ):
     """LU factorization of periodic banded matrix in dense storage format.
 
@@ -849,6 +849,7 @@ def lu_factor_banded_periodic(
     s : jax.Array, shape(...,N)
         Row-equilibration factors (ones when ``equilibrate=False``).
     """
+    A = jnp.asarray(A)
     r = p + q
     H, n = A.shape
     ones = jnp.ones(n, dtype=A.dtype)

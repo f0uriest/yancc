@@ -9,9 +9,9 @@ Solving the Drift Kinetic Equation
     :toctree: _api/
     :recursive:
 
-    yancc.solve.solve_dke     -- Solve the standard drift kinetic equation.
-    yancc.solve.solve_mdke    -- Solve the monoenergetic drift kinetic equation.
-    yancc.solve.solve_dke_ambipolar -- Find ambipolar radial electric fields and the corresponding DKE solutions.
+    yancc.solve_dke           -- Solve the standard drift kinetic equation.
+    yancc.solve_mdke          -- Solve the monoenergetic drift kinetic equation.
+    yancc.solve_dke_ambipolar -- Find ambipolar radial electric fields and the corresponding DKE solutions.
 
 Fields and Velocity Grids
 -------------------------
@@ -20,9 +20,9 @@ Fields and Velocity Grids
     :toctree: _api/
     :recursive:
 
-    yancc.field.Field                             -- Magnetic field on a flux surface.
-    yancc.velocity_grids.MaxwellSpeedGrid         -- Collocation grid for speed coordinate based on Maxwell polynomials.
-    yancc.velocity_grids.UniformPitchAngleGrid    -- Finite difference grid with uniform spacing for pitch angle coordinate.
+    yancc.Field                 -- Magnetic field on a flux surface.
+    yancc.MaxwellSpeedGrid      -- Collocation grid for speed coordinate based on Maxwell polynomials.
+    yancc.UniformPitchAngleGrid -- Finite difference grid with uniform spacing for pitch angle coordinate.
 
 Species
 -------
@@ -31,11 +31,11 @@ Species
     :toctree: _api/
     :recursive:
 
-    yancc.species.Species         -- Atomic species of arbitrary charge and mass.
-    yancc.species.LocalMaxwellian -- Local Maxwellian distribution function on a single surface.
-    yancc.species.GlobalMaxwellian -- Global Maxwellian distribution function over radius.
+    yancc.Species          -- Atomic species of arbitrary charge and mass.
+    yancc.LocalMaxwellian  -- Local Maxwellian distribution function on a single surface.
+    yancc.GlobalMaxwellian -- Global Maxwellian distribution function over radius.
 
-Predefined :class:`yancc.species.Species` instances for common isotopes:
+Predefined :class:`yancc.Species` instances for common isotopes:
 
 .. list-table::
    :header-rows: 1
@@ -44,40 +44,40 @@ Predefined :class:`yancc.species.Species` instances for common isotopes:
    * - Name
      - Mass (mp)
      - Charge (e)
-   * - :data:`yancc.species.Electron`
+   * - :data:`yancc.Electron`
      - 1/1836.15
      - -1
-   * - :data:`yancc.species.Hydrogen`
+   * - :data:`yancc.Hydrogen`
      - 1
      - 1
-   * - :data:`yancc.species.Deuterium`
+   * - :data:`yancc.Deuterium`
      - 2
      - 1
-   * - :data:`yancc.species.Tritium`
+   * - :data:`yancc.Tritium`
      - 3
      - 1
-   * - :data:`yancc.species.Helium4` (alias :data:`yancc.species.Helium`)
+   * - :data:`yancc.Helium4` (alias :data:`yancc.Helium`)
      - 4
      - 2
-   * - :data:`yancc.species.Lithium6`
+   * - :data:`yancc.Lithium6`
      - 6
      - 3
-   * - :data:`yancc.species.Lithium7` (alias :data:`yancc.species.Lithium`)
+   * - :data:`yancc.Lithium7` (alias :data:`yancc.Lithium`)
      - 7
      - 3
-   * - :data:`yancc.species.Beryllium9` (alias :data:`yancc.species.Beryllium`)
+   * - :data:`yancc.Beryllium9` (alias :data:`yancc.Beryllium`)
      - 9
      - 4
-   * - :data:`yancc.species.Boron10`
+   * - :data:`yancc.Boron10`
      - 10
      - 5
-   * - :data:`yancc.species.Boron11` (alias :data:`yancc.species.Boron`)
+   * - :data:`yancc.Boron11` (alias :data:`yancc.Boron`)
      - 11
      - 5
-   * - :data:`yancc.species.Nitrogen14` (alias :data:`yancc.species.Nitrogen`)
+   * - :data:`yancc.Nitrogen14` (alias :data:`yancc.Nitrogen`)
      - 14
      - 7
-   * - :data:`yancc.species.Oxygen16` (alias :data:`yancc.species.Oxygen`)
+   * - :data:`yancc.Oxygen16` (alias :data:`yancc.Oxygen`)
      - 16
      - 8
 
@@ -89,5 +89,5 @@ Solution Objects
     :recursive:
     :template: solution_class
 
-    yancc.solution.DKESolution    -- Solution returned by ``solve_dke``.
-    yancc.solution.MDKESolution   -- Solution returned by ``solve_mdke``.
+    yancc.DKESolution  -- Solution returned by ``solve_dke``.
+    yancc.MDKESolution -- Solution returned by ``solve_mdke``.

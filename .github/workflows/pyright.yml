@@ -20,4 +20,3 @@ jobs:
         uses: jakebailey/pyright-action@v3
         with:
             version: PATH
-            extra-args: 'yancc/'
