@@ -11,9 +11,8 @@ import numpy as np
 from jaxtyping import Array, Float, Int
 
 from .field import Field
-from .linalg import InverseLinearOperator, TransposedLinearOperator
+from .linalg import AbstractYanccOperator, DenseLUInverseOperator
 from .smoothers import (
-    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
@@ -154,54 +153,39 @@ def get_dke_jacobi_smoothers(
     return smoothers
 
 
-@eqx.filter_jit
-@jax.named_call
-def get_dke_jacobi2_smoothers(
-    fields,
-    pitchgrids,
-    speedgrid,
-    species,
-    Erho,
-    background,
-    potentials,
-    p1,
-    p2,
-    gauge,
-    smooth_solver,
-    weight,
-    coulomb_log=None,
-    **options,
-):
-    """Get multigrid smoothers for each field, pitchgrid."""
-    smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
-        smooth = [
-            DKEJacobi2Smoother(
-                field,
-                pitchgrid,
-                speedgrid,
-                species,
-                Erho,
-                background,
-                potentials,
-                p1=p1,
-                p2=p2,
-                axorder=order,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=weight,
-                coulomb_log=coulomb_log,
-                **options,
-            )
-            for order in ["atzsx", "tzasx", "zatsx"]
-        ]
-        smoothers.append(smooth)
-    return smoothers
-
-
 def _nearest(x: float, minval: int) -> int:
     """Round x to the nearest integer, floored at minval"""
     return max(int(round(x)), minval)
+
+
+def _water_fill_coarsen(sizes, floors, target_ratio):
+    """Shrink ``sizes`` so their product drops by ``target_ratio``, spread as
+    evenly as possible in log-space, without taking any axis below its floor.
+
+    An axis already close to its floor can't absorb its share of a uniform
+    per-axis factor; naively applying that factor anyway (and letting it clip)
+    silently under-coarsens, since the clipped axis then does not contribute
+    its assumed share of the reduction. Instead, an axis that would fall below
+    its floor at the current shared factor is clamped there, and the ratio it
+    failed to contribute is redistributed over the remaining axes.
+    """
+    sizes = list(sizes)
+    out: list[int] = [0] * len(sizes)
+    remaining = target_ratio
+    # Axes closest to their floor (smallest sizes[i]/floors[i]) clip first.
+    order = sorted(range(len(sizes)), key=lambda i: sizes[i] / floors[i])
+    for idx, i in enumerate(order):
+        s = remaining ** (1 / (len(sizes) - idx))
+        if sizes[i] / s < floors[i]:
+            out[i] = floors[i]
+            remaining = max(remaining / (sizes[i] / floors[i]), 1.0)
+        else:
+            free = order[idx:]
+            s = remaining ** (1 / len(free))
+            for j in free:
+                out[j] = _nearest(sizes[j] / s, floors[j])
+            return out
+    return out
 
 
 def get_grid_resolutions(
@@ -286,18 +270,17 @@ def get_grid_resolutions(
         factor = R ** (1 / (dim * nsteps))
 
     # Build fine -> coarse by uniform geometric scaling of every axis (which
-    # preserves the finest grid's aspect ratio) with a per-axis floor. Skip a
-    # level if integer rounding makes it identical to the previous one.
+    # preserves the finest grid's aspect ratio), water-filled across na, nt, nz
+    # so a floor-clipped axis (eg. nt already near min_nt) doesn't silently
+    # under-coarsen the level. The remaining axes take up its share instead,
+    # keeping each level's total size close to its target. Skip a level if
+    # integer rounding makes it identical to the previous one.
     resolutions = [finest]
     for i in range(1, nsteps + 1):
-        s = factor**i
-        res = (
-            ns,
-            nx,
-            _nearest(na / s, min_na),
-            _nearest(nt / s, min_nt),
-            _nearest(nz / s, min_nz),
+        na_i, nt_i, nz_i = _water_fill_coarsen(
+            (na, nt, nz), (min_na, min_nt, min_nz), R ** (i / nsteps)
         )
+        res = (ns, nx, na_i, nt_i, nz_i)
         if res != resolutions[-1]:
             resolutions.append(res)
     return resolutions[::-1]
@@ -410,6 +393,15 @@ def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
     ]
 
 
+def _smoother_branches(smoothers):
+    """Smoother applications as branches for jax.lax.switch."""
+    # Smoothing loops iterate over the smoother index with a switch instead of
+    # unrolling the smoothers in Python, so the operator mv between smoothers has a
+    # single call site. Each call site is compiled separately, and for a multigrid
+    # cycle every copy is repeated at every level, which dominates compile time.
+    return [lambda r, Mi=Mi: Mi.mv(r) for Mi in smoothers]
+
+
 @functools.partial(jax.jit, static_argnames=["verbose"])
 @jax.named_call
 def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None):
@@ -423,24 +415,32 @@ def standard_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
-    def body(k, state):
+    # Loop over (step, smoother) pairs so operator.mv has a single call site.
+    nsmoothers = len(smoothers)
+    branches = _smoother_branches(smoothers)
+    axorders = [Mi.axorder for Mi in smoothers]
+
+    def body(n, state):
         x, r = state
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
-            x = x + dx
-            r = rhs - operator.mv(x)
-            if verbose:
-                err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
-                jax.debug.print(
-                    "v={k} after {a} err: {err:.3e}",
-                    err=err,
-                    k=k,
-                    a=Mi.axorder,
-                    ordered=True,
-                )
+        i = n % nsmoothers
+        dx = jax.lax.switch(i, branches, r)
+        x = x + dx
+        r = rhs - operator.mv(x)
+        if verbose:
+            err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
+            jax.debug.callback(
+                lambda n, i, err: print(
+                    f"v={int(n) // nsmoothers} after {axorders[int(i)]} "
+                    f"err: {float(err):.3e}"
+                ),
+                n,
+                i,
+                err,
+                ordered=True,
+            )
         return x, r
 
-    x, r = jax.lax.fori_loop(0, nsteps, body, (x, r0))
+    x, r = jax.lax.fori_loop(0, nsteps * nsmoothers, body, (x, r0))
     return x, r
 
 
@@ -464,21 +464,31 @@ def adpative_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
         # preconditioner with GMRES.
         return (k < jnp.abs(nsteps)) & (res1 <= res0)
 
+    branches = _smoother_branches(smoothers)
+    axorders = [Mi.axorder for Mi in smoothers]
+
     def body(state):
         k, x, r, res0, res1 = state
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
+
+        def sweep(i, xr):
+            x, r = xr
+            dx = jax.lax.switch(i, branches, r)
             x = x + dx
             r = rhs - operator.mv(x)
             if verbose:
                 err = jnp.linalg.norm(r) / jnp.linalg.norm(rhs)
-                jax.debug.print(
-                    "v={k} after {a} err: {err:.3e}",
-                    err=err,
-                    k=k,
-                    a=Mi.axorder,
+                jax.debug.callback(
+                    lambda k, i, err: print(
+                        f"v={int(k)} after {axorders[int(i)]} err: {float(err):.3e}"
+                    ),
+                    k,
+                    i,
+                    err,
                     ordered=True,
                 )
+            return x, r
+
+        x, r = jax.lax.fori_loop(0, len(smoothers), sweep, (x, r))
         res0 = res1
         res1 = jnp.linalg.norm(r)
         return k + 1, x, r, res0, res1
@@ -498,19 +508,22 @@ def krylov1_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
+    branches = _smoother_branches(smoothers)
+
+    def sweep(i, state):
+        x, r, rs, dxs = state
+        rs = rs.at[i].set(r)
+        dx = jax.lax.switch(i, branches, r)
+        dxs = dxs.at[i].set(dx)
+        x = x + dx
+        r = rhs - operator.mv(x)
+        return x, r, rs, dxs
+
     def body(k, state):
         x0, r = state
         rs = jnp.empty((len(smoothers) + 1, rhs.size))
         dxs = jnp.empty((len(smoothers), rhs.size))
-        x = x0
-
-        for i, Mi in enumerate(smoothers):
-            rs = rs.at[i].set(r)
-            dx = Mi.mv(r)
-            dxs = dxs.at[i].set(dx)
-            x = x + dx
-            r = rhs - operator.mv(x)
-
+        _, r, rs, dxs = jax.lax.fori_loop(0, len(smoothers), sweep, (x0, r, rs, dxs))
         rs = rs.at[-1].set(r)
 
         rb = rs[0]
@@ -552,20 +565,31 @@ def krylov1s_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=Non
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
+    branches = _smoother_branches(smoothers)
+    nsmoothers = len(smoothers)
+
+    def sweep(i, state):
+        x, r, rs, dxs = state
+        dx = jax.lax.switch(i, branches, r)
+        dxs = dxs.at[i].set(dx)
+        x = x + dx
+
+        # the residual after the last smoother isn't needed
+        def update(x, r, rs):
+            r = rhs - operator.mv(x)
+            return r, rs.at[i + 1].set(r)
+
+        r, rs = jax.lax.cond(
+            i + 1 < nsmoothers, update, lambda x, r, rs: (r, rs), x, r, rs
+        )
+        return x, r, rs, dxs
+
     def body(k, state):
         x0, r = state
-        rs = jnp.empty((len(smoothers), rhs.size))
-        dxs = jnp.empty((len(smoothers), rhs.size))
-        x = x0
+        rs = jnp.empty((nsmoothers, rhs.size))
+        dxs = jnp.empty((nsmoothers, rhs.size))
         rs = rs.at[0].set(r)
-
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
-            dxs = dxs.at[i].set(dx)
-            x = x + dx
-            if i + 1 < len(smoothers):
-                r = rhs - operator.mv(x)
-                rs = rs.at[i + 1].set(r)
+        _, r, rs, dxs = jax.lax.fori_loop(0, nsmoothers, sweep, (x0, r, rs, dxs))
 
         Ldxs = jax.vmap(L.mv)(dxs)
         dxs = jnp.concatenate([dxs, Ldxs])
@@ -602,16 +626,20 @@ def krylov2_smooth(x, operator, rhs, smoothers, nsteps=1, verbose=False, r0=None
     if r0 is None:
         r0 = rhs - operator.mv(x)
 
+    branches = _smoother_branches(smoothers)
+
+    def sweep(i, state):
+        r, dxs, Adxs = state
+        dx = jax.lax.switch(i, branches, r)
+        dxs = dxs.at[i].set(dx)
+        Adxs = Adxs.at[i].set(operator.mv(dx))
+        return r, dxs, Adxs
+
     def body(k, state):
         x0, r = state
         dxs = jnp.empty((len(smoothers), rhs.size))
         Adxs = jnp.empty((len(smoothers), rhs.size))
-        x = x0
-
-        for i, Mi in enumerate(smoothers):
-            dx = Mi.mv(r)
-            dxs = dxs.at[i].set(dx)
-            Adxs = Adxs.at[i].set(operator.mv(dx))
+        _, dxs, Adxs = jax.lax.fori_loop(0, len(smoothers), sweep, (r, dxs, Adxs))
 
         alpha = jnp.linalg.lstsq(Adxs.T, r)[0]
         x = x0 + dxs.T @ alpha
@@ -700,7 +728,7 @@ def _build_interp_matrix(x_src, x_query, method, period):
     return P_T.T
 
 
-class Prolongation(lx.AbstractLinearOperator):
+class Prolongation(AbstractYanccOperator):
     """Coarse-to-fine grid prolongation as a linear operator.
 
     Interpolates a flattened ``(prefix_size, nalpha, ntheta, nzeta)`` array from a
@@ -779,11 +807,6 @@ class Prolongation(lx.AbstractLinearOperator):
         f = jnp.transpose(f, (3, 2, 1, 0))
         return f.flatten()
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         n = (
@@ -804,12 +827,8 @@ class Prolongation(lx.AbstractLinearOperator):
         )
         return jax.ShapeDtypeStruct((n,), dtype=self.field_fine.Bmag.dtype)
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
 
-
-class Restriction(lx.AbstractLinearOperator):
+class Restriction(AbstractYanccOperator):
     """Fine-to-coarse grid restriction as a linear operator.
 
     Applies the volume-weighted transpose of piecewise-linear (or other)
@@ -894,11 +913,6 @@ class Restriction(lx.AbstractLinearOperator):
         f = jnp.transpose(f, (3, 2, 1, 0))
         return f.flatten()
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         n = (
@@ -918,20 +932,6 @@ class Restriction(lx.AbstractLinearOperator):
             * self.field_coarse.nzeta
         )
         return jax.ShapeDtypeStruct((n,), dtype=self.field_coarse.Bmag.dtype)
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(Prolongation)
-@lx.is_diagonal.register(Prolongation)
-@lx.is_tridiagonal.register(Prolongation)
-@lx.is_symmetric.register(Restriction)
-@lx.is_diagonal.register(Restriction)
-@lx.is_tridiagonal.register(Restriction)
-def _(operator):
-    return False
 
 
 def _multigrid_cycle_recursive(
@@ -1015,29 +1015,30 @@ def _multigrid_cycle_recursive(
         "krylov2s": krylov2s_coarse_correction,
     }[coarse_method]
 
-    if verbose:
-        rk = rhs - Ak.mv(x)
+    # The cycle at this level is pre-smooth, then cycle_index repetitions of
+    # (coarse correction, post-smooth). Both are written as one loop of
+    # cycle_index + 1 passes, where every pass smooths and every pass but the first
+    # starts with a coarse correction. This gives the smoothers, the operator and
+    # the recursion into coarser levels a single call site each: every call site is
+    # compiled separately, so separate pre- and post-smoothing calls would compile
+    # the smoothers (and everything below this level) twice per level.
+    nsteps_pre = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
+    nsteps_post = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
+
+    def print_err(n, rk, when):
         err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print(
-            "level={k} before presmooth err: {err:.3e}", err=err, k=k, ordered=True
+        jax.debug.callback(
+            lambda n, err: print(
+                f"level={k}"
+                + (f" {when} presmooth" if n == 0 else f"/{n - 1} {when} postsmooth")
+                + f" err: {float(err):.3e}"
+            ),
+            n,
+            err,
+            ordered=True,
         )
 
-    # Pre-smooth: x is always zero on entry (top-level uses zeros_like(vector);
-    # recursive calls pass x=jnp.zeros_like(rkm1)), so r0 = rhs - A.mv(0) = rhs.
-    # The smoother returns the up-to-date residual, eliminating a separate mv.
-    vv = jnp.where(v1 > 0, v1, len(operators) - k + jnp.abs(v1))
-    with jax.named_scope(f"pre-smooth, level={k}"):
-        x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0), r0=rhs)
-
-    if verbose:
-        err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-        jax.debug.print(
-            "level={k} after presmooth err: {err:.3e}", err=err, k=k, ordered=True
-        )
-
-    def body(i, state):
-        rk, x = state
-
+    def correct(n, x, rk):
         with jax.named_scope(f"restriction level={k}"):
             rkm1 = restrictions[k - 1].mv(rk)
         if k == 1:
@@ -1065,38 +1066,27 @@ def _multigrid_cycle_recursive(
             yk = prolongations[k - 1].mv(ykm1)
         with jax.named_scope(f"coarse_correction level={k}"):
             x = coarse_correction(
-                x, k, i, Ak, yk, rk, coarse_weight, verbose=max(verbose - 1, 0)
+                x, k, n - 1, Ak, yk, rk, coarse_weight, verbose=max(verbose - 1, 0)
             )
+        return x, rhs - Ak.mv(x)
 
+    def body(n, state):
+        x, rk = state
+        x, rk = jax.lax.cond(n > 0, correct, lambda n, x, rk: (x, rk), n, x, rk)
         if verbose:
-            rk = rhs - Ak.mv(x)
-            err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-            jax.debug.print(
-                "level={k}/{i} before postsmooth err: {err:.3e}",
-                err=err,
-                k=k,
-                i=i,
-                ordered=True,
+            print_err(n, rk, "before")
+        nsteps = jnp.where(n == 0, nsteps_pre, nsteps_post)
+        with jax.named_scope(f"smooth, level={k}"):
+            x, rk = smooth(
+                x, Ak, rhs, Mk, nsteps=nsteps, verbose=max(verbose - 1, 0), r0=rk
             )
-
-        # Post-smooth: x has been modified by coarse_correction so rk is stale;
-        # let the smoother compute its initial residual internally (r0=None).
-        # The returned rk is up-to-date, so we don't need a separate mv after.
-        vv = jnp.where(v2 > 0, v2, len(operators) - k + jnp.abs(v2))
-        with jax.named_scope(f"post-smooth, level={k}"):
-            x, rk = smooth(x, Ak, rhs, Mk, nsteps=vv, verbose=max(verbose - 1, 0))
         if verbose:
-            err = jnp.linalg.norm(rk) / jnp.linalg.norm(rhs)
-            jax.debug.print(
-                "level={k}/{i} after postsmooth err: {err:.3e}",
-                err=err,
-                k=k,
-                i=i,
-                ordered=True,
-            )
-        return rk, x
+            print_err(n, rk, "after")
+        return x, rk
 
-    _, x = jax.lax.fori_loop(0, cycle_index, body, (rk, x))
+    # x is always zero on entry (the top level passes zeros_like(vector) and coarser
+    # levels pass zeros_like(rkm1)), so the initial residual is rhs.
+    x, _ = jax.lax.fori_loop(0, cycle_index + 1, body, (x, rhs))
 
     return x
 
@@ -1233,7 +1223,7 @@ def krylov2s_coarse_correction(x, k, i, operator, yk, rk, coarse_weight, verbose
     return x
 
 
-class MultigridOperator(lx.AbstractLinearOperator):
+class MultigridOperator(AbstractYanccOperator):
     """Multigrid cycle as a linear operator.
 
     Parameters
@@ -1315,7 +1305,7 @@ class MultigridOperator(lx.AbstractLinearOperator):
         self.v2 = jnp.asarray(v2)
         self.smooth_method = smooth_method
         if coarse_opinv is None:
-            coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+            coarse_opinv = DenseLUInverseOperator(operators[0].as_matrix())
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
         self.coarse_weight = jnp.asarray(coarse_weight)
@@ -1386,10 +1376,3 @@ class MultigridOperator(lx.AbstractLinearOperator):
             self.coarse_weight,
             self.verbose,
         )
-
-
-@lx.is_symmetric.register(MultigridOperator)
-@lx.is_diagonal.register(MultigridOperator)
-@lx.is_tridiagonal.register(MultigridOperator)
-def _(operator):
-    return False

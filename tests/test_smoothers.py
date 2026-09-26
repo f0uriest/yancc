@@ -5,10 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from yancc.field import Field
 from yancc.misc import dke_rhs
 from yancc.multigrid import (
     adpative_smooth,
-    get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     krylov1_smooth,
     krylov1s_smooth,
@@ -17,7 +17,6 @@ from yancc.multigrid import (
     standard_smooth,
 )
 from yancc.smoothers import (
-    DKEJacobi2Smoother,
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
@@ -25,9 +24,9 @@ from yancc.smoothers import (
     optimal_smoothing_parameter_4d,
     permute_f_3d,
 )
-from yancc.species import GlobalMaxwellian, Hydrogen
+from yancc.species import Electron, GlobalMaxwellian, Hydrogen, LocalMaxwellian
 from yancc.trajectories import DKE, MDKE
-from yancc.velocity_grids import MaxwellSpeedGrid
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def test_permutations_mdke(field, pitchgrid):
@@ -97,7 +96,19 @@ def test_dke_banded_vs_dense_smoother(
         smooth_solver="banded",
         operator_weights=weights,
     ).as_matrix()
+    s3 = DKEJacobiSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        axorder=axorder,
+        smooth_solver="cr",
+        operator_weights=weights,
+    ).as_matrix()
     np.testing.assert_allclose(s1, s2)
+    np.testing.assert_allclose(s1, s3)
 
 
 @pytest.mark.parametrize("axorder", ["atz", "zat", "tza"])
@@ -110,7 +121,11 @@ def test_mdke_banded_vs_dense_smoother(pitchgrid, field, axorder):
     s2 = MDKEJacobiSmoother(
         field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="banded"
     ).as_matrix()
+    s3 = MDKEJacobiSmoother(
+        field, pitchgrid, erhohat, nuhat, axorder=axorder, smooth_solver="cr"
+    ).as_matrix()
     np.testing.assert_allclose(s1, s2)
+    np.testing.assert_allclose(s1, s3)
 
 
 @pytest.mark.parametrize("v", [1, 2, 3])
@@ -153,70 +168,6 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
     smoothers = get_dke_jacobi_smoothers(
-        [field],
-        [pitchgrid],
-        speedgrid,
-        species,
-        jnp.array(0.0),
-        [],
-        potentials,
-        "2d",
-        2,
-        True,
-        "dense",
-        None,
-        operator_weights=operator_weights,
-    )[0]
-    r = (x_true + b) / 2
-    x_smoothed, _ = smooth_op(
-        jnp.zeros_like(x_true), A, r, smoothers, nsteps=v, verbose=True
-    )
-    L = DKELaplacian(field, pitchgrid, speedgrid, species)
-    err = np.linalg.norm(L.mv(x_smoothed - x_true)) / np.linalg.norm(L.mv(x_true))
-    print("err=", err)
-    assert err < 1
-
-
-@pytest.mark.parametrize("v", [1, 2, 3])
-@pytest.mark.parametrize("n", [1e18, 1e20, 1e22])  # chosen for nustar ~ [1e-4, 1e-2, 1]
-@pytest.mark.parametrize(
-    "smooth_op",
-    [
-        standard_smooth,
-        adpative_smooth,
-        krylov1_smooth,
-        krylov1s_smooth,
-        krylov2_smooth,
-        krylov2s_smooth,
-    ],
-)
-def test_smoothing2_dke(field, pitchgrid, v, n, smooth_op):
-    """Test smoothing with type 2 smoothers for DKE"""
-    speedgrid = MaxwellSpeedGrid(5)
-    species = [
-        GlobalMaxwellian(
-            Hydrogen,
-            lambda x: 3e3 * (1 - x**2),
-            lambda x: n * (1 - x**4),
-        ).localize(0.5),
-    ]
-    Erho = jnp.array(0.0)
-    operator_weights = jnp.ones(8).at[-2:].set(0)
-    A = DKE(
-        field,
-        pitchgrid,
-        speedgrid,
-        species,
-        Erho,
-        p1="2d",
-        p2=2,
-        gauge=True,
-        operator_weights=operator_weights,
-    )
-    b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
-    x_true = np.linalg.solve(A.as_matrix(), b)
-    potentials = A.potentials
-    smoothers = get_dke_jacobi2_smoothers(
         [field],
         [pitchgrid],
         speedgrid,
@@ -302,21 +253,6 @@ def test_dke_jacobi_banded_default_operator_weights(
     _check_protocol(op)
 
 
-def test_smoother_protocol_dke_jacobi2(
-    field, pitchgrid, speedgrid, species2, potentials2
-):
-    op = DKEJacobi2Smoother(
-        field,
-        pitchgrid,
-        speedgrid,
-        species2,
-        jnp.array(1e3),
-        potentials=potentials2,
-        smooth_solver="dense",
-    )
-    _check_protocol(op)
-
-
 @pytest.mark.parametrize("normalize", [True, False])
 def test_dke_laplacian_protocol(field, pitchgrid, speedgrid, species2, normalize):
     op = DKELaplacian(field, pitchgrid, speedgrid, species2, normalize=normalize)
@@ -379,36 +315,63 @@ def test_dke_jacobi_smoother_default_operator_weights_explicit_weight(
     assert np.all(np.isfinite(mat))
 
 
-def test_dke_jacobi2_smoother_default_background(
-    pitchgrid, speedgrid, species2, field, potentials2
-):
-    """background=None default branch in DKEJacobi2Smoother."""
-    Erho = jnp.array(1e3)
-    s = DKEJacobi2Smoother(
+# convolved axis last: "a" (pitch, non-periodic), "t"/"z" (periodic lines).
+# The cyclic-reduction solver must reproduce the banded solver exactly (same factor,
+# different log-depth elimination).
+@pytest.mark.parametrize("axorder", ["tzsxa", "azsxt", "atsxz"])
+def test_dke_cr_matches_banded(axorder):
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 11, 11)
+    am = float(field.a_minor)
+    pg = UniformPitchAngleGrid(25)
+    sg = MaxwellSpeedGrid(4)
+    n = 4.09e21
+    species = [
+        LocalMaxwellian(Electron, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+        LocalMaxwellian(Hydrogen, 3.0e3, n, -2e3 * am, -0.4e20 * am),
+    ]
+    Erho = 4.0 * am * 1000.0
+    banded = DKEJacobiSmoother(
         field,
-        pitchgrid,
-        speedgrid,
-        species2,
+        pg,
+        sg,
+        species,
         Erho,
-        potentials=potentials2,
-        smooth_solver="dense",
-        # background omitted -> None -> [] branch
+        axorder=axorder,
+        smooth_solver="banded",
+        coulomb_log=17.0,
     )
-    assert s.background == []
+    cr = DKEJacobiSmoother(
+        field,
+        pg,
+        sg,
+        species,
+        Erho,
+        axorder=axorder,
+        smooth_solver="cr",
+        coulomb_log=17.0,
+    )
+
+    n_state = pg.nalpha * field.ntheta * field.nzeta * len(species) * sg.nx
+    rng = np.random.default_rng(0)
+    for _ in range(3):
+        x = jnp.asarray(rng.standard_normal(n_state))
+        np.testing.assert_allclose(
+            np.asarray(cr.mv(x)), np.asarray(banded.mv(x)), rtol=1e-7, atol=1e-9
+        )
 
 
-def test_dke_jacobi2_smoother_banded_not_implemented(
-    pitchgrid, speedgrid, species2, field, potentials2
-):
-    """The banded solver path is not implemented for DKEJacobi2Smoother."""
-    Erho = jnp.array(1e3)
-    with pytest.raises(NotImplementedError):
-        DKEJacobi2Smoother(
-            field,
-            pitchgrid,
-            speedgrid,
-            species2,
-            Erho,
-            potentials=potentials2,
-            smooth_solver="banded",
+@pytest.mark.parametrize("axorder", ["atz", "tza", "zat"])
+def test_mdke_cr_matches_banded(axorder):
+    field = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 11, 11)
+    pg = UniformPitchAngleGrid(25)
+    banded = MDKEJacobiSmoother(
+        field, pg, 1e-3, 1e-3, axorder=axorder, smooth_solver="banded"
+    )
+    cr = MDKEJacobiSmoother(field, pg, 1e-3, 1e-3, axorder=axorder, smooth_solver="cr")
+    n_state = pg.nalpha * field.ntheta * field.nzeta
+    rng = np.random.default_rng(1)
+    for _ in range(3):
+        x = jnp.asarray(rng.standard_normal(n_state))
+        np.testing.assert_allclose(
+            np.asarray(cr.mv(x)), np.asarray(banded.mv(x)), rtol=1e-7, atol=1e-9
         )

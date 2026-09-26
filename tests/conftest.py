@@ -60,7 +60,6 @@ warnings.warn = smart_warn
 # now the rest of the imports and conftest stuff
 
 
-import desc  # noqa: E402, I001
 import numpy as np  # noqa: E402, I001
 import pytest  # noqa: E402, I001
 import sympy  # noqa: E402, I001
@@ -77,8 +76,28 @@ from yancc.velocity_grids import (  # noqa: E402, I001
 @pytest.fixture(scope="session")
 def field():
     """Field for testing."""
-    eq = desc.examples.get("W7-X")
-    field = Field.from_desc(eq, 0.5, 5, 7)
+    # dominant Boozer harmonics of W7-X high-mirror at rho=0.5 (mirror, helical and
+    # toroidal), in booz_xform convention cos(m*theta - n*zeta)
+    nt, nz, NFP = 5, 7, 5
+    theta = np.linspace(0, 2 * np.pi, nt, endpoint=False)[:, None]
+    zeta = np.linspace(0, 2 * np.pi / NFP, nz, endpoint=False)[None, :]
+    Bmag = (
+        2.50302
+        + 0.25660 * np.cos(NFP * zeta)
+        - 0.11118 * np.cos(theta - NFP * zeta)
+        - 0.05205 * np.cos(theta)
+    )
+    field = Field.from_boozer(
+        rho=0.5,
+        Bmag=Bmag,
+        I=0.0,
+        G=14.4,
+        iota=-0.88356,
+        Psi=-2.0004,
+        R_major=5.4832,
+        a_minor=0.5211,
+        NFP=NFP,
+    )
     return field
 
 
@@ -176,8 +195,8 @@ def potential_quad(xgrid, species2):
 
 
 @pytest.fixture(scope="session")
-def potential_gamma(xgrid, species2):
-    """Single species potential without quadrature."""
+def potential_gauss_legendre(xgrid, species2):
+    """Potentials with fixed Gauss-Legendre quadrature."""
     return RosenbluthPotentials(
         xgrid,
         species2,

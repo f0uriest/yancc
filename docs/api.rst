@@ -11,6 +11,7 @@ Solving the Drift Kinetic Equation
 
     yancc.solve.solve_dke     -- Solve the standard drift kinetic equation.
     yancc.solve.solve_mdke    -- Solve the monoenergetic drift kinetic equation.
+    yancc.solve.solve_dke_ambipolar -- Find ambipolar radial electric fields and the corresponding DKE solutions.
 
 Fields and Velocity Grids
 -------------------------

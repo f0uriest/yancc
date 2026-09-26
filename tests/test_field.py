@@ -1,6 +1,9 @@
 """Tests for magnetic field structure."""
 
+import jax
+import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from yancc.field import Field
 
@@ -29,7 +32,10 @@ def _compare_fields_local(field1, field2):
 
 def test_field_types():
     """Test solving the MDKE with the same field in different formats."""
-    import desc  # pyright: ignore[reportMissingImports]
+    # desc imports its submodules lazily, so import one that needs jax to check
+    # that the installed desc is compatible
+    pytest.importorskip("desc.equilibrium")
+    import desc.io  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
 
@@ -37,10 +43,17 @@ def test_field_types():
     nz = 37
     rho = 0.5
 
-    field1 = Field.from_desc(eq, rho, nt, nz)
-    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
-    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", rho, nt, nz)
-    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", rho, nt, nz)
+    # fields are built for several surfaces at once to check they work under jit
+    def make_fields(r):
+        return (
+            Field.from_desc(eq, r, nt, nz),
+            Field.from_vmec("tests/data/wout_NCSX.nc", r, nt, nz),
+            Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", r, nt, nz),
+            Field.from_ipp_bc("tests/data/NCSX.bc", r, nt, nz),
+        )
+
+    fields = jax.jit(jax.vmap(make_fields))(jnp.array([rho, 0.7]))
+    field1, field2, field3, field4 = jax.tree.map(lambda x: x[0], fields)
 
     np.testing.assert_allclose(
         field1.B_sub_t * field1.B_sup_t + field1.B_sub_z * field1.B_sup_z,
@@ -69,3 +82,75 @@ def test_field_types():
     # these are ostensibly in the same coordinates, so we can compare local qtys
     _compare_fields_local(field1, field2)
     _compare_fields_local(field3, field4)
+
+
+def test_derived_scalars_when_omitted():
+    """Psi/iota/R_major/a_minor are recovered when omitted from the constructor."""
+    ref = Field.from_vmec("tests/data/wout_NCSX.nc", 0.5, 17, 37)
+    derived = Field(
+        rho=ref.rho,
+        B_sup_t=ref.B_sup_t,
+        B_sup_z=ref.B_sup_z,
+        B_sub_t=ref.B_sub_t,
+        B_sub_z=ref.B_sub_z,
+        Bmag=ref.Bmag,
+        sqrtg=ref.sqrtg,
+        NFP=ref.NFP,
+    )
+    # Psi and iota are flux integrals of the field -> recovered exactly
+    np.testing.assert_allclose(derived.Psi, ref.Psi, rtol=1e-6)
+    np.testing.assert_allclose(derived.iota, ref.iota, rtol=1e-6)
+    # R_major/a_minor are circular-torus estimates -> good to a few percent.
+    np.testing.assert_allclose(derived.R_major, ref.R_major, rtol=8e-2)
+    np.testing.assert_allclose(derived.a_minor, ref.a_minor, rtol=5e-2)
+    # supplying them explicitly overrides the estimate exactly.
+    explicit = Field(
+        rho=ref.rho,
+        B_sup_t=ref.B_sup_t,
+        B_sup_z=ref.B_sup_z,
+        B_sub_t=ref.B_sub_t,
+        B_sub_z=ref.B_sub_z,
+        Bmag=ref.Bmag,
+        sqrtg=ref.sqrtg,
+        Psi=ref.Psi,
+        iota=ref.iota,
+        R_major=ref.R_major,
+        a_minor=ref.a_minor,
+        NFP=ref.NFP,
+    )
+    np.testing.assert_allclose(explicit.Psi, ref.Psi, rtol=1e-12)
+    np.testing.assert_allclose(explicit.iota, ref.iota, rtol=1e-12)
+    np.testing.assert_allclose(explicit.R_major, ref.R_major, rtol=1e-12)
+    np.testing.assert_allclose(explicit.a_minor, ref.a_minor, rtol=1e-12)
+
+
+def test_from_boozer_optional_geometry():
+    """from_boozer estimates R_major/a_minor when omitted, leaving the field intact."""
+    booz = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", 0.5, 17, 37)
+    explicit = Field.from_boozer(
+        rho=booz.rho,
+        Bmag=booz.Bmag,
+        I=booz.I,
+        G=booz.G,
+        iota=booz.iota,
+        Psi=booz.Psi,
+        R_major=booz.R_major,
+        a_minor=booz.a_minor,
+        NFP=booz.NFP,
+    )
+    derived = Field.from_boozer(
+        rho=booz.rho,
+        Bmag=booz.Bmag,
+        I=booz.I,
+        G=booz.G,
+        iota=booz.iota,
+        Psi=booz.Psi,
+        NFP=booz.NFP,
+    )
+    # R_major/a_minor don't enter sqrtg (only Psi does), so the field is identical.
+    np.testing.assert_allclose(derived.sqrtg, explicit.sqrtg, rtol=1e-12)
+    np.testing.assert_allclose(derived.B_sup_t, explicit.B_sup_t, rtol=1e-12)
+    np.testing.assert_allclose(derived.B_sup_z, explicit.B_sup_z, rtol=1e-12)
+    # and the estimates land near the supplied geometry.
+    np.testing.assert_allclose(derived.R_major, booz.R_major, rtol=8e-2)
+    np.testing.assert_allclose(derived.a_minor, booz.a_minor, rtol=5e-2)

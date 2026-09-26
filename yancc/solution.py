@@ -184,8 +184,10 @@ class DKESolution(eqx.Module):
             particle_source = jnp.full(ns, jnp.nan)
             heat_source = jnp.full(ns, jnp.nan)
         elif f1.size == N + 2 * ns:
-            heat_source = f1[-ns:]
-            particle_source = f1[-2 * ns : -ns]
+            # one (particle, heat) pair per species, matching DKESources columns
+            sources = f1[N:].reshape((ns, 2))
+            particle_source = sources[:, 0]
+            heat_source = sources[:, 1]
             f1 = f1[:N].reshape(shape)
         else:
             raise ValueError("got wrong size for f1")
@@ -212,8 +214,8 @@ class DKESolution(eqx.Module):
     def f1_krylov(self) -> jax.Array:
         """Distribution function, including source terms, as seen by krylov solver."""
         f1 = self.f1.flatten()
-        sources = jnp.concatenate([self._particle_source, self._heat_source])
-        sources = jnp.nan_to_num(sources, nan=0.0)
+        sources = jnp.stack([self._particle_source, self._heat_source], axis=1)
+        sources = jnp.nan_to_num(sources, nan=0.0).flatten()
         return jnp.concatenate([f1, sources])
 
     def get(self, qty, **kwargs):
@@ -337,14 +339,14 @@ class MDKESolution(eqx.Module):
 )
 def _mdke_Dij(sol, normalization=None, **kwargs):
     """Monoenergetic transport coefficients."""
-    f = sol.f.reshape((-1, 3))
-    s = sol.rhs.reshape((-1, 3))
+    f = sol.f.reshape((3, -1))
+    s = sol.rhs.reshape((3, -1))
     na, nt, nz = (
         sol.pitchgrid.nalpha,
         sol.field.ntheta,
         sol.field.nzeta,
     )
-    sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
+    sf = s[:, None] * f[None, :]  # shape (3,3,N)
     Dij_itz = sf.reshape((3, 3, na, nt, nz))
     Dij_i = sol.field.flux_surface_average(Dij_itz)  # shape (3,3,na)
     Dij = jnp.sum(Dij_i * sol.pitchgrid.wxi, axis=-1)  # shape (3,3)

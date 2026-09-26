@@ -31,6 +31,26 @@ from .conftest import (
 )
 
 
+def _CE_flux_form_nodal(CE, speedgrid, f):
+    """Pointwise C_E f from the operator's flux-form coefficients, shape (ns, nx).
+
+    The sign is that of the physical operator; ``mv`` returns its negative, as the
+    collision operator enters the DKE with a minus sign.
+
+    EnergyScattering is assembled in weak form, so its action is the projection of
+    C_E f onto the speed basis rather than C_E f at the nodes. Its coefficients are the
+    exact continuum ones, so they are checked against the analytic operator by applying
+    them pointwise with the grid's spectral derivatives, which are exact for f in the
+    speed basis.
+    """
+    f = np.atleast_2d(f)
+    return (
+        CE.coeff2 * (f @ speedgrid.D2x_pseudospectral.T)
+        + CE.coeff1 * (f @ speedgrid.Dx_pseudospectral.T)
+        + CE.coeff0 * f
+    )
+
+
 def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
     field = dummy_field
     speedgrid = xgrid
@@ -58,12 +78,7 @@ def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
     CEsympy = _eval_f(CEaa, v, speedgrid.x * species[0].v_thermal, subs)
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
-    f[0] *= ffa[:, None, None, None]
-
-    CEjax = -CE.mv(f)[
-        0, :, 0, 0, 0
-    ]  # collision operator has a minus sign in overall DKE
+    CEjax = _CE_flux_form_nodal(CE, speedgrid, ffa)[0]
 
     np.testing.assert_allclose(CEjax, CEsympy)
 
@@ -128,12 +143,9 @@ def test_CE_2_species_vs_sympy(dummy_field, xigrid, xgrid, species2):
 
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
     ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
-    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
-    f[0] *= ffa[:, None, None, None]
-    f[1] *= ffb[:, None, None, None]
-    CE_jax = -CE.mv(f)
-    CEa_jax = CE_jax[0, :, 0, 0, 0]
-    CEb_jax = CE_jax[1, :, 0, 0, 0]
+    CE_jax = _CE_flux_form_nodal(CE, speedgrid, np.stack([ffa, ffb]))
+    CEa_jax = CE_jax[0]
+    CEb_jax = CE_jax[1]
 
     np.testing.assert_allclose(CEa_jax, CEa_sympy, rtol=1e-10)
     np.testing.assert_allclose(CEb_jax, CEb_sympy, rtol=1e-10)
@@ -191,8 +203,8 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -321,8 +333,8 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -450,8 +462,8 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -528,7 +540,11 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
 
 def test_verify_collision_null_single_species(dummy_field):
     """Check the null space of single species collision operator."""
-    speedgrid = MaxwellSpeedGrid(5)
+    # C_E is assembled in weak form, so its cancellation against C_L and C_F on the
+    # momentum and energy invariants holds only to the speed resolution. The speed grid
+    # is fine enough here for that residual to be small relative to the terms that
+    # cancel and for the three null modes to be resolved in the spectrum.
+    speedgrid = MaxwellSpeedGrid(15)
     pitchgrid = UniformPitchAngleGrid(129)
     field = dummy_field
     nt, nz = field.ntheta, field.nzeta
@@ -543,6 +559,11 @@ def test_verify_collision_null_single_species(dummy_field):
     C = FokkerPlanckLandau(field, pitchgrid, speedgrid, [ions1], potentials=R)
     shape = (1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
     x = speedgrid.x
+
+    def term_scale(f):
+        """Largest magnitude among the collision terms that must cancel on f."""
+        return max(float(np.abs(op.mv(f.flatten())).max()) for op in (C.CL, C.CE, C.CF))
+
     xi = pitchgrid.xi
 
     # C acting on maxwellian = 0
@@ -557,9 +578,9 @@ def test_verify_collision_null_single_species(dummy_field):
     ]
     f = np.ones(shape) * ff
     cf = C.mv(f.flatten()).reshape(f.shape)
-    # need looser tolerance here bc finite differences in pitch angle are less
-    # accurate than spectral derivatives in speed
-    np.testing.assert_allclose(cf, 0, atol=1e-3)
+    # relative to the cancelling terms: the weak-form speed operator and finite
+    # differences in pitch angle both leave a resolution-dependent residual
+    np.testing.assert_allclose(cf, 0, atol=1e-4 * term_scale(f))
 
     # C acting on v^2*maxwellian = 0
     ff = x**2 * np.exp(-(x**2))
@@ -568,7 +589,7 @@ def test_verify_collision_null_single_species(dummy_field):
         * ff[None, :, None, None, None]
     )
     cf = C.mv(f.flatten()).reshape(f.shape)
-    np.testing.assert_allclose(cf, 0, atol=1e-7)
+    np.testing.assert_allclose(cf, 0, atol=1e-2 * term_scale(f))
 
     es = np.linalg.eigvals(C.as_matrix())
     # should have purely real eigvals

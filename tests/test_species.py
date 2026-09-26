@@ -10,6 +10,7 @@ from yancc.species import (
     JOULE_PER_EV,
     Deuterium,
     Electron,
+    Estar,
     GlobalMaxwellian,
     Hydrogen,
     LocalMaxwellian,
@@ -21,6 +22,7 @@ from yancc.species import (
     gamma_ab,
     nuD_ab,
     nupar_ab,
+    poloidal_mach,
     rhostar,
 )
 
@@ -162,6 +164,24 @@ def test_rhostar_scales_linearly_with_x(hydrogen_maxwellian, field):
     r2 = float(rhostar(lm, field, 2.0))
     assert r1 > 0
     np.testing.assert_allclose(r2 / r1, 2.0, rtol=1e-10)
+
+
+def test_poloidal_mach_scales_inversely_with_x(hydrogen_maxwellian, field):
+    # E×B rotation is speed-independent while the transit rate ~ x, so M_p ~ 1/x.
+    m1 = float(poloidal_mach(hydrogen_maxwellian, field, 3e3, 1.0))
+    m2 = float(poloidal_mach(hydrogen_maxwellian, field, 3e3, 2.0))
+    np.testing.assert_allclose(m2 / m1, 0.5, rtol=1e-10)
+
+
+def test_poloidal_mach_matches_definition(hydrogen_maxwellian, field):
+    # M_p = E* / (a_minor <B^theta/|B|>), the ratio of E×B to streaming poloidal
+    # rotation frequencies.
+    bdgt = float(field.flux_surface_average(field.B_sup_t / field.Bmag))
+    expected = float(Estar(hydrogen_maxwellian, field, 3e3, 1.0)) / (
+        float(field.a_minor) * abs(bdgt)
+    )
+    got = float(poloidal_mach(hydrogen_maxwellian, field, 3e3, 1.0))
+    np.testing.assert_allclose(got, expected, rtol=1e-10)
 
 
 def test_chandrasekhar_positive():
