@@ -52,6 +52,7 @@ from cases_dke import (  # noqa: E402  (sibling module)
     cases_by_names,
     cases_for_tier,
 )
+from splitting import add_arguments, select_from_args  # noqa: E402  (sibling module)
 
 import yancc  # noqa: E402
 from yancc.solve import solve_dke  # noqa: E402
@@ -158,6 +159,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         cases = cases_for_tier(args.tier)
         label = args.tier
+    try:
+        cases, suffix = select_from_args(cases, "dke", args)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    label += suffix
     header = _env_header()
     print(
         f"# bench_dke {label}  yancc={header['yancc_version']}  {header['device']}",
@@ -307,6 +314,7 @@ def main() -> int:
         action="store_true",
         help="print every available case name and exit (no solve)",
     )
+    add_arguments(pr)
     pr.add_argument(
         "--out", help="results JSON path; if omitted, only print to the terminal"
     )
