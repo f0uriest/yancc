@@ -6,11 +6,11 @@ import numpy as np
 import orthax
 import quadax
 
-from yancc.misc import _d3v
+from yancc._misc import _d3v
 from yancc.velocity_grids import (
-    LegendrePitchAngleGrid,
     MaxwellSpeedGrid,
     UniformPitchAngleGrid,
+    _LegendrePitchAngleGrid,
 )
 
 
@@ -100,13 +100,13 @@ def test_maxwell_speed_grid_resample():
 
 
 def test_legendre_pitch_grid_resample():
-    """LegendrePitchAngleGrid.resample returns a fresh grid of the
+    """_LegendrePitchAngleGrid.resample returns a fresh grid of the
     requested size.
     """
-    g = LegendrePitchAngleGrid(6)
+    g = _LegendrePitchAngleGrid(6)
     assert g.nalpha == 6
     g2 = g.resample(10)
-    assert isinstance(g2, LegendrePitchAngleGrid)
+    assert isinstance(g2, _LegendrePitchAngleGrid)
     assert g2.nalpha == 10
     assert g2.xi.shape == (10,)
 

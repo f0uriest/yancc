@@ -11,10 +11,11 @@ import pytest
 from scipy.constants import elementary_charge, proton_mass
 
 import yancc
+from yancc._preconditioner import DKEMPreconditioner
+from yancc._trajectories import MDKE
 from yancc.field import Field
-from yancc.preconditioner import DKEMPreconditioner
 from yancc.solve import solve_dke, solve_dke_ambipolar, solve_mdke
-from yancc.species import JOULE_PER_EV, LocalMaxwellian
+from yancc.species import _JOULE_PER_EV, LocalMaxwellian
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
@@ -371,7 +372,7 @@ def test_solve_dke_ncsx_1species(idx):
     # normalization and comparing to the raw physical quantity. These use the
     # default kwargs from yancc.solution: Tbar=1 keV, mbar=proton, nbar=1e20,
     # Bbar=1, Rbar=1.
-    Tbar = 1e3 * JOULE_PER_EV
+    Tbar = 1e3 * _JOULE_PER_EV
     mbar = proton_mass
     nbar = 1e20
     Bbar = 1.0
@@ -438,7 +439,7 @@ def test_solve_dke_ncsx_with_dkem_preconditioner():
             -0.4e20 * field.a_minor,
         )
     ]
-    C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
+    C_scale = 17 / yancc.species._coulomb_logarithm(species[0], species[0])
     operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
 
     path = "tests/data/20251212-01_sfincs_yancc_benchmark_NCSX_1species_Er_scan.txt"
@@ -674,7 +675,7 @@ def test_solve_dke_coulomb_log_override(field, pitchgrid, speedgrid):
         jax.clear_caches()
     species = [LocalMaxwellian(yancc.species.Hydrogen, 1e3, 1e19, -1e3, -1e19)]
 
-    computed_ln = float(yancc.species.coulomb_logarithm(species[0], species[0]))
+    computed_ln = float(yancc.species._coulomb_logarithm(species[0], species[0]))
     fixed_ln = computed_ln * 2
 
     sol_default, _ = solve_dke(field, pitchgrid, speedgrid, species, 0.0, rtol=1e-10)
@@ -729,7 +730,7 @@ def test_solve_mdke_tokamak_axisymmetric():
     np.testing.assert_allclose(Dij_axi[2, 0], -Dij_axi[0, 2], rtol=1e-2, atol=1e-4)
 
     # each stored (na, nt, nz) solution component solves its own drive term
-    A = yancc.trajectories.MDKE(field_axi, pitchgrid, erhohat, nuhat, gauge=True)
+    A = MDKE(field_axi, pitchgrid, erhohat, nuhat, gauge=True)
     for i in range(3):
         np.testing.assert_allclose(
             A.mv(sol_axi.f[i].flatten()),
@@ -761,7 +762,7 @@ def test_solve_dke_tokamak_axisymmetric():
                 -0.4e20 * field.a_minor,
             )
         ]
-        C_scale = 17 / yancc.species.coulomb_logarithm(species[0], species[0])
+        C_scale = 17 / yancc.species._coulomb_logarithm(species[0], species[0])
         operator_weights = jnp.ones(8).at[-4:].set(C_scale).at[-1:].set(0)
         sol, info = solve_dke(
             field,

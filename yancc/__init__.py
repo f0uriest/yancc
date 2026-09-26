@@ -2,19 +2,7 @@
 
 from jax import config
 
-from . import (
-    _version,
-    collisions,
-    field,
-    krylov,
-    linalg,
-    misc,
-    multigrid,
-    smoothers,
-    species,
-    trajectories,
-    velocity_grids,
-)
+from . import _version, field, solution, solve, species, velocity_grids
 from .solve import solve_dke, solve_dke_ambipolar, solve_mdke
 
 # lots of big and small numbers that will over/underflow in 32bit so
@@ -25,17 +13,12 @@ __version__ = _version.get_versions()["version"]
 
 __all__ = [
     "__version__",
-    "collisions",
     "field",
-    "krylov",
-    "linalg",
-    "misc",
-    "multigrid",
-    "smoothers",
+    "solution",
+    "solve",
     "solve_dke",
     "solve_dke_ambipolar",
     "solve_mdke",
     "species",
-    "trajectories",
     "velocity_grids",
 ]

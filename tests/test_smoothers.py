@@ -5,9 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.field import Field
-from yancc.misc import dke_rhs
-from yancc.multigrid import (
+from yancc._misc import dke_rhs
+from yancc._multigrid import (
     adpative_smooth,
     get_dke_jacobi_smoothers,
     krylov1_smooth,
@@ -16,7 +15,7 @@ from yancc.multigrid import (
     krylov2s_smooth,
     standard_smooth,
 )
-from yancc.smoothers import (
+from yancc._smoothers import (
     DKEJacobiSmoother,
     DKELaplacian,
     MDKEJacobiSmoother,
@@ -24,8 +23,9 @@ from yancc.smoothers import (
     optimal_smoothing_parameter_4d,
     permute_f_3d,
 )
+from yancc._trajectories import DKE, MDKE
+from yancc.field import Field
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen, LocalMaxwellian
-from yancc.trajectories import DKE, MDKE
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 

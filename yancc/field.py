@@ -12,7 +12,7 @@ from jaxtyping import Array, ArrayLike, Float, Int
 from scipy.constants import mu_0
 
 
-class FieldSource(eqx.Enumeration):
+class _FieldSource(eqx.Enumeration):
     """Provenance of a Field's data (which constructor built it)."""
 
     unknown = "unknown"
@@ -25,7 +25,7 @@ class FieldSource(eqx.Enumeration):
 
 
 # labels indexed by the integer code, for display of a (possibly traced) source
-FIELD_SOURCE_NAMES: tuple[str, ...] = tuple(FieldSource._index_to_message)
+_FIELD_SOURCE_NAMES: tuple[str, ...] = tuple(_FieldSource._index_to_message)
 
 
 class Field(eqx.Module):
@@ -99,7 +99,7 @@ class Field(eqx.Module):
     ntheta: int = eqx.field(static=True)
     nzeta: int = eqx.field(static=True)
     NFP: Int[Array, ""]
-    source: FieldSource
+    source: _FieldSource
 
     def __init__(
         self,
@@ -119,7 +119,7 @@ class Field(eqx.Module):
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
-        source: FieldSource = FieldSource.manual,
+        source: _FieldSource = _FieldSource.manual,
     ):
         self.source = source
         self.rho = jnp.asarray(rho)
@@ -257,7 +257,7 @@ class Field(eqx.Module):
             rho=rho,
             **data,
             NFP=eq.NFP,
-            source=FieldSource.desc,
+            source=_FieldSource.desc,
         )
 
     @classmethod
@@ -319,16 +319,16 @@ class Field(eqx.Module):
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
 
-        sqrtg = vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn)
-        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
-        B_sub_t = vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
-        B_sub_z = vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
-        B_sup_t = vmec_eval(theta[:, None], zeta[None, :], bsupu_mnc, 0, xm, xn)
-        B_sup_z = vmec_eval(theta[:, None], zeta[None, :], bsupv_mnc, 0, xm, xn)
+        sqrtg = _vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn)
+        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
+        B_sub_t = _vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
+        B_sub_z = _vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
+        B_sup_t = _vmec_eval(theta[:, None], zeta[None, :], bsupu_mnc, 0, xm, xn)
+        B_sup_z = _vmec_eval(theta[:, None], zeta[None, :], bsupv_mnc, 0, xm, xn)
 
         B0 = jnp.abs(b_mnc).max()
-        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dt=1)
-        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dz=1)
+        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dt=1)
+        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dz=1)
 
         sign = file.variables["signgs"][:].filled()
         sqrtg *= sign
@@ -353,7 +353,7 @@ class Field(eqx.Module):
         data["R_major"] = R_major
         data["a_minor"] = a_minor
 
-        return cls(rho=rho, **data, NFP=nfp, source=FieldSource.vmec)
+        return cls(rho=rho, **data, NFP=nfp, source=_FieldSource.vmec)
 
     @classmethod
     def from_booz_xform(
@@ -427,9 +427,9 @@ class Field(eqx.Module):
         mask = jnp.abs(b_mnc) > cutoff * B0
 
         # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
-        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
-        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
-        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
+        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
+        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
+        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
 
         # make jacobian positive
         sign = jnp.sign(bvco + iota * buco)
@@ -449,7 +449,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
-            source=FieldSource.booz_xform,
+            source=_FieldSource.booz_xform,
         )
 
     @classmethod
@@ -475,7 +475,7 @@ class Field(eqx.Module):
             Modes with abs(b_mn) < cutoff * abs(b_00) will be excluded.
         """
         s = rho**2
-        data = read_bc(path)
+        data = _read_bc(path)
         nfp = data["nfp"]
         theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
         zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
@@ -499,9 +499,9 @@ class Field(eqx.Module):
         b_mnc = b_mnc.flatten()
         mask = mask.flatten()
         # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
-        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
-        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
-        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
+        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
+        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
+        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
 
         # make jacobian positive
         sign = jnp.sign(G + iota * I)
@@ -521,7 +521,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
-            source=FieldSource.ipp_bc,
+            source=_FieldSource.ipp_bc,
         )
 
     @classmethod
@@ -540,7 +540,7 @@ class Field(eqx.Module):
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
-        source: FieldSource = FieldSource.boozer,
+        source: _FieldSource = _FieldSource.boozer,
     ) -> "Field":
         """Construct a field in Boozer coordinates.
 
@@ -637,7 +637,7 @@ class Field(eqx.Module):
         )
 
 
-def vmec_eval(
+def _vmec_eval(
     t: ArrayLike,
     z: ArrayLike,
     xc: ArrayLike,
@@ -667,11 +667,11 @@ def vmec_eval(
     """
     xc, xs, m, n, dt, dz = jnp.atleast_1d(xc, xs, m, n, dt, dz)
     xc, xs, m, n, dt, dz = jnp.broadcast_arrays(xc, xs, m, n, dt, dz)
-    return _vmec_eval(t, z, xc, xs, m, n, dt, dz)
+    return _vmec_eval_single(t, z, xc, xs, m, n, dt, dz)
 
 
 @functools.partial(jnp.vectorize, signature="(),(),(n),(n),(n),(n),(n),(n)->()")
-def _vmec_eval(t, z, xc, xs, m, n, dt, dz):
+def _vmec_eval_single(t, z, xc, xs, m, n, dt, dz):
     arg = m * t - n * z
     arg += dt * jnp.pi / 2
     arg -= dz * jnp.pi / 2
@@ -812,7 +812,7 @@ def _combine_surf_data(surf_data, global_data):
     return all_data
 
 
-def read_bc(path: str | os.PathLike) -> dict[str, Any]:
+def _read_bc(path: str | os.PathLike) -> dict[str, Any]:
     """Read an IPP boozer.bc file as a dict of global scalars and per-surface arrays."""
     lines = open(path).readlines()
     lines = _strip_comments(lines)

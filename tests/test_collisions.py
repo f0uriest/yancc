@@ -6,7 +6,7 @@ import orthax
 import pytest
 import sympy
 
-from yancc.collisions import (
+from yancc._collisions import (
     EnergyScattering,
     FieldPartCD,
     FieldPartCG,
@@ -17,7 +17,7 @@ from yancc.collisions import (
     PitchAngleScattering,
     RosenbluthPotentials,
 )
-from yancc.species import JOULE_PER_EV, GlobalMaxwellian, Hydrogen, gamma_ab
+from yancc.species import _JOULE_PER_EV, GlobalMaxwellian, Hydrogen, _gamma_ab
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import (
@@ -66,7 +66,7 @@ def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
     CEaa = _compute_CEab_sympy(Fa, fa, v, va, va, ma, ma, na, Gamma_aa)
 
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
 
     subs = {
         va: species[0].v_thermal,
@@ -115,18 +115,18 @@ def test_CE_2_species_vs_sympy(dummy_field, xigrid, xgrid, species2):
     CEbb = _compute_CEab_sympy(Fb, fb, v, vtb, vtb, mb, mb, nb, Gamma_bb)
 
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
 
     subs = {
         na: species[0].density,
         nb: species[1].density,
         ma: species[0].species.mass,
         mb: species[1].species.mass,
-        Ta: species[0].temperature * JOULE_PER_EV,
-        Tb: species[1].temperature * JOULE_PER_EV,
+        Ta: species[0].temperature * _JOULE_PER_EV,
+        Tb: species[1].temperature * _JOULE_PER_EV,
         Gamma_aa: gamma_aa_jax,
         Gamma_ab: gamma_ab_jax,
         Gamma_ba: gamma_ba_jax,
@@ -166,7 +166,7 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     fa = (1 + x) * sympy.exp(-(x**2))
     CDaa = _compute_CDab_sympy(Fa, fa, ma, ma, Gamma_aa)
 
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
         pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
@@ -228,17 +228,17 @@ def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre)
     fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
 
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
     subs = {
         na: float(species[0].density),
         nb: float(species[1].density),
         ma: float(species[0].species.mass),
         mb: float(species[1].species.mass),
-        Ta: float(species[0].temperature * JOULE_PER_EV),
-        Tb: float(species[1].temperature * JOULE_PER_EV),
+        Ta: float(species[0].temperature * _JOULE_PER_EV),
+        Tb: float(species[1].temperature * _JOULE_PER_EV),
         Gamma_aa: float(gamma_aa_jax),
         Gamma_ab: float(gamma_ab_jax),
         Gamma_ba: float(gamma_ba_jax),
@@ -294,7 +294,7 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     fa = (1 + x) * sympy.exp(-(x**2))
     CHaa = _compute_CHab_sympy(Fa, fa, l, v, va, va, ma, ma, Gamma_aa)
 
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
     CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
         pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
@@ -358,17 +358,17 @@ def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre)
     fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
 
     CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
     subs = {
         na: float(species[0].density),
         nb: float(species[1].density),
         ma: float(species[0].species.mass),
         mb: float(species[1].species.mass),
-        Ta: float(species[0].temperature * JOULE_PER_EV),
-        Tb: float(species[1].temperature * JOULE_PER_EV),
+        Ta: float(species[0].temperature * _JOULE_PER_EV),
+        Tb: float(species[1].temperature * _JOULE_PER_EV),
         Gamma_aa: float(gamma_aa_jax),
         Gamma_ab: float(gamma_ab_jax),
         Gamma_ba: float(gamma_ba_jax),
@@ -424,7 +424,7 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     fa = (1 + x) * sympy.exp(-(x**2))
     CGaa = _compute_CGab_sympy(Fa, fa, l, v, va, va, Gamma_aa)
 
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
     CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
         pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
@@ -487,17 +487,17 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre)
     fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
 
     CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
     subs = {
         na: float(species[0].density),
         nb: float(species[1].density),
         ma: float(species[0].species.mass),
         mb: float(species[1].species.mass),
-        Ta: float(species[0].temperature * JOULE_PER_EV),
-        Tb: float(species[1].temperature * JOULE_PER_EV),
+        Ta: float(species[0].temperature * _JOULE_PER_EV),
+        Tb: float(species[1].temperature * _JOULE_PER_EV),
         Gamma_aa: float(gamma_aa_jax),
         Gamma_ab: float(gamma_ab_jax),
         Gamma_ba: float(gamma_ba_jax),

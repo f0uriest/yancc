@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import scipy
 
-import yancc.linalg
+import yancc._linalg
 
 
 def _random_banded(p, q, n, rng, periodic=True):
@@ -41,7 +41,7 @@ def test_bordered_operator():
     D = np.zeros((k, k))
     Ab = np.block([[A, B], [C, D]])
 
-    F = yancc.linalg.BorderedOperator(
+    F = yancc._linalg.BorderedOperator(
         lx.MatrixLinearOperator(jnp.array(A)),
         lx.MatrixLinearOperator(jnp.array(B)),
         lx.MatrixLinearOperator(jnp.array(C)),
@@ -50,7 +50,7 @@ def test_bordered_operator():
     np.testing.assert_allclose(F.as_matrix(), Ab, atol=1e-14)
     np.testing.assert_allclose(F.T.as_matrix(), Ab.T, atol=1e-14)
 
-    Fi = yancc.linalg.InverseBorderedOperator(
+    Fi = yancc._linalg.InverseBorderedOperator(
         lx.MatrixLinearOperator(jnp.linalg.pinv(A)),
         lx.MatrixLinearOperator(jnp.array(B)),
         lx.MatrixLinearOperator(jnp.array(C)),
@@ -71,14 +71,14 @@ def test_tridiagonal():
     d = rng.random(N)
     u = rng.random(N - 1)
     b = rng.random(N)
-    A = yancc.linalg.make_dense_tridiag(l, d, u)
-    B = yancc.linalg.make_dense_tridiag(l, d, u, jnp.array(1.2), jnp.array(3.2))
+    A = yancc._linalg.make_dense_tridiag(l, d, u)
+    B = yancc._linalg.make_dense_tridiag(l, d, u, jnp.array(1.2), jnp.array(3.2))
 
     np.testing.assert_allclose(
-        np.linalg.solve(A, b), yancc.linalg.tridiag_solve_dense(A, b)
+        np.linalg.solve(A, b), yancc._linalg.tridiag_solve_dense(A, b)
     )
     np.testing.assert_allclose(
-        np.linalg.solve(B, b), yancc.linalg.tridiag_solve_dense(B, b)
+        np.linalg.solve(B, b), yancc._linalg.tridiag_solve_dense(B, b)
     )
 
 
@@ -92,8 +92,8 @@ def test_banded_to_dense(p, q, n, periodic):
 
     A = _random_banded(p, q, n, rng, periodic)
 
-    C = yancc.linalg.dense_to_banded(p, q, A)
-    B = yancc.linalg.banded_to_dense(p, q, C)
+    C = yancc._linalg.dense_to_banded(p, q, A)
+    B = yancc._linalg.banded_to_dense(p, q, C)
 
     np.testing.assert_allclose(A, B)
 
@@ -108,10 +108,10 @@ def test_lu_factor_banded():
     """Test that LU is the same without pivoting for diagonally dominance matrix."""
     rng = np.random.default_rng(123)
     A = _random_banded(2, 2, 10, rng, False)
-    B = yancc.linalg.dense_to_banded(2, 2, A)
+    B = yancc._linalg.dense_to_banded(2, 2, A)
     lu1 = scipy.linalg.lu_factor(A)[0]
-    lu2, _ = yancc.linalg.lu_factor_banded(2, 2, B)
-    np.testing.assert_allclose(lu1, yancc.linalg.banded_to_dense(2, 2, lu2))
+    lu2, _ = yancc._linalg.lu_factor_banded(2, 2, B)
+    np.testing.assert_allclose(lu1, yancc._linalg.banded_to_dense(2, 2, lu2))
 
 
 @pytest.mark.parametrize("p", [0, 1, 2])
@@ -121,10 +121,10 @@ def test_solve_banded(p, q, n):
     """Test solving regular banded system."""
     rng = np.random.default_rng(123)
     A = _random_banded(p, q, n, rng, False)
-    a = yancc.linalg.dense_to_banded(p, q, A)
+    a = yancc._linalg.dense_to_banded(p, q, A)
     b = rng.random(n)
-    x = yancc.linalg.solve_banded(p, q, a, b)
-    np.testing.assert_allclose(yancc.linalg.banded_mv(p, q, a, x), b)
+    x = yancc._linalg.solve_banded(p, q, a, b)
+    np.testing.assert_allclose(yancc._linalg.banded_mv(p, q, a, x), b)
 
 
 @pytest.mark.parametrize("p", [0, 1, 2])
@@ -135,10 +135,10 @@ def test_solve_banded_periodic(p, q, n, periodic):
     """Test solving periodic banded system."""
     rng = np.random.default_rng(123)
     A = _random_banded(p, q, n, rng, periodic)
-    a = yancc.linalg.dense_to_banded(p, q, A)
+    a = yancc._linalg.dense_to_banded(p, q, A)
     b = rng.random(n)
 
-    x = yancc.linalg.solve_banded_periodic(p, q, a, b)
+    x = yancc._linalg.solve_banded_periodic(p, q, a, b)
     np.testing.assert_allclose(A @ x, b)
     np.testing.assert_allclose(x, np.linalg.solve(A, b))
 
@@ -151,9 +151,9 @@ def test_banded_mv(p, q, n, periodic):
     """Test for banded matrix vector multiply."""
     rng = np.random.default_rng(123)
     A = _random_banded(p, q, n, rng, periodic)
-    a = yancc.linalg.dense_to_banded(p, q, A)
+    a = yancc._linalg.dense_to_banded(p, q, A)
     x = rng.random(n)
-    np.testing.assert_allclose(A @ x, yancc.linalg.banded_mv(p, q, a, x))
+    np.testing.assert_allclose(A @ x, yancc._linalg.banded_mv(p, q, a, x))
 
 
 @pytest.mark.parametrize("p", [(0, 0), (0, 1), (2, 2)])
@@ -167,10 +167,10 @@ def test_banded_mm(p, q, n, periodic):
     q1, q2 = q
     A = _random_banded(p1, q1, n, rng, periodic)
     B = _random_banded(p2, q2, n, rng, periodic)
-    a = yancc.linalg.dense_to_banded(p1, q1, A)
-    b = yancc.linalg.dense_to_banded(p2, q2, B)
-    c, pc, qc = yancc.linalg.banded_mm(p1, q1, p2, q2, a, b)
-    C = yancc.linalg.banded_to_dense(int(pc), int(qc), c)
+    a = yancc._linalg.dense_to_banded(p1, q1, A)
+    b = yancc._linalg.dense_to_banded(p2, q2, B)
+    c, pc, qc = yancc._linalg.banded_mm(p1, q1, p2, q2, a, b)
+    C = yancc._linalg.banded_to_dense(int(pc), int(qc), c)
     np.testing.assert_allclose(A @ B, C)
 
 
@@ -182,9 +182,9 @@ def test_banded_transpose(p, q, n, periodic):
     """Test for banded matrix transpose."""
     rng = np.random.default_rng(123)
     A = _random_banded(p, q, n, rng, periodic)
-    a = yancc.linalg.dense_to_banded(p, q, A)
-    at, pt, qt = yancc.linalg.banded_transpose(p, q, a)
-    np.testing.assert_allclose(A.T, yancc.linalg.banded_to_dense(int(pt), int(qt), at))
+    a = yancc._linalg.dense_to_banded(p, q, A)
+    at, pt, qt = yancc._linalg.banded_transpose(p, q, a)
+    np.testing.assert_allclose(A.T, yancc._linalg.banded_to_dense(int(pt), int(qt), at))
 
 
 def test_dense_lu_inverse_operator():
@@ -194,7 +194,7 @@ def test_dense_lu_inverse_operator():
     # well-conditioned, with rows shuffled so that LU needs pivoting
     A = (rng.standard_normal((n, n)) + n * np.eye(n))[rng.permutation(n)]
     Aop = lx.MatrixLinearOperator(jnp.array(A))
-    Ainv = yancc.linalg.DenseLUInverseOperator(Aop.as_matrix())
+    Ainv = yancc._linalg.DenseLUInverseOperator(Aop.as_matrix())
 
     np.testing.assert_allclose(Ainv.as_matrix(), np.linalg.inv(A), atol=1e-10)
     assert Ainv.in_structure().shape == (n,)
@@ -213,7 +213,7 @@ def test_transposed_linear_operator():
     n = 5
     A = rng.standard_normal((n, n))
     Aop = lx.MatrixLinearOperator(jnp.array(A))
-    AT = yancc.linalg.TransposedLinearOperator(Aop)
+    AT = yancc._linalg.TransposedLinearOperator(Aop)
 
     np.testing.assert_allclose(np.asarray(AT.as_matrix()), A.T, atol=1e-12)
     assert AT.in_structure().shape == (n,)
@@ -234,10 +234,10 @@ def test_solve_banded_equilibrate(p, q, n, periodic):
     A = _random_banded(p, q, n, rng, periodic)
     # mildly poor row scaling so equilibration actually does something nontrivial
     A = A * (10.0 ** rng.integers(-2, 3, size=(n, 1)))
-    a = yancc.linalg.dense_to_banded(p, q, A)
+    a = yancc._linalg.dense_to_banded(p, q, A)
     b = rng.random(n)
     solver = (
-        yancc.linalg.solve_banded_periodic if periodic else yancc.linalg.solve_banded
+        yancc._linalg.solve_banded_periodic if periodic else yancc._linalg.solve_banded
     )
     x_ref = solver(p, q, a, b)  # known-good path (tested elsewhere)
     x_eq = solver(p, q, a, b, equilibrate=True)
@@ -248,11 +248,11 @@ def test_lu_factor_banded_pivot_tol():
     """Clamping tiny pivots keeps a zero-pivot (but nonsingular) solve finite."""
     # A[0, 0] = 0 forces the first non-pivoted pivot to zero; det(A) = -2 != 0.
     A = np.array([[0.0, 1.0, 0.0], [1.0, 2.0, 1.0], [0.0, 1.0, 2.0]])
-    a = yancc.linalg.dense_to_banded(1, 1, A)
+    a = yancc._linalg.dense_to_banded(1, 1, A)
     b = np.array([1.0, 2.0, 3.0])
-    x_plain = yancc.linalg.solve_banded(1, 1, a, b)
+    x_plain = yancc._linalg.solve_banded(1, 1, a, b)
     assert not np.all(np.isfinite(x_plain))  # unpivoted elimination blows up
-    x_clamped = yancc.linalg.solve_banded(1, 1, a, b, pivot_tol=1e-8)
+    x_clamped = yancc._linalg.solve_banded(1, 1, a, b, pivot_tol=1e-8)
     assert np.all(np.isfinite(x_clamped))  # static pivoting keeps it finite
 
 
@@ -264,14 +264,14 @@ def test_matrix_1norm(p, q, n, periodic):
     """matrix_1norm matches numpy's 1-norm for dense and banded storage."""
     rng = np.random.default_rng(123)
     A = _random_banded(p, q, n, rng, periodic)
-    a = yancc.linalg.dense_to_banded(p, q, A)
+    a = yancc._linalg.dense_to_banded(p, q, A)
     # dense storage: reduces over the last two axes
     np.testing.assert_allclose(
-        float(yancc.linalg.matrix_1norm(jnp.asarray(A))), np.linalg.norm(A, 1)
+        float(yancc._linalg.matrix_1norm(jnp.asarray(A))), np.linalg.norm(A, 1)
     )
     # banded storage: same max-abs-column-sum (wrap entries live in the band too)
     np.testing.assert_allclose(
-        float(yancc.linalg.matrix_1norm(a)), np.linalg.norm(A, 1)
+        float(yancc._linalg.matrix_1norm(a)), np.linalg.norm(A, 1)
     )
 
 
@@ -282,10 +282,10 @@ def test_lu_solve_banded_transpose(p, q, n):
     """lu_solve_banded(trans=True) solves A^T x = b reusing the same factors."""
     rng = np.random.default_rng(123)
     A = _random_banded(p, q, n, rng, periodic=False)
-    a = yancc.linalg.dense_to_banded(p, q, A)
+    a = yancc._linalg.dense_to_banded(p, q, A)
     b = rng.random(n)
-    fac = yancc.linalg.lu_factor_banded(p, q, a)
-    x = yancc.linalg.lu_solve_banded(p, q, fac, b, trans=True)
+    fac = yancc._linalg.lu_factor_banded(p, q, a)
+    x = yancc._linalg.lu_solve_banded(p, q, fac, b, trans=True)
     np.testing.assert_allclose(A.T @ x, b, atol=1e-10)
     np.testing.assert_allclose(x, np.linalg.solve(A.T, b), atol=1e-10)
 
@@ -299,8 +299,8 @@ def test_cond_1norm_dense_matches_numpy(n):
     B = A @ np.diag([1.0] * (n - 1) + [1e-8])
     for M in (A, B):
         kappa = float(
-            yancc.linalg.matrix_1norm(jnp.asarray(M))
-            * yancc.linalg.matrix_1norm(jnp.asarray(np.linalg.inv(M)))
+            yancc._linalg.matrix_1norm(jnp.asarray(M))
+            * yancc._linalg.matrix_1norm(jnp.asarray(np.linalg.inv(M)))
         )
         np.testing.assert_allclose(kappa, np.linalg.cond(M, 1), rtol=1e-10)
 
@@ -312,10 +312,10 @@ def test_cond_1norm_banded_hager(p, q, n):
     """Hager kappa_1 estimate is a tight lower bound of the true 1-norm condition."""
     rng = np.random.default_rng(7)
     A = _random_banded(p, q, n, rng, periodic=False)
-    a = yancc.linalg.dense_to_banded(p, q, A)
-    fac = yancc.linalg.lu_factor_banded(p, q, a)
+    a = yancc._linalg.dense_to_banded(p, q, A)
+    fac = yancc._linalg.lu_factor_banded(p, q, a)
     est = float(
-        yancc.linalg.cond_1norm_banded(p, q, a[None], (fac[0][None], fac[1][None]))[0]
+        yancc._linalg.cond_1norm_banded(p, q, a[None], (fac[0][None], fac[1][None]))[0]
     )
     true = np.linalg.cond(A, 1)
     # Hager under-estimates by at most a small factor and never over by much.
@@ -332,10 +332,10 @@ def test_cond_1norm_banded_tracks_illconditioning():
     D = np.ones(n)
     D[n // 2] = 1e-5
     A = A @ np.diag(D)
-    a = yancc.linalg.dense_to_banded(p, q, A)
-    fac = yancc.linalg.lu_factor_banded(p, q, a)
+    a = yancc._linalg.dense_to_banded(p, q, A)
+    fac = yancc._linalg.lu_factor_banded(p, q, a)
     est = float(
-        yancc.linalg.cond_1norm_banded(p, q, a[None], (fac[0][None], fac[1][None]))[0]
+        yancc._linalg.cond_1norm_banded(p, q, a[None], (fac[0][None], fac[1][None]))[0]
     )
     true = np.linalg.cond(A, 1)
     assert true > 1e3  # sanity: this construction really is ill-conditioned
@@ -354,11 +354,11 @@ def test_cr_banded_solve(bw, n, trans):
     """Cyclic-reduction solve of a non-periodic banded system matches dense."""
     rng = np.random.default_rng(bw * 100 + n)
     A = _random_banded_batch(bw, n, 3, rng, periodic=False)
-    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    Ab = jnp.stack([yancc._linalg.dense_to_banded(bw, bw, M) for M in A])
     b = rng.random((3, n))
 
-    fac = yancc.linalg.cr_banded_factor(Ab)
-    x = yancc.linalg.cr_banded_solve(fac, jnp.asarray(b), trans=trans)
+    fac = yancc._linalg.cr_banded_factor(Ab)
+    x = yancc._linalg.cr_banded_solve(fac, jnp.asarray(b), trans=trans)
 
     ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[..., 0]
     np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
@@ -371,11 +371,11 @@ def test_cr_banded_periodic_solve(bw, n, trans):
     """Cyclic-reduction solve of a periodic banded system (Woodbury) matches dense."""
     rng = np.random.default_rng(bw * 100 + n + 7)
     A = _random_banded_batch(bw, n, 3, rng, periodic=True)
-    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    Ab = jnp.stack([yancc._linalg.dense_to_banded(bw, bw, M) for M in A])
     b = rng.random((3, n))
 
-    fac = yancc.linalg.cr_banded_periodic_factor(Ab)
-    x = yancc.linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
+    fac = yancc._linalg.cr_banded_periodic_factor(Ab)
+    x = yancc._linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
 
     ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[..., 0]
     np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
@@ -393,10 +393,10 @@ def test_cr_banded_periodic_small_n(bw, trans):
     rng = np.random.default_rng(bw * 17 + int(trans))
     for n in range(bw + 1, 2 * bw + 2):  # spans the fallback and the first Woodbury N
         A = _random_banded_batch(bw, n, 3, rng, periodic=True)
-        Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+        Ab = jnp.stack([yancc._linalg.dense_to_banded(bw, bw, M) for M in A])
         b = rng.random((3, n))
-        fac = yancc.linalg.cr_banded_periodic_factor(Ab, equilibrate=True)
-        x = yancc.linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
+        fac = yancc._linalg.cr_banded_periodic_factor(Ab, equilibrate=True)
+        x = yancc._linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
         ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[
             ..., 0
         ]
@@ -411,15 +411,15 @@ def test_cr_banded_asymmetric(p, q, n, periodic, trans):
     """CR handles unequal lower/upper bandwidth (block size b = max(p, q))."""
     rng = np.random.default_rng(p * 1000 + q * 100 + n + int(periodic) + int(trans))
     A = np.stack([_random_banded(p, q, n, rng, periodic) for _ in range(3)])
-    Ab = jnp.stack([yancc.linalg.dense_to_banded(p, q, M) for M in A])
+    Ab = jnp.stack([yancc._linalg.dense_to_banded(p, q, M) for M in A])
     b = rng.random((3, n))
 
     if periodic:
-        fac = yancc.linalg.cr_banded_periodic_factor(Ab, p, q, equilibrate=True)
-        x = yancc.linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
+        fac = yancc._linalg.cr_banded_periodic_factor(Ab, p, q, equilibrate=True)
+        x = yancc._linalg.cr_banded_periodic_solve(fac, jnp.asarray(b), trans=trans)
     else:
-        fac = yancc.linalg.cr_banded_factor(Ab, p, q, equilibrate=True)
-        x = yancc.linalg.cr_banded_solve(fac, jnp.asarray(b), trans=trans)
+        fac = yancc._linalg.cr_banded_factor(Ab, p, q, equilibrate=True)
+        x = yancc._linalg.cr_banded_solve(fac, jnp.asarray(b), trans=trans)
 
     ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[..., 0]
     np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
@@ -429,9 +429,11 @@ def test_cr_banded_solve_unbatched():
     """A single (unbatched) banded system round-trips through the CR solve."""
     rng = np.random.default_rng(3)
     A = _random_banded(2, 2, 12, rng, periodic=False)
-    Ab = yancc.linalg.dense_to_banded(2, 2, A)
+    Ab = yancc._linalg.dense_to_banded(2, 2, A)
     b = rng.random(12)
-    x = yancc.linalg.cr_banded_solve(yancc.linalg.cr_banded_factor(Ab), jnp.asarray(b))
+    x = yancc._linalg.cr_banded_solve(
+        yancc._linalg.cr_banded_factor(Ab), jnp.asarray(b)
+    )
     np.testing.assert_allclose(x, np.linalg.solve(A, b), rtol=1e-8, atol=1e-10)
 
 
@@ -443,15 +445,15 @@ def test_cr_banded_equilibrate(periodic):
     A = _random_banded_batch(bw, n, 3, rng, periodic)
     # mildly poor row scaling so equilibration actually does something nontrivial
     A = A * (10.0 ** rng.integers(-2, 3, size=(3, n, 1)))
-    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
+    Ab = jnp.stack([yancc._linalg.dense_to_banded(bw, bw, M) for M in A])
     b = jnp.asarray(rng.random((3, n)))
     if periodic:
         factor, solve = (
-            yancc.linalg.cr_banded_periodic_factor,
-            yancc.linalg.cr_banded_periodic_solve,
+            yancc._linalg.cr_banded_periodic_factor,
+            yancc._linalg.cr_banded_periodic_solve,
         )
     else:
-        factor, solve = yancc.linalg.cr_banded_factor, yancc.linalg.cr_banded_solve
+        factor, solve = yancc._linalg.cr_banded_factor, yancc._linalg.cr_banded_solve
     x_ref = solve(factor(Ab), b)
     x_eq = solve(factor(Ab, equilibrate=True), b)
     np.testing.assert_allclose(x_eq, x_ref, rtol=1e-6, atol=1e-8)
@@ -462,16 +464,16 @@ def test_cr_block_tridiag_solve():
     bw, n = 3, 12
     rng = np.random.default_rng(5)
     A = _random_banded_batch(bw, n, 4, rng, periodic=False)
-    Ab = jnp.stack([yancc.linalg.dense_to_banded(bw, bw, M) for M in A])
-    D, L, U = yancc.linalg.banded_to_block_tridiag(Ab)
-    fac = yancc.linalg.cr_block_tridiag_factor(D, L, U)
+    Ab = jnp.stack([yancc._linalg.dense_to_banded(bw, bw, M) for M in A])
+    D, L, U = yancc._linalg.banded_to_block_tridiag(Ab)
+    fac = yancc._linalg.cr_block_tridiag_factor(D, L, U)
 
     b = rng.random((4, n))
     # reshape RHS into blocks (B, m, b) to match the block-level API
     m, blk = D.shape[1], D.shape[-1]
     rhs = jnp.asarray(b).reshape(4, m, blk)
     for trans in (False, True):
-        x = yancc.linalg.cr_block_tridiag_solve(fac, rhs, trans=trans)
+        x = yancc._linalg.cr_block_tridiag_solve(fac, rhs, trans=trans)
         x = np.asarray(x).reshape(4, n)
         ref = np.linalg.solve(np.swapaxes(A, -1, -2) if trans else A, b[..., None])[
             ..., 0

@@ -8,26 +8,26 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Bool, Float
 
-from .collisions import (
+from ._collisions import (
     FokkerPlanckLandau,
     MDKEPitchAngleScattering,
     RosenbluthPotentials,
 )
-from .field import Field
-from .finite_diff import fd_coeffs, fdbwd, fdfwd
-from .linalg import (
+from ._finite_diff import fd_coeffs, fdbwd, fdfwd
+from ._linalg import (
     AbstractDKEOperator,
     banded_mm,
     banded_to_dense,
     dense_to_banded,
 )
+from ._utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
+from .field import Field
 from .species import LocalMaxwellian
-from .utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .velocity_grids import (
-    AbstractSpeedGrid,
     MaxwellSpeedGrid,
-    MonoenergeticSpeedGrid,
     UniformPitchAngleGrid,
+    _AbstractSpeedGrid,
+    _MonoenergeticSpeedGrid,
 )
 
 
@@ -614,7 +614,7 @@ class MDKE(AbstractDKEOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     erhohat: Float[Array, ""]
     nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -639,7 +639,7 @@ class MDKE(AbstractDKEOperator):
     ):
         self.field = field
         self.pitchgrid = pitchgrid
-        self.speedgrid = MonoenergeticSpeedGrid(jnp.array(1.0))
+        self.speedgrid = _MonoenergeticSpeedGrid(jnp.array(1.0))
         self.erhohat = jnp.array(erhohat)
         self.nuhat = jnp.array(nuhat)
         self.p1 = p1
@@ -813,7 +813,7 @@ class DKETheta(AbstractDKEOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -831,7 +831,7 @@ class DKETheta(AbstractDKEOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -1050,7 +1050,7 @@ class DKEZeta(AbstractDKEOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -1068,7 +1068,7 @@ class DKEZeta(AbstractDKEOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -1286,7 +1286,7 @@ class DKEPitch(AbstractDKEOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
@@ -1304,7 +1304,7 @@ class DKEPitch(AbstractDKEOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -1508,7 +1508,7 @@ class DKESpeed(AbstractDKEOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     axorder: str = eqx.field(static=True)
@@ -1520,7 +1520,7 @@ class DKESpeed(AbstractDKEOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         axorder: str = "sxatz",

@@ -16,7 +16,7 @@ from jax import scipy as jsp
 from jax.tree_util import tree_leaves, tree_map
 from jaxtyping import Array, ArrayLike, Float, Int, PyTree
 
-from .utils import safediv
+from ._utils import safediv
 
 _dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
 _vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)

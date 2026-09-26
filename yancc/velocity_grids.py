@@ -16,7 +16,7 @@ def _default_weight(x: jax.Array):
     return jnp.exp(-(x**2))
 
 
-default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
+_default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
     weight=_default_weight,
     domain=(0, jnp.inf),
     ak=jnp.array(
@@ -122,7 +122,7 @@ default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
 )
 
 
-class AbstractSpeedGrid(eqx.Module):
+class _AbstractSpeedGrid(eqx.Module):
     """Abstract base class for speed grids."""
 
     nx: int = eqx.field(static=True)
@@ -136,7 +136,7 @@ class AbstractSpeedGrid(eqx.Module):
     gauge_idx: jax.Array
 
 
-class MonoenergeticSpeedGrid(AbstractSpeedGrid):
+class _MonoenergeticSpeedGrid(_AbstractSpeedGrid):
     """Speed grid for monoenergetic problem, ie single speed.
 
     Parameters
@@ -159,7 +159,7 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
         self.gauge_idx = jnp.array([0])
 
 
-class MaxwellSpeedGrid(AbstractSpeedGrid):
+class MaxwellSpeedGrid(_AbstractSpeedGrid):
     r"""Grid for speed variable :math:`x = v/v_{th}`.
 
     Uses Maxwell Polynomials, which are orthogonal on :math:`[0, \infty)` with the
@@ -188,7 +188,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         assert nx >= 2, "MaxwellSpeedGrid requires nx >= 2"
         self.nx = nx
         if nx < 20:
-            self.xrec = default_xrec
+            self.xrec = _default_xrec
         else:
             self.xrec = orthax.recurrence.generate_recurrence(
                 weight=_default_weight,
@@ -254,7 +254,7 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         return self.__class__(nx)
 
 
-class LegendrePitchAngleGrid(eqx.Module):
+class _LegendrePitchAngleGrid(eqx.Module):
     r"""Grid for pitch angle variable :math:`\xi = v_{||} / v`.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
@@ -296,7 +296,7 @@ class LegendrePitchAngleGrid(eqx.Module):
         # pitch angle scattering operator ~ -k(k+1)
         self.L = self.xivander @ kk @ self.xivander_inv
 
-    def resample(self, nalpha: int) -> "LegendrePitchAngleGrid":
+    def resample(self, nalpha: int) -> "_LegendrePitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
 

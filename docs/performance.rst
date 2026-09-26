@@ -157,10 +157,11 @@ differentiate first:
 .. code-block:: python
 
     import jax
+    from yancc.field import Field
     from yancc.solve import solve_mdke
 
     def solve(B):
-        field = yancc.Field.from_boozer(B, **other_field_inputs)
+        field = Field.from_boozer(Bmag=B, **other_field_inputs)
         sol, _ = solve_mdke(field, pitchgrid, erhohat, nuhat)
         return sol.get("Dij")
 

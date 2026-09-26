@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath("."))
 sys.path.append(os.path.abspath("../"))
 import csv
 
-from yancc.solution import DKE_OUTPUTS, MDKE_OUTPUTS
+from yancc.solution import _DKE_OUTPUTS, _MDKE_OUTPUTS
 
 
 def _sizes_tex(sizes):
@@ -95,14 +95,14 @@ block = """
 
 """
 
-write_csv(DKE_OUTPUTS, "DKE")
+write_csv(_DKE_OUTPUTS, "DKE")
 header += block.format(
     "Drift Kinetic Equation (``yancc.solution.DKESolution``)",
     "-" * len("Drift Kinetic Equation (``yancc.solution.DKESolution``)"),
     "DKE",
     "DKE",
 )
-write_csv(MDKE_OUTPUTS, "MDKE")
+write_csv(_MDKE_OUTPUTS, "MDKE")
 header += block.format(
     "Monoenergetic Drift Kinetic Equation (``yancc.solution.MDKESolution``)",
     "-" * len("Monoenergetic Drift Kinetic Equation (``yancc.solution.MDKESolution``)"),

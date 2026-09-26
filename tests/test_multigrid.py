@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.misc import dke_rhs
-from yancc.multigrid import (
+from yancc._misc import dke_rhs
+from yancc._multigrid import (
     Prolongation,
     Restriction,
     _nearest,

@@ -4,21 +4,21 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.misc import DKEConstraint, DKESources
-from yancc.solution import DKESolution, MDKESolution, clean_units
+from yancc._misc import DKEConstraint, DKESources
+from yancc.solution import DKESolution, MDKESolution, _clean_units
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def test_clean_units_empty_and_none():
     """clean_units returns the empty string for empty / "None" input."""
-    assert clean_units("") == ""
-    assert clean_units("None") == ""
+    assert _clean_units("") == ""
+    assert _clean_units("None") == ""
 
 
 def test_clean_units_renders_latex_to_unicode():
     r"""Render a LaTeX units string to unicode (superscripts, \cdot -> ·)."""
     assert (
-        clean_units("kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}")
+        _clean_units("kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}")
         == "kg·m⁻¹·s⁻³ = W·m⁻³"
     )
 
