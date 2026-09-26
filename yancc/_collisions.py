@@ -11,23 +11,23 @@ import orthax
 import quadax
 from jaxtyping import Array, ArrayLike, Bool, Float
 
-from .field import Field
-from .finite_diff import fd2, fd_coeffs, fdfwd
-from .linalg import (
+from ._finite_diff import fd2, fd_coeffs, fdfwd
+from ._linalg import (
     AbstractDKEOperator,
     banded_to_dense,
     dense_to_banded,
 )
-from .species import LocalMaxwellian, _species_pairs, gamma_ab, nuD_ab, nupar_ab
-from .utils import (
+from ._utils import (
     _parse_axorder_shape_3d,
     _parse_axorder_shape_4d,
 )
+from .field import Field
+from .species import LocalMaxwellian, _gamma_ab, _nuD_ab, _nupar_ab, _species_pairs
 from .velocity_grids import (
-    AbstractSpeedGrid,
-    LegendrePitchAngleGrid,
     MaxwellSpeedGrid,
     UniformPitchAngleGrid,
+    _AbstractSpeedGrid,
+    _LegendrePitchAngleGrid,
 )
 
 
@@ -267,7 +267,7 @@ class RosenbluthPotentials(eqx.Module):
 
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
-    legendregrid: LegendrePitchAngleGrid
+    legendregrid: _LegendrePitchAngleGrid
     quad: bool = eqx.field(static=True)
     ddGxlk: jax.Array
     Hxlk: jax.Array
@@ -276,7 +276,7 @@ class RosenbluthPotentials(eqx.Module):
     def __init__(self, speedgrid, species, nL=8, quad=False):
         self.speedgrid = speedgrid
         self.species = species
-        self.legendregrid = LegendrePitchAngleGrid(nL)
+        self.legendregrid = _LegendrePitchAngleGrid(nL)
         self.quad = quad
 
         ns = len(species)
@@ -612,7 +612,7 @@ class PitchAngleScattering(AbstractDKEOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
     p2: int = eqx.field(static=True)
@@ -626,7 +626,7 @@ class PitchAngleScattering(AbstractDKEOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         background: list[LocalMaxwellian] | None = None,
         p2: int = 4,
@@ -648,7 +648,7 @@ class PitchAngleScattering(AbstractDKEOperator):
         x = speedgrid.x
 
         def nu_ab(spa, spb):
-            return nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
+            return _nuD_ab(spa, spb, x * spa.v_thermal, lnlambda=coulomb_log)
 
         self.nus = _species_pairs(nu_ab, species, species + background).sum(axis=1)
         h = jnp.pi / pitchgrid.nalpha
@@ -860,9 +860,9 @@ class EnergyScattering(AbstractDKEOperator):
         def terms_ab(spa, spb):
             vta = spa.v_thermal
             v = x * vta
-            nupar = nupar_ab(spa, spb, v, lnlambda=coulomb_log)
-            nuD = nuD_ab(spa, spb, v, lnlambda=coulomb_log)
-            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            nupar = _nupar_ab(spa, spb, v, lnlambda=coulomb_log)
+            nuD = _nuD_ab(spa, spb, v, lnlambda=coulomb_log)
+            gamma = _gamma_ab(spa, spb, lnlambda=coulomb_log)
             ma, mb = spa.species.mass, spb.species.mass
             vtb = spb.v_thermal
             term0 = 4 * jnp.pi * gamma * ma / mb * spb(v)
@@ -1428,7 +1428,7 @@ class FieldPartCD(AbstractDKEOperator):
             ma = spa.species.mass
             v = x * va
             Fa = spa(v)
-            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            gamma = _gamma_ab(spa, spb, lnlambda=coulomb_log)
             vb = spb.v_thermal
             mb = spb.species.mass
             # need to evaluate fb on the speed grid for fa
@@ -1564,7 +1564,7 @@ class FieldPartCG(AbstractDKEOperator):
             va = spa.v_thermal
             v = x * va
             Fa = spa(v)
-            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            gamma = _gamma_ab(spa, spb, lnlambda=coulomb_log)
             return gamma * Fa * 2 * v**2 / va**4
 
         self.prefactor = _species_pairs(prefactor_ab, species, species)
@@ -1713,7 +1713,7 @@ class FieldPartCH(AbstractDKEOperator):
             ma = spa.species.mass
             v = x * va
             Fa = spa(v)
-            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            gamma = _gamma_ab(spa, spb, lnlambda=coulomb_log)
             mb = spb.species.mass
             prefactor_H = -2 / va**2 * gamma * Fa
             prefactor_dH = -2 * v / va**2 * (1 - ma / mb) * gamma * Fa
@@ -1874,7 +1874,7 @@ class FieldParticleScattering(AbstractDKEOperator):
             ma = spa.species.mass
             v = x * va
             Fa = spa(v)
-            gamma = gamma_ab(spa, spb, lnlambda=coulomb_log)
+            gamma = _gamma_ab(spa, spb, lnlambda=coulomb_log)
             vb = spb.v_thermal
             mb = spb.species.mass
             pg = gamma * Fa * 2 * v**2 / va**4

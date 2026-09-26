@@ -2,7 +2,7 @@
 
 import copy
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import equinox as eqx
 import jax
@@ -11,27 +11,27 @@ import numpy as np
 from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
-from .collisions import RosenbluthPotentials
-from .field import FIELD_SOURCE_NAMES, Field
-from .finite_diff import DEFAULT_P1A, DEFAULT_P2A
-from .krylov import gcrotmk
-from .linalg import BorderedOperator, InverseBorderedOperator
-from .misc import (
+from ._collisions import RosenbluthPotentials
+from ._finite_diff import DEFAULT_P1A, DEFAULT_P2A
+from ._krylov import gcrotmk
+from ._linalg import BorderedOperator, InverseBorderedOperator
+from ._misc import (
     DKEConstraint,
     DKESources,
     _dke_thermodynamic_forces,
     dke_rhs,
     mdke_rhs,
 )
-from .preconditioner import (
+from ._preconditioner import (
     DKEPreconditioner,
     MDKEPreconditioner,
     _print_dke_resolution_summary,
 )
-from .root import deflated_root_scalar
+from ._root import deflated_root_scalar
+from ._trajectories import DKE, MDKE
+from .field import _FIELD_SOURCE_NAMES, Field
 from .solution import DKESolution, MDKESolution
-from .species import Estar, LocalMaxwellian, nustar, poloidal_mach
-from .trajectories import DKE, MDKE
+from .species import LocalMaxwellian, _Estar, _nustar, _poloidal_mach
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
@@ -621,7 +621,7 @@ def solve_dke_ambipolar(  # noqa: C901
     multigrid_options: dict | None = None,
     throw: bool = False,
     reuse_preconditioner: bool = False,
-    scale: str | float = "auto",
+    scale: Literal["auto"] | float | jax.Array = "auto",
     adaptive_rtol: bool = True,
     root_options: dict | None = None,
     **options,
@@ -972,7 +972,7 @@ def _print_species_summary(species, field, speedgrid, background, coulomb_log=No
         )
         others = species[:si] + species[si + 1 :] + background
         tempx = jnp.array([speedgrid.x[0], 1.0, speedgrid.x[-1]])
-        nustars = nustar(spec, field, tempx, *others, lnlambda=coulomb_log)
+        nustars = _nustar(spec, field, tempx, *others, lnlambda=coulomb_log)
         for nu, x in zip(nustars, tempx):
             jax.debug.print(
                 " " * 13 + "ν* (x={x:.2e}): {nu: .3e}", x=x, nu=nu, ordered=True
@@ -982,10 +982,10 @@ def _print_species_summary(species, field, speedgrid, background, coulomb_log=No
 def _print_er_summary(species, field, Erho, EparB):
     jax.debug.print("<E||B> : {EparB: .2e} (V*T/m)", EparB=EparB)
     jax.debug.print("Eᵨ = -∂Φ /∂ρ: {Erho: .2e} (V)", Erho=Erho)
-    erstars = jnp.array([Estar(spec, field, Erho, 1.0) for spec in species])
+    erstars = jnp.array([_Estar(spec, field, Erho, 1.0) for spec in species])
     s = "E* (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *erstars, ordered=True)
-    machs = jnp.array([poloidal_mach(spec, field, Erho, 1.0) for spec in species])
+    machs = jnp.array([_poloidal_mach(spec, field, Erho, 1.0) for spec in species])
     s = "Mₚ (x=1.0): [" + "{: .3e} " * len(species) + "] (per species)"
     jax.debug.print(s, *machs, ordered=True)
 
@@ -1046,5 +1046,5 @@ def _print_field_summary(field: Field) -> None:
 
     jax.lax.switch(
         field.source._value,
-        [_printer(name) for name in FIELD_SOURCE_NAMES],
+        [_printer(name) for name in _FIELD_SOURCE_NAMES],
     )

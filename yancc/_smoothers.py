@@ -10,10 +10,9 @@ import jax.numpy as jnp
 from jax import config
 from jaxtyping import ArrayLike, Bool, Float
 
-from .collisions import RosenbluthPotentials
-from .field import Field
-from .finite_diff import fd2, fd_coeffs
-from .linalg import (
+from ._collisions import RosenbluthPotentials
+from ._finite_diff import fd2, fd_coeffs
+from ._linalg import (
     AbstractYanccOperator,
     cr_banded_factor,
     cr_banded_periodic_factor,
@@ -24,9 +23,10 @@ from .linalg import (
     lu_solve_banded,
     lu_solve_banded_periodic,
 )
+from ._trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
+from .field import Field
 from .species import LocalMaxwellian, _nustar_species
-from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid, _AbstractSpeedGrid
 
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
@@ -169,7 +169,7 @@ def permute_f_4d(
     f: jax.Array,
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
 ) -> jax.Array:
@@ -197,7 +197,7 @@ def inverse_permute_f_4d(
     f: jax.Array,
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
 ) -> jax.Array:

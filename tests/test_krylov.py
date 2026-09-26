@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 import scipy
 
-from yancc.krylov import _fgmres, gcrotmk, lgmres
-from yancc.linalg import DenseLUInverseOperator
+from yancc._krylov import _fgmres, gcrotmk, lgmres
+from yancc._linalg import DenseLUInverseOperator
 
 
 def crop2(a, b):

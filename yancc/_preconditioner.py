@@ -8,11 +8,10 @@ import jax.numpy as jnp
 import lineax as lx
 from jaxtyping import Array, ArrayLike, Float
 
-from .collisions import RosenbluthPotentials
-from .field import Field
-from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from .linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
-from .multigrid import (
+from ._collisions import RosenbluthPotentials
+from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
+from ._linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
+from ._multigrid import (
     MultigridOperator,
     get_dke_jacobi_smoothers,
     get_dke_operators,
@@ -23,9 +22,10 @@ from .multigrid import (
     get_prolongations,
     get_restrictions,
 )
-from .species import LocalMaxwellian, collisionality
-from .trajectories import DKE, MDKE
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from ._trajectories import DKE, MDKE
+from .field import Field
+from .species import LocalMaxwellian, _collisionality
+from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
 
 
 class MDKEPreconditioner(MultigridOperator):
@@ -267,7 +267,7 @@ class DKEPreconditioner(MultigridOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     background: list[LocalMaxwellian]
@@ -278,7 +278,7 @@ class DKEPreconditioner(MultigridOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         background: list[LocalMaxwellian] | None,
@@ -429,7 +429,7 @@ class DKEMPreconditioner(AbstractYanccOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     background: list[LocalMaxwellian]
@@ -442,7 +442,7 @@ class DKEMPreconditioner(AbstractYanccOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         background: list[LocalMaxwellian] | None = None,
@@ -469,7 +469,7 @@ class DKEMPreconditioner(AbstractYanccOperator):
             others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
-                nu = collisionality(spec, v, *others)
+                nu = _collisionality(spec, v, *others)
                 erhohat = Erho / v
                 nuhat = nu / v
                 temp_erhohat.append(erhohat)
