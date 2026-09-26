@@ -35,7 +35,7 @@ flux:
 
 If your input is :math:`s`, pass ``rho = np.sqrt(s)``. If it is the
 dimensional minor radius :math:`r`, pass ``rho = r / a_minor``. yancc never
-takes :math:`s` or :math:`r` directly. See :ref:`radial-coordinate` for
+takes :math:`s` or :math:`r` directly. See :ref:`/quickstart.ipynb#radial-coordinate-convention` for
 why this matters for gradients as well.
 
 Surface resolution

@@ -38,7 +38,7 @@ A flux surface is parameterized by arbitrary poloidal and toroidal angles
     \rho = \sqrt{\psi_t / \psi_{t,\mathrm{LCFS}}},
 
 i.e. the square root of normalized toroidal flux. **Every** radial input and
-output in yancc is in :math:`\rho` (see :ref:`radial-coordinate` in the
+output in yancc is in :math:`\rho` (see :ref:`/quickstart.ipynb#radial-coordinate-convention` in the
 quickstart for conversions from :math:`s` or :math:`r`).
 
 The on-surface grid sizes are ``ntheta`` and ``nzeta``, set when the

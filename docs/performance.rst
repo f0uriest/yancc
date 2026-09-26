@@ -198,4 +198,4 @@ Other tips
 - **Check that your gradients are in** :math:`\rho`. A wrong factor of
   ``a_minor`` in ``dndrho`` / ``dTdrho`` will not produce an error — the
   solve will succeed and the fluxes will silently be wrong by the same
-  factor. See :ref:`radial-coordinate` in the quickstart.
+  factor. See :ref:`/quickstart.ipynb#radial-coordinate-convention` in the quickstart.
