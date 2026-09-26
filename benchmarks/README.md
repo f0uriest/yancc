@@ -9,11 +9,21 @@ cases in `cases_dke.py`) and `bench_mdke.py` (monoenergetic DKE, cases in
 `cases_mdke.py`). Everything below describes `bench_dke.py`; `bench_mdke.py` works the
 same way (swap the script name)
 
-It records: matvec count (`nmv`), restart count (`niter`), convergence flag (`success`),
- final residual (`res`). This is meant to catch regressions in overall deterministic
-performance (ie due to multigrid and krylov settings). It is not meant to compare wall
-time, this is easier to measure separately with a microbenchmark of matvec cost.
-A `wall_s` is stored per case for eyeballing, but never used in the comparison.
+Each case is compiled ahead of time (the whole solve, including preconditioner setup,
+as one executable) and then run once with the compiled executable, so compilation and
+runtime are timed separately. Per case it records: matvec count (`nmv`), restart count
+(`niter`), convergence flag (`success`), final residual (`res`), `compile_s` (tracing,
+lowering and XLA compilation), `run_s` (one run of the compiled executable), `mem_bytes`
+(XLA's memory estimate for the executable: arguments + outputs + temporaries, a static
+estimate rather than a measured peak) and `wall_s` (total time for the case, including
+building it, which is used to balance groups when splitting the suite).
+
+`nmv`, `niter`, `success` and `res` are deterministic and hardware independent, and are
+what `compare` uses. This is meant to catch regressions in overall deterministic
+performance (ie due to multigrid and krylov settings). The times depend on the machine
+and its load, so they are never used in the comparison; `compare_markdown.py` marks
+large changes in them, and in the memory estimate, but only as information. For precise
+timing, a microbenchmark of matvec cost is easier to measure separately.
 
 It is also not designed to catch **physics** regressions (ie, giving the wrong answer),
 and many of these cases are significantly under-resolved. Physics benchmarks are

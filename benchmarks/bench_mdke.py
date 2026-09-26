@@ -45,9 +45,11 @@ import time
 from datetime import datetime, timezone
 
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
+from aot import TIMING_HDR, aot_run, format_timing  # noqa: E402  (sibling module)
 from cases_mdke import (  # noqa: E402  (sibling module)
     CASES,
     Case,
@@ -88,26 +90,36 @@ def _env_header() -> dict:
 
 
 def run_case(case: Case, verbose: int = 0) -> dict:
-    """Solve one case with production defaults; return its deterministic metrics.
+    """Solve one case with production defaults; return its metrics.
+
+    The solve is compiled ahead of time and then run once with the compiled executable,
+    so compilation and runtime are timed separately. The compiled memory estimate is
+    recorded too.
 
     The mDKE solves two RHS; combine into a single set of comparable metrics
     (``nmv``/``niter`` summed, ``success`` AND-ed, ``res`` the worse) and keep the
     per-RHS matvec counts for eyeballing.
     """
     field, pitchgrid, erhohat, nuhat = case.build()
-    _sol, info = solve_mdke(
-        field,
-        pitchgrid,
-        erhohat,
-        nuhat,
-        rtol=case.rtol,
-        verbose=verbose,
-        # this is the only departure from standard settings. We want things
-        # to converge within 1 restart, so 3 is already more than enough. The production
-        # default is 10 for robustness but  if things regress we want to fail fast.
-        maxiter=3,
+
+    def solve(field, pitchgrid, erhohat, nuhat):
+        return solve_mdke(
+            field,
+            pitchgrid,
+            erhohat,
+            nuhat,
+            rtol=case.rtol,
+            verbose=verbose,
+            # this is the only departure from standard settings. We want things
+            # to converge within 1 restart, so 3 is already more than enough. The
+            # production default is 10 for robustness but if things regress we want to
+            # fail fast.
+            maxiter=3,
+        )
+
+    (_sol, info), timing = aot_run(
+        solve, field, pitchgrid, jnp.asarray(erhohat), jnp.asarray(nuhat)
     )
-    _sol = jax.block_until_ready(_sol)
     nmv1, nmv2 = int(info["nmv1"]), int(info["nmv2"])
     return {
         "nmv": nmv1 + nmv2,
@@ -116,6 +128,7 @@ def run_case(case: Case, verbose: int = 0) -> dict:
         "res": float(max(info["res1"], info["res2"])),
         "nmv1": nmv1,  # recorded, never compared
         "nmv2": nmv2,  # recorded, never compared
+        **timing,
     }
 
 
@@ -157,7 +170,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     print(
         f"  {'case':>22} {_CASE_HDR} {'nmv':>6} {'nit':>4} {'ok':>3} "
-        f"{'res':>10}  {'sec':>5}",
+        f"{'res':>10}  {TIMING_HDR}",
         flush=True,
     )
     results: dict[str, dict] = {}
@@ -177,7 +190,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         res = "-" if r["res"] is None else f"{r['res']:.2e}"
         print(
             f"  {case.name:>22} {_case_cols(case)} {str(nmv):>6} "
-            f"{str(r['niter']):>4} {okstr:>3} {res:>10}  {r['wall_s']:>5.0f}",
+            f"{str(r['niter']):>4} {okstr:>3} {res:>10}  {format_timing(r)}",
             flush=True,
         )
         if err:

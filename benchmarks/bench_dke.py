@@ -42,9 +42,11 @@ import time
 from datetime import datetime, timezone
 
 import jax
+import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
+from aot import TIMING_HDR, aot_run, format_timing  # noqa: E402  (sibling module)
 from cases_dke import (  # noqa: E402  (sibling module)
     CASES,
     Case,
@@ -108,29 +110,39 @@ def _env_header() -> dict:
 
 
 def run_case(case: Case, verbose: int = 0) -> dict:
-    """Solve one case with production defaults; return its deterministic metrics."""
+    """Solve one case with production defaults; return its metrics.
+
+    The whole solve (preconditioner setup included) is compiled ahead of time and then
+    run once with the compiled executable, so compilation and runtime are timed
+    separately. The compiled memory estimate is recorded too.
+    """
     field, pg, sg, sp, Erho, bg = case.build()
-    _sol, info = solve_dke(
-        field,
-        pg,
-        sg,
-        sp,
-        Erho,
-        background=bg or None,
-        rtol=case.rtol,
-        coulomb_log=case.coulomb_log,
-        verbose=verbose,
-        # this is the only departure from standard settings. We want things
-        # to converge within 1 restart, so 3 is already more than enough. The production
-        # default is 10 for robustness but  if things regress we want to fail fast.
-        maxiter=3,
-    )
-    _sol = jax.block_until_ready(_sol)
+
+    def solve(field, pg, sg, sp, Erho, bg):
+        return solve_dke(
+            field,
+            pg,
+            sg,
+            sp,
+            Erho,
+            background=bg or None,
+            rtol=case.rtol,
+            coulomb_log=case.coulomb_log,
+            verbose=verbose,
+            # this is the only departure from standard settings. We want things
+            # to converge within 1 restart, so 3 is already more than enough. The
+            # production default is 10 for robustness but if things regress we want to
+            # fail fast.
+            maxiter=3,
+        )
+
+    (_sol, info), timing = aot_run(solve, field, pg, sg, sp, jnp.asarray(Erho), bg)
     return {
         "nmv": int(info["nmv"]),
         "niter": int(info["niter"]),
         "success": bool(info["success"]),
         "res": float(info["res"]),
+        **timing,
     }
 
 
@@ -172,7 +184,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     print(
         f"  {'case':>26} {_CASE_HDR} {'nmv':>6} {'nit':>4} {'ok':>3} "
-        f"{'res':>10}  {'sec':>5}",
+        f"{'res':>10}  {TIMING_HDR}",
         flush=True,
     )
     results: dict[str, dict] = {}
@@ -192,7 +204,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         res = "-" if r["res"] is None else f"{r['res']:.2e}"
         print(
             f"  {case.name:>26} {_case_cols(case)} {str(nmv):>6} "
-            f"{str(r['niter']):>4} {okstr:>3} {res:>10}  {r['wall_s']:>5.0f}",
+            f"{str(r['niter']):>4} {okstr:>3} {res:>10}  {format_timing(r)}",
             flush=True,
         )
         if err:

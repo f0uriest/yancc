@@ -211,8 +211,11 @@ jobs:
               --base $(files base_mdke) --current $(files pr_mdke) --title "Monoenergetic DKE"
             echo "🟢 improvement, 🔴 regression. Success and matvec count (\`nmv\`) are"
             echo "deterministic and are what count as regressions (\`nmv\` changes over 5%)."
-            echo "Wall time includes compilation and depends on the shared runner, so it is"
-            echo "only marked when it changes by over 15% and 2 s."
+            echo "Compile time and run time (one run of the ahead-of-time compiled solve) depend"
+            echo "on the shared runner, so they are only marked when they change by over 15% and"
+            echo "2 s. The compiled memory is XLA's estimate for the executable (arguments,"
+            echo "outputs and temporaries), marked when it changes by over 10%. Both are"
+            echo "informational."
           } > report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
 
