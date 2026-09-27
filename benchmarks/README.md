@@ -1,0 +1,120 @@
+# DKE convergence benchmark
+
+A standalone regression / profiling harness for the drift-kinetic solver. Not part of
+the regular pytest suite, this takes ~1 hour on CPU, but git tracked so runs
+are reproducible.
+
+There are two harnesses with identical CLIs: `bench_dke.py` (full multi-species DKE,
+cases in `cases_dke.py`) and `bench_mdke.py` (monoenergetic DKE, cases in
+`cases_mdke.py`). Everything below describes `bench_dke.py`; `bench_mdke.py` works the
+same way (swap the script name)
+
+Each case is compiled ahead of time (the whole solve, including preconditioner setup,
+as one executable) and then run once with the compiled executable, so compilation and
+runtime are timed separately. Per case it records: matvec count (`nmv`), restart count
+(`niter`), convergence flag (`success`), final residual (`res`), `compile_s` (tracing,
+lowering and XLA compilation), `run_s` (one run of the compiled executable), `mem_bytes`
+(XLA's memory estimate for the executable: arguments + outputs + temporaries, a static
+estimate rather than a measured peak) and `wall_s` (total time for the case, including
+building it, which is used to balance groups when splitting the suite).
+
+`nmv`, `niter`, `success` and `res` are deterministic and hardware independent, and are
+what `compare` uses. This is meant to catch regressions in overall deterministic
+performance (ie due to multigrid and krylov settings). The times depend on the machine
+and its load, so they are never used in the comparison; `compare_markdown.py` marks
+large changes in them, and in the memory estimate, but only as information. For precise
+timing, a microbenchmark of matvec cost is easier to measure separately.
+
+It is also not designed to catch **physics** regressions (ie, giving the wrong answer),
+and many of these cases are significantly under-resolved. Physics benchmarks are
+included in the existing test suite (``tests/test_solve.py``) where yancc is compared
+against MONKES and SFINCS.
+
+The cases here are some that have been found to be difficult for the multigrid
+preconditioner, along with some easier cases. Many of the cases have been made much
+faster by tuning the default multigrid settings, so we keep them here to catch any
+changes that undo that tuning.
+
+The solver always runs with the default settings for `solve_dke`, so any
+change in `nmv`/`success` reflects a change in the shipped code. There is no
+config knob — A/B testing is done by running on two git checkouts.
+
+Run from the repository root:
+
+```bash
+# quick (~5 min) sanity subset
+python benchmarks/bench_dke.py run --tier smoke --out smoke.json
+
+# full matrix (collisionality + resolution scans, geometry spread,
+# high-nu*/high-nx corners, 1-species controls)
+python benchmarks/bench_dke.py run --tier all --out bench.json
+
+# run specific case(s) by name (overrides --tier); repeatable / comma-separated
+python benchmarks/bench_dke.py run --list                 # show all case names
+python benchmarks/bench_dke.py run --case ncsx_2sp_nu1e-2 --out one.json
+python benchmarks/bench_dke.py run --case hsx_2sp_1e-1,w7x_2sp_3e-2 --out two.json
+
+# diff current against the committed baseline; exits nonzero on any regression
+python benchmarks/bench_dke.py compare benchmarks/baseline.json nightly.json
+```
+
+## Regression check across a change
+
+```bash
+git checkout main    && python benchmarks/bench_dke.py run --out base.json
+git checkout feature && python benchmarks/bench_dke.py run --out feat.json
+python benchmarks/bench_dke.py compare base.json feat.json
+```
+
+`compare` flags a **regression** (nonzero exit) only when current is strictly
+worse than baseline: a `success` flip `converged -> FAIL`, or `nmv` up by more
+than 5%. Fixes, speed-ups, and new/dropped cases are reported but don't fail the
+gate.
+
+## Baseline
+
+Commit a single blessed run as `benchmarks/baseline.json` and refresh it
+deliberately when the shipped behavior changes for a known-good reason.
+
+## The case matrix
+
+Defined in `cases_dke.py` as a list of `Case` dataclasses (equilibrium, species,
+target `nustar` and `estar` of the reference species, grid resolution, tolerances).
+`species` is a count (1 -> H, 2 -> e + H) or a tuple of kinds such as `("H", (12, 6))`,
+and the last species is the reference for `nustar`/`estar` unless `reference` says
+otherwise. Optional fields:
+
+- `tratio`: temperature of the last species relative to the first.
+- `nkinetic`: solve only the first `nkinetic` species; the rest enter the collision
+  operator as static backgrounds (`solve_dke(background=...)`).
+- `density_ratios`: species densities relative to the reference species, replacing the
+  quasineutral default (e.g. for a dilute impurity). Required for more than two species.
+- `reference`: index of the species that sets `nustar`, `estar` and the density scale
+  (e.g. the main ion while an impurity trails as a background).
+
+The matrix includes temperature-ratio, kinetic-electron-on-ion-background, extreme
+mass/temperature-ratio, and impurity (light, heavy, dilute, background-only) cases
+alongside the equilibrium / collisionality / resolution scans.
+
+## The monoenergetic benchmark
+
+`bench_mdke.py` is the monoenergetic sibling of `bench_dke.py`, with the same CLI
+(`run`/`compare`, `--tier`, `--case`, `--list`, `--out`) and the same regression rules.
+It solves `solve_mdke` with production defaults, so a change in `nmv`/`success`
+reflects a change in the shipped code.
+
+The monoenergetic problem has no species or speed grid: each case is parametrized
+directly by the two DKES database axes - collisionality `nuhat` (ν/v, in 1/m) and
+normalized radial electric field `erhat` (Er/v). The matrix in `cases_mdke.py` sweeps
+`nuhat` in `[1e-5, 1e2]` and `erhat` in `[0, 1e-1]` across geometry; the
+low-collisionality / finite-`erhat` corner is the resonant regime that stresses the
+preconditioner. `solve_mdke` solves two RHS per case, so the recorded `nmv`/`niter` are
+the sums, `success` is the AND, and `res` is the worse of the two (per-RHS matvec counts
+are also stored but never compared).
+
+```bash
+python benchmarks/bench_mdke.py run --tier smoke   --out smoke_mdke.json
+python benchmarks/bench_mdke.py run --tier nightly --out nightly_mdke.json
+python benchmarks/bench_mdke.py run --case w7x_nu1e-3_er0 --out one.json
+python benchmarks/bench_mdke.py compare base_mdke.json feat_mdke.json
+```
