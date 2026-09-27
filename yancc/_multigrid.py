@@ -1420,7 +1420,7 @@ class MultigridOperator(AbstractYanccOperator):
         self.v2 = jnp.asarray(v2)
         self.smooth_method = smooth_method
         if coarse_opinv is None:
-            coarse_opinv = DenseLUInverseOperator(operators[0].as_matrix())
+            coarse_opinv = DenseLUInverseOperator(operators[0])
         self.coarse_opinv = coarse_opinv
         self.coarse_method = coarse_method
         self.coarse_weight = jnp.asarray(coarse_weight)

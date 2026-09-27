@@ -493,13 +493,13 @@ class DKEJacobiSmoother(AbstractYanccOperator):
         self.smooth_solver = smooth_solver
 
         if weight is None:
-            nus = _nustar_species(
-                species, field, speedgrid.x, background, lnlambda=coulomb_log
-            )
+            # the weight of each species depends on its thermal collisionality (at
+            # x=1) only, so it is the same at every speed
+            nus = _nustar_species(species, field, 1.0, background, lnlambda=coulomb_log)
             _fun = lambda y: optimal_smoothing_parameter_4d(p1, p2, y, axorder[-1])
-            _weight = jnp.vectorize(_fun)(nus)[:, :, None, None, None]
+            _weight = jnp.vectorize(_fun)(nus)[:, None, None, None, None]
             _weight = _weight * jnp.ones(
-                (1, 1, pitchgrid.nalpha, field.ntheta, field.nzeta)
+                (1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
             )
         else:
             _weight = weight
