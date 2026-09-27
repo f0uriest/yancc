@@ -19,25 +19,32 @@ jobs:
                  {group: 6, python_version: '3.11'},
                  {group: 7, python_version: '3.11'},
                  {group: 8, python_version: '3.11'},
-                 {group: 1, python_version: '3.13'},
-                 {group: 2, python_version: '3.13'},
-                 {group: 3, python_version: '3.13'},
-                 {group: 4, python_version: '3.13'},
-                 {group: 5, python_version: '3.13'},
-                 {group: 6, python_version: '3.13'},
-                 {group: 7, python_version: '3.13'},
-                 {group: 8, python_version: '3.13'}]
+                 {group: 1, python_version: '3.14'},
+                 {group: 2, python_version: '3.14'},
+                 {group: 3, python_version: '3.14'},
+                 {group: 4, python_version: '3.14'},
+                 {group: 5, python_version: '3.14'},
+                 {group: 6, python_version: '3.14'},
+                 {group: 7, python_version: '3.14'},
+                 {group: 8, python_version: '3.14'}]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.combos.python_version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.combos.python_version }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade -e ".[dev]"
+          # DESC caps jax and other shared dependencies below the newest versions, so
+          # only install it on the older python. The newer python tests the latest
+          # dependencies, with the tests comparing against DESC skipped.
+          if [ "${{ matrix.combos.python_version }}" = "3.11" ]; then
+            pip install --upgrade -e ".[dev,desc]"
+          else
+            pip install --upgrade -e ".[dev]"
+          fi
           pip list
       - name: Test with pytest
         run: |

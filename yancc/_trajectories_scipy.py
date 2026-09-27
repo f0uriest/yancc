@@ -4,8 +4,8 @@ import jax
 import numpy as np
 import scipy
 
-from yancc.finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
-from yancc.trajectories import dkes_w_pitch, dkes_w_theta, dkes_w_zeta
+from yancc._finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
+from yancc._trajectories import dkes_w_pitch, dkes_w_theta, dkes_w_zeta
 
 
 def dfdtheta(

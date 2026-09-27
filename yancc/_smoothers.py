@@ -7,28 +7,26 @@ import equinox as eqx
 import interpax
 import jax
 import jax.numpy as jnp
-import lineax as lx
 from jax import config
 from jaxtyping import ArrayLike, Bool, Float
 
-from .collisions import RosenbluthPotentials
-from .field import Field
-from .finite_diff import fd2, fd_coeffs
-from .linalg import (
-    TransposedLinearOperator,
+from ._collisions import RosenbluthPotentials
+from ._finite_diff import fd2, fd_coeffs
+from ._linalg import (
+    AbstractYanccOperator,
     cr_banded_factor,
     cr_banded_periodic_factor,
     cr_banded_periodic_solve,
     cr_banded_solve,
-    dense_to_banded,
     lu_factor_banded,
     lu_factor_banded_periodic,
     lu_solve_banded,
     lu_solve_banded_periodic,
 )
+from ._trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
+from .field import Field
 from .species import LocalMaxwellian, _nustar_species
-from .trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
-from .velocity_grids import AbstractSpeedGrid, MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid, _AbstractSpeedGrid
 
 # need this here as well so that consts use 64 bit
 config.update("jax_enable_x64", True)
@@ -171,7 +169,7 @@ def permute_f_4d(
     f: jax.Array,
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
 ) -> jax.Array:
@@ -199,7 +197,7 @@ def inverse_permute_f_4d(
     f: jax.Array,
     field: Field,
     pitchgrid: UniformPitchAngleGrid,
-    speedgrid: AbstractSpeedGrid,
+    speedgrid: _AbstractSpeedGrid,
     species: list[LocalMaxwellian],
     axorder: str,
 ) -> jax.Array:
@@ -212,7 +210,7 @@ def inverse_permute_f_4d(
     return f.flatten()
 
 
-class MDKEJacobiSmoother(lx.AbstractLinearOperator):
+class MDKEJacobiSmoother(AbstractYanccOperator):
     """Block diagonal smoother for MDKE.
 
     Parameters
@@ -272,16 +270,18 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        self.bandwidth = max(
-            fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+        sizes = {
+            "a": self.pitchgrid.nalpha,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        # the band can't be wider than the axis it lies along
+        self.bandwidth = min(
+            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+            sizes[self.axorder[-1]] // 2,
         )
         assert smooth_solver in {None, "banded", "cr", "dense"}
         if smooth_solver is None:
-            sizes = {
-                "a": self.pitchgrid.nalpha,
-                "t": self.field.ntheta,
-                "z": self.field.nzeta,
-            }
             # use cr solver once it actually saves memory. For the s/x axes bw = dim//2,
             # so 6*bw+1 >= dim keeps them dense.
             if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
@@ -293,25 +293,40 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             weight = optimal_smoothing_parameter_3d(p1, p2, nuhat, axorder[-1])
         self.weight = jnp.atleast_1d(jnp.array(weight))
 
+        # "cr" consumes the same banded storage as "banded"
+        bd_fmt = "banded" if self.smooth_solver in ("banded", "cr") else "dense"
         mats = MDKE(
             field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge
-        ).block_diagonal()
-        # TODO: implement banded block diagonal for MDKE
+        ).block_diagonal(bd_fmt, self.bandwidth)
 
-        if self.smooth_solver == "banded":
-            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+        # The pitch line smoother (convolved axis "a") is the only case with a
+        # non-periodic band, so it uses the standard (non-periodic) banded/CR
+        # factor/solve rather than the periodic variant used for theta/zeta.
+        pitch = self.axorder[-1] == "a"
+        pivot_tol = jnp.finfo(mats.dtype).eps ** (1 / 2)
+        if self.smooth_solver == "banded" and not pitch:
             self.mats = lu_factor_banded_periodic(
                 self.bandwidth,
                 self.bandwidth,
                 mats,
                 equilibrate=True,
-                pivot_tol=jnp.finfo(mats.dtype).eps ** (1 / 2),
+                pivot_tol=pivot_tol,
                 # unroll has little effect on CPU but ~2x faster on GPU
                 unroll=4,
             )
-        elif self.smooth_solver == "cr":
-            mats = dense_to_banded(self.bandwidth, self.bandwidth, mats)
+        elif self.smooth_solver == "banded":
+            self.mats = lu_factor_banded(
+                self.bandwidth,
+                self.bandwidth,
+                mats,
+                equilibrate=True,
+                pivot_tol=pivot_tol,
+                unroll=4,
+            )
+        elif self.smooth_solver == "cr" and not pitch:
             self.mats = cr_banded_periodic_factor(mats, equilibrate=True)
+        elif self.smooth_solver == "cr":
+            self.mats = cr_banded_factor(mats, equilibrate=True)
         else:
             self.mats = jnp.linalg.inv(mats)
 
@@ -324,14 +339,21 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             if self.smooth_solver == "banded":
                 size, N, M = self.mats[0].shape
                 x = x.reshape(size, M)
-                b = lu_solve_banded_periodic(
-                    self.bandwidth,
-                    self.bandwidth,
-                    self.mats,
-                    x,
-                    # unroll here has little effect on GPU but modest gain on CPU
-                    unroll=8,
-                )
+                # pitch ("...a") is non-periodic -> standard banded solve; periodic axes
+                # (theta/zeta line smoothers) keep the wrap-aware periodic solve.
+                if self.axorder[-1] == "a":
+                    b = lu_solve_banded(
+                        self.bandwidth, self.bandwidth, self.mats, x, unroll=8
+                    )
+                else:
+                    b = lu_solve_banded_periodic(
+                        self.bandwidth,
+                        self.bandwidth,
+                        self.mats,
+                        x,
+                        # unroll here has little effect on GPU but modest gain on CPU
+                        unroll=8,
+                    )
             elif self.smooth_solver == "cr":
                 M = {
                     "a": self.pitchgrid.nalpha,
@@ -339,7 +361,11 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
                     "z": self.field.nzeta,
                 }[self.axorder[-1]]
                 x = x.reshape(-1, M)
-                b = cr_banded_periodic_solve(self.mats, x)
+                # pitch ("...a") is non-periodic; theta/zeta are periodic line smoothers
+                if self.axorder[-1] == "a":
+                    b = cr_banded_solve(self.mats, x)
+                else:
+                    b = cr_banded_periodic_solve(self.mats, x)
             else:
                 size, N, M = self.mats.shape
                 x = x.reshape(size, M)
@@ -348,11 +374,6 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             b = permute_f_3d(b.flatten(), self.field, self.pitchgrid, self.axorder)
             return self.weight * b
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -360,19 +381,8 @@ class MDKEJacobiSmoother(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
-            dtype=self.field.Bmag.dtype,
-        )
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEJacobiSmoother(lx.AbstractLinearOperator):
+class DKEJacobiSmoother(AbstractYanccOperator):
     """Block diagonal smoother for DKE.
 
     Parameters
@@ -453,23 +463,23 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
         self.p1 = p1
         self.p2 = p2
         self.axorder = axorder
-        if self.axorder[-1] == "s":
-            self.bandwidth = len(self.species) // 2
-        elif self.axorder[-1] == "x":
-            self.bandwidth = self.speedgrid.nx // 2
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nalpha,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        if self.axorder[-1] in "sx":
+            self.bandwidth = sizes[self.axorder[-1]] // 2
         else:
-            self.bandwidth = max(
-                fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2
+            # the band can't be wider than the axis it lies along
+            self.bandwidth = min(
+                max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2),
+                sizes[self.axorder[-1]] // 2,
             )
         assert smooth_solver in {None, "banded", "cr", "dense"}
         if smooth_solver is None:
-            sizes = {
-                "s": len(self.species),
-                "x": self.speedgrid.nx,
-                "a": self.pitchgrid.nalpha,
-                "t": self.field.ntheta,
-                "z": self.field.nzeta,
-            }
             # use cr solver once it actually saves memory. For the s/x axes bw = dim//2,
             # so 6*bw+1 >= dim keeps them dense.
             if sizes[self.axorder[-1]] > 6 * self.bandwidth + 1:
@@ -605,11 +615,6 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             )
             return self.weight * b
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -623,25 +628,8 @@ class DKEJacobiSmoother(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
+class DKEFrozenPlaneSmoother(AbstractYanccOperator):
     """Frozen (theta, zeta)-plane smoother for DKE, applied via FFT.
 
     The exact (theta, zeta) plane block couples the two angle directions through the
@@ -784,11 +772,6 @@ class DKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
             ).real
             return (self.weight * y).reshape(-1)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -802,16 +785,8 @@ class DKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return self.in_structure()
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class DKELaplacian(lx.AbstractLinearOperator):
+class DKELaplacian(AbstractYanccOperator):
     """Normalized Laplacian operator on 4d phase space."""
 
     field: Field
@@ -874,11 +849,6 @@ class DKELaplacian(lx.AbstractLinearOperator):
         df /= self.norm
         return df.reshape(vector.shape)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
@@ -892,25 +862,8 @@ class DKELaplacian(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
 
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-class MDKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
+class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
     """Frozen (theta, zeta)-plane smoother for MDKE, applied via FFT.
 
     The monoenergetic analog of :class:`DKEFrozenPlaneSmoother`. The exact
@@ -1015,44 +968,12 @@ class MDKEFrozenPlaneSmoother(lx.AbstractLinearOperator):
             ).real
             return (self.weight * y).reshape(-1)
 
-    def as_matrix(self):
-        """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv)(x).T
-
     def in_structure(self):
         """Pytree structure of expected input."""
         return jax.ShapeDtypeStruct(
             (self.field.ntheta * self.field.nzeta * self.pitchgrid.nalpha,),
             dtype=self.field.Bmag.dtype,
         )
-
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return self.in_structure()
-
-    def transpose(self):
-        """Transpose of the operator."""
-        return TransposedLinearOperator(self)
-
-
-@lx.is_symmetric.register(DKELaplacian)
-@lx.is_diagonal.register(DKELaplacian)
-@lx.is_tridiagonal.register(DKELaplacian)
-@lx.is_symmetric.register(DKEJacobiSmoother)
-@lx.is_diagonal.register(DKEJacobiSmoother)
-@lx.is_tridiagonal.register(DKEJacobiSmoother)
-@lx.is_symmetric.register(MDKEJacobiSmoother)
-@lx.is_diagonal.register(MDKEJacobiSmoother)
-@lx.is_tridiagonal.register(MDKEJacobiSmoother)
-@lx.is_symmetric.register(MDKEFrozenPlaneSmoother)
-@lx.is_diagonal.register(MDKEFrozenPlaneSmoother)
-@lx.is_tridiagonal.register(MDKEFrozenPlaneSmoother)
-@lx.is_symmetric.register(DKEFrozenPlaneSmoother)
-@lx.is_diagonal.register(DKEFrozenPlaneSmoother)
-@lx.is_tridiagonal.register(DKEFrozenPlaneSmoother)
-def _(operator):
-    return False
 
 
 def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):

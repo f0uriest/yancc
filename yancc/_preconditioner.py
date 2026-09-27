@@ -8,11 +8,10 @@ import jax.numpy as jnp
 import lineax as lx
 from jaxtyping import Array, ArrayLike, Float
 
-from .collisions import RosenbluthPotentials
-from .field import Field
-from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from .linalg import InverseLinearOperator
-from .multigrid import (
+from ._collisions import RosenbluthPotentials
+from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
+from ._linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
+from ._multigrid import (
     MultigridOperator,
     get_dke_frozen_smoothers,
     get_dke_jacobi_smoothers,
@@ -25,9 +24,10 @@ from .multigrid import (
     get_prolongations,
     get_restrictions,
 )
-from .species import LocalMaxwellian, collisionality
-from .trajectories import DKE, MDKE
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from ._trajectories import DKE, MDKE
+from .field import Field
+from .species import LocalMaxwellian, _collisionality
+from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
 
 
 class MDKEPreconditioner(MultigridOperator):
@@ -197,11 +197,69 @@ class MDKEPreconditioner(MultigridOperator):
             )
 
 
-@lx.is_symmetric.register(MDKEPreconditioner)
-@lx.is_diagonal.register(MDKEPreconditioner)
-@lx.is_tridiagonal.register(MDKEPreconditioner)
-def _(operator):
-    return False
+def _dke_resolutions(field, pitchgrid, speedgrid, species, p1, p2, options):
+    """Resolutions of the multigrid levels of a DKEPreconditioner, coarse to fine.
+
+    Pops the options that set them from ``options``.
+    """
+    resolutions = options.pop("resolutions", None)
+    coarsening_factor = options.pop("coarsening_factor", None)
+    max_grids = options.pop("max_grids", None)
+    coarse_N = options.pop("coarse_N", 8000)
+    # The coarsest grid must still fit the FD stencils: every axis needs
+    # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
+    # hold the stencil should error (via the operator asserts), so we floor
+    # theta/a at min_n rather than capping at the given size. The exception
+    # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
+    # stencil, so min_nz collapses to 1 and zeta is never coarsened.
+    min_n = max(fd_coeffs[1][p1].size // 2, fd_coeffs[2][p2].size // 2) + 1
+    min_nt = options.pop("min_nt", min_n)
+    min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
+    min_na = options.pop("min_na", min_n)
+    if resolutions is None:
+        resolutions = get_grid_resolutions(
+            ns=len(species),
+            nx=speedgrid.nx,
+            na=pitchgrid.nalpha,
+            nt=field.ntheta,
+            nz=field.nzeta,
+            coarse_N=coarse_N,
+            min_na=min_na,
+            min_nt=min_nt,
+            min_nz=min_nz,
+            max_grids=max_grids,
+            coarsening_factor=coarsening_factor,
+        )
+    return resolutions
+
+
+def _print_grid_levels(resolutions) -> None:
+    """Print one ``Grid i: ...`` line per multigrid level, from (ns, nx, na, nt, nz)."""
+    for i, (ns, nx, na, nt, nz) in enumerate(resolutions):
+        jax.debug.print(
+            f"Grid {i}: nx={nx:4d}, "
+            f"nα={na:4d}, "
+            f"nθ={nt:4d}, "
+            f"nζ={nz:4d}, "
+            f"N={ns * nx * na * nt * nz:,d}",
+            ordered=True,
+        )
+
+
+def _print_dke_resolution_summary(
+    field, pitchgrid, speedgrid, species, multigrid_options
+) -> None:
+    """Print the multigrid levels a DKEPreconditioner would have, without building it.
+
+    The levels only depend on the grids and on the multigrid options that set the
+    coarsening, so they can be shown before, or without, building the preconditioner.
+    """
+    options = dict(multigrid_options)
+    p1 = options.pop("p1", DEFAULT_P1M)
+    p2 = options.pop("p2", DEFAULT_P2M)
+    _print_grid_levels(
+        _dke_resolutions(field, pitchgrid, speedgrid, species, p1, p2, options)
+    )
 
 
 class DKEPreconditioner(MultigridOperator):
@@ -225,7 +283,7 @@ class DKEPreconditioner(MultigridOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     background: list[LocalMaxwellian]
@@ -236,7 +294,7 @@ class DKEPreconditioner(MultigridOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         background: list[LocalMaxwellian] | None,
@@ -256,22 +314,9 @@ class DKEPreconditioner(MultigridOperator):
         self.p1 = options.pop("p1", DEFAULT_P1M)
         self.p2 = options.pop("p2", DEFAULT_P2M)
         gauge = options.pop("gauge", True)
-        resolutions = options.pop("resolutions", None)
-        coarsening_factor = options.pop("coarsening_factor", None)
-        max_grids = options.pop("max_grids", None)
-        coarse_N = options.pop("coarse_N", 8000)
-        # The coarsest grid must still fit the FD stencils: every axis needs
-        # n > stencil_width // 2 (periodic/symmetric BCs). A grid too coarse to
-        # hold the stencil should error (via the operator asserts), so we floor
-        # theta/a at min_n rather than capping at the given size. The exception
-        # is an axisymmetric (tokamak) field, nz=1: d/dzeta == 0, no zeta
-        # stencil, so min_nz collapses to 1 and zeta is never coarsened.
-        min_n = (
-            max(fd_coeffs[1][self.p1].size // 2, fd_coeffs[2][self.p2].size // 2) + 1
+        resolutions = _dke_resolutions(
+            field, pitchgrid, speedgrid, species, self.p1, self.p2, options
         )
-        min_nt = options.pop("min_nt", min_n)
-        min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
-        min_na = options.pop("min_na", min_n)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
@@ -285,23 +330,9 @@ class DKEPreconditioner(MultigridOperator):
         operator_weights = options.pop("operator_weights", jnp.ones(8).at[-1].set(0))
         smoother_weights = options.pop("smoother_weights", operator_weights)
         coulomb_log = options.pop("coulomb_log", None)
+        as_matrix_chunk = options.pop("as_matrix_chunk", 512)
 
         assert len(options) == 0, "DKEPreconditioner got unknown option " + str(options)
-
-        if resolutions is None:
-            resolutions = get_grid_resolutions(
-                ns=len(species),
-                nx=speedgrid.nx,
-                na=pitchgrid.nalpha,
-                nt=field.ntheta,
-                nz=field.nzeta,
-                coarse_N=coarse_N,
-                min_na=min_na,
-                min_nt=min_nt,
-                min_nz=min_nz,
-                max_grids=max_grids,
-                coarsening_factor=coarsening_factor,
-            )
 
         fields, grids = get_fields_grids(
             field=field, pitchgrid=pitchgrid, resolutions=resolutions
@@ -354,8 +385,19 @@ class DKEPreconditioner(MultigridOperator):
                 operator_weights=smoother_weights,
                 coulomb_log=coulomb_log,
             )
-
-        coarse_opinv = InverseLinearOperator(operators[0], lx.LU(), throw=False)
+        # The direct solve on the coarsest grid needs the operator as a dense matrix.
+        # Building it a chunk of columns at a time keeps peak memory near the size of
+        # the matrix itself, rather than that times the number of intermediates in a
+        # matrix vector product, at the cost of a little speed.
+        coarse_matrix = dense_from_mv(
+            operators[0].mv, operators[0].in_size(), as_matrix_chunk
+        )
+        # The coarse matrix is factored after row/column equilibration. With several
+        # species its entries span many orders of magnitude, and an unscaled LU has
+        # an error floor large enough to leave the nearly singular heavy-species
+        # modes with no correct digits, which stalls the outer Krylov solve at a
+        # residual that depends on floating point details of the hardware.
+        coarse_opinv = DenseLUInverseOperator(coarse_matrix, equilibrate=True)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,
@@ -390,31 +432,18 @@ class DKEPreconditioner(MultigridOperator):
         """Print one ``Grid i: ...`` line per multigrid level."""
         ns = len(self.species)
         nx = self.speedgrid.nx
-        for i, op in enumerate(self.operators):
-            # cast is a no-op at runtime; just narrows the declared
-            # AbstractLinearOperator type to DKE for pyright.
-            op = cast(DKE, op)
-            na = op.pitchgrid.nalpha
-            nt = op.field.ntheta
-            nz = op.field.nzeta
-            jax.debug.print(
-                f"Grid {i}: nx={nx:4d}, "
-                f"nα={na:4d}, "
-                f"nθ={nt:4d}, "
-                f"nζ={nz:4d}, "
-                f"N={ns * nx * na * nt * nz:,d}",
-                ordered=True,
-            )
+        # cast is a no-op at runtime; just narrows the declared
+        # AbstractLinearOperator type to DKE for pyright.
+        ops = [cast(DKE, op) for op in self.operators]
+        _print_grid_levels(
+            [
+                (ns, nx, op.pitchgrid.nalpha, op.field.ntheta, op.field.nzeta)
+                for op in ops
+            ]
+        )
 
 
-@lx.is_symmetric.register(DKEPreconditioner)
-@lx.is_diagonal.register(DKEPreconditioner)
-@lx.is_tridiagonal.register(DKEPreconditioner)
-def _(operator):
-    return False
-
-
-class DKEMPreconditioner(lx.AbstractLinearOperator):
+class DKEMPreconditioner(AbstractYanccOperator):
     """Preconditioner for the DKE using block diagonal MDKE preconditioners.
 
     Parameters
@@ -435,7 +464,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     background: list[LocalMaxwellian]
@@ -448,7 +477,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         background: list[LocalMaxwellian] | None = None,
@@ -475,7 +504,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
-                nu = collisionality(spec, v, *others)
+                nu = _collisionality(spec, v, *others)
                 erhohat = Erho / v
                 nuhat = nu / v
                 temp_erhohat.append(erhohat)
@@ -531,19 +560,6 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
     def transpose(self):
         """Transpose of the operator.
 
@@ -585,10 +601,3 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )
-
-
-@lx.is_symmetric.register(DKEMPreconditioner)
-@lx.is_diagonal.register(DKEMPreconditioner)
-@lx.is_tridiagonal.register(DKEMPreconditioner)
-def _(operator):
-    return False

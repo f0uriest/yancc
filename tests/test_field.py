@@ -1,6 +1,9 @@
 """Tests for magnetic field structure."""
 
+import jax
+import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from yancc.field import Field
 
@@ -29,7 +32,10 @@ def _compare_fields_local(field1, field2):
 
 def test_field_types():
     """Test solving the MDKE with the same field in different formats."""
-    import desc  # pyright: ignore[reportMissingImports]
+    # desc imports its submodules lazily, so import one that needs jax to check
+    # that the installed desc is compatible
+    pytest.importorskip("desc.equilibrium")
+    import desc.io  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
 
@@ -37,10 +43,17 @@ def test_field_types():
     nz = 37
     rho = 0.5
 
-    field1 = Field.from_desc(eq, rho, nt, nz)
-    field2 = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
-    field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", rho, nt, nz)
-    field4 = Field.from_ipp_bc("tests/data/NCSX.bc", rho, nt, nz)
+    # fields are built for several surfaces at once to check they work under jit
+    def make_fields(r):
+        return (
+            Field.from_desc(eq, r, nt, nz),
+            Field.from_vmec("tests/data/wout_NCSX.nc", r, nt, nz),
+            Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", r, nt, nz),
+            Field.from_ipp_bc("tests/data/NCSX.bc", r, nt, nz),
+        )
+
+    fields = jax.jit(jax.vmap(make_fields))(jnp.array([rho, 0.7]))
+    field1, field2, field3, field4 = jax.tree.map(lambda x: x[0], fields)
 
     np.testing.assert_allclose(
         field1.B_sub_t * field1.B_sup_t + field1.B_sub_z * field1.B_sup_z,
