@@ -81,8 +81,14 @@ CASES: list[Case] = [
     # --- high-collisionality geometry spread (diffusion dominated) ---
     Case("ncsx_nu1e1_er0", "NCSX", 1e1, 0.0, (61, 17, 33)),
     Case("hsx_nu1e1_er0", "HSX", 1e1, 0.0, (61, 17, 33)),
-    # --- axisymmetric (tokamak) control: nzeta = 1 ---
+    # --- axisymmetric (tokamak) control: nzeta = 1, so much cheaper than the
+    # stellarator cases at the same na/nt ---
+    Case("dshape_nu1e-4_er0", "DSHAPE", 1e-4, 0.0, (61, 17, 1)),
     Case("dshape_nu1e-2_er0", "DSHAPE", 1e-2, 0.0, (61, 17, 1)),
+    Case("dshape_nu1e0_er0", "DSHAPE", 1e0, 0.0, (61, 17, 1)),
+    Case("dshape_nu1e1_er0", "DSHAPE", 1e1, 0.0, (61, 17, 1)),
+    Case("dshape_nu1e-2_er1e-2", "DSHAPE", 1e-2, 1e-2, (61, 17, 1)),
+    Case("dshape_nu1e-2_er1e-1", "DSHAPE", 1e-2, 1e-1, (61, 17, 1)),
 ]
 
 

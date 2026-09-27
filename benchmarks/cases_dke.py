@@ -446,6 +446,49 @@ CASES += [
 ]
 
 
+# --- axisymmetric (tokamak) control. DSHAPE has no zeta dependence (nz=1), so these
+# are much cheaper than the stellarator cases at the same na/nt, and cover the same
+# axes (collisionality, species, Er, impurities) rather than duplicating them.
+CASES += [
+    Case("dshape_2sp_nu1e-3", "DSHAPE", 2, 1e-3, (6, 61, 15, 1), estar=3e-3),
+    Case("dshape_2sp_nu1e-1", "DSHAPE", 2, 1e-1, (6, 61, 15, 1), estar=3e-3),
+    Case("dshape_2sp_nu1e1", "DSHAPE", 2, 1e1, (6, 61, 15, 1), estar=3e-3),
+    Case("dshape_2sp_nu1e-4", "DSHAPE", 2, 1e-4, (6, 41, 15, 1), estar=3e-3),
+    Case("dshape_1sp_nu1e-1", "DSHAPE", 1, 1e-1, (6, 25, 15, 1), estar=3e-3),
+    Case(
+        "dshape_2sp_tratio3", "DSHAPE", 2, 1e-1, (6, 41, 15, 1), estar=3e-3, tratio=3.0
+    ),
+    Case(
+        "dshape_nx7_nu5e-3_ebg",
+        "DSHAPE",
+        2,
+        5e-3,
+        (7, 61, 15, 1),
+        estar=3e-3,
+        nkinetic=1,
+    ),
+    Case("dshape_2sp_er1e-1", "DSHAPE", 2, 1e-2, (6, 41, 15, 1), estar=1e-1),
+    _impurity_case(
+        "imp_dshape_c6_kin", "DSHAPE", (12.0, 6.0), 1 / 6, (6, 61, 15, 1), 3e-3, "kin"
+    ),
+    _impurity_case(
+        "imp_dshape_c6_bg", "DSHAPE", (12.0, 6.0), 1 / 6, (6, 61, 15, 1), 3e-3, "bg"
+    ),
+    _impurity_case(
+        "imp_dshape_c6_dilute_kin",
+        "DSHAPE",
+        (12.0, 6.0),
+        0.01,
+        (6, 61, 15, 1),
+        3e-3,
+        "kin",
+    ),
+    _impurity_case(
+        "imp_dshape_w_kin", "DSHAPE", (184.0, 40.0), 1 / 40, (6, 61, 15, 1), 3e-3, "kin"
+    ),
+]
+
+
 def cases_for_tier(tier: str) -> list[Case]:
     """``smoke`` -> smoke only; ``nightly``/``all`` -> everything."""
     if tier == "smoke":
