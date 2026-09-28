@@ -7,23 +7,23 @@ import pytest
 from scipy.constants import elementary_charge, epsilon_0, proton_mass
 
 from yancc.species import (
-    JOULE_PER_EV,
+    _JOULE_PER_EV,
     Deuterium,
     Electron,
-    Estar,
     GlobalMaxwellian,
     Hydrogen,
     LocalMaxwellian,
     Species,
-    chandrasekhar,
-    collisionality,
-    coulomb_logarithm,
-    debye_length,
-    gamma_ab,
-    nuD_ab,
-    nupar_ab,
-    poloidal_mach,
-    rhostar,
+    _chandrasekhar,
+    _collisionality,
+    _coulomb_logarithm,
+    _debye_length,
+    _Estar,
+    _gamma_ab,
+    _nuD_ab,
+    _nupar_ab,
+    _poloidal_mach,
+    _rhostar,
 )
 
 
@@ -64,7 +64,7 @@ def test_species_mass_ratio():
 
 def test_local_maxwellian_v_thermal(hydrogen_maxwellian):
     lm = hydrogen_maxwellian
-    expected = float(jnp.sqrt(2 * lm.temperature * JOULE_PER_EV / lm.species.mass))
+    expected = float(jnp.sqrt(2 * lm.temperature * _JOULE_PER_EV / lm.species.mass))
     np.testing.assert_allclose(float(lm.v_thermal), expected, rtol=1e-10)
 
 
@@ -133,7 +133,7 @@ def test_global_maxwellian_v_thermal():
         temperature=lambda r: T0 * jnp.ones_like(r),
         density=lambda r: n0 * jnp.ones_like(r),
     )
-    expected = float(jnp.sqrt(2 * T0 * JOULE_PER_EV / Hydrogen.mass))
+    expected = float(jnp.sqrt(2 * T0 * _JOULE_PER_EV / Hydrogen.mass))
     np.testing.assert_allclose(float(gm.v_thermal(0.5)), expected, rtol=1e-12)
     # the global v_thermal at r should equal the localized Maxwellian's v_thermal
     np.testing.assert_allclose(
@@ -160,16 +160,16 @@ def test_global_maxwellian_call_peaks_at_zero():
 
 def test_rhostar_scales_linearly_with_x(hydrogen_maxwellian, field):
     lm = hydrogen_maxwellian
-    r1 = float(rhostar(lm, field, 1.0))
-    r2 = float(rhostar(lm, field, 2.0))
+    r1 = float(_rhostar(lm, field, 1.0))
+    r2 = float(_rhostar(lm, field, 2.0))
     assert r1 > 0
     np.testing.assert_allclose(r2 / r1, 2.0, rtol=1e-10)
 
 
 def test_poloidal_mach_scales_inversely_with_x(hydrogen_maxwellian, field):
     # E×B rotation is speed-independent while the transit rate ~ x, so M_p ~ 1/x.
-    m1 = float(poloidal_mach(hydrogen_maxwellian, field, 3e3, 1.0))
-    m2 = float(poloidal_mach(hydrogen_maxwellian, field, 3e3, 2.0))
+    m1 = float(_poloidal_mach(hydrogen_maxwellian, field, 3e3, 1.0))
+    m2 = float(_poloidal_mach(hydrogen_maxwellian, field, 3e3, 2.0))
     np.testing.assert_allclose(m2 / m1, 0.5, rtol=1e-10)
 
 
@@ -177,16 +177,16 @@ def test_poloidal_mach_matches_definition(hydrogen_maxwellian, field):
     # M_p = E* / (a_minor <B^theta/|B|>), the ratio of E×B to streaming poloidal
     # rotation frequencies.
     bdgt = float(field.flux_surface_average(field.B_sup_t / field.Bmag))
-    expected = float(Estar(hydrogen_maxwellian, field, 3e3, 1.0)) / (
+    expected = float(_Estar(hydrogen_maxwellian, field, 3e3, 1.0)) / (
         float(field.a_minor) * abs(bdgt)
     )
-    got = float(poloidal_mach(hydrogen_maxwellian, field, 3e3, 1.0))
+    got = float(_poloidal_mach(hydrogen_maxwellian, field, 3e3, 1.0))
     np.testing.assert_allclose(got, expected, rtol=1e-10)
 
 
 def test_chandrasekhar_positive():
     xs = jnp.array([0.1, 0.5, 1.0, 2.0, 5.0])
-    vals = chandrasekhar(xs)
+    vals = _chandrasekhar(xs)
     assert jnp.all(vals > 0)
 
 
@@ -194,14 +194,14 @@ def test_chandrasekhar_large_x():
     """For large x, chandrasekhar(x) ~= 1 / (2 x^2)."""
     x = jnp.array(10.0)
     np.testing.assert_allclose(
-        float(chandrasekhar(x)), float(1 / (2 * x**2)), rtol=1e-4
+        float(_chandrasekhar(x)), float(1 / (2 * x**2)), rtol=1e-4
     )
 
 
 def test_chandrasekhar_monotone_decrease():
     """Chandrasekhar should decrease for large x (beyond peak)."""
     xs = jnp.array([1.0, 2.0, 5.0, 10.0])
-    vals = chandrasekhar(xs)
+    vals = _chandrasekhar(xs)
     assert jnp.all(jnp.diff(vals) < 0)
 
 
@@ -212,12 +212,12 @@ def test_debye_length_single_species(hydrogen_maxwellian):
         jnp.sqrt(
             epsilon_0
             * lm.temperature
-            * JOULE_PER_EV
+            * _JOULE_PER_EV
             / lm.density
             / lm.species.charge**2
         )
     )
-    result = float(debye_length(lm))
+    result = float(_debye_length(lm))
     np.testing.assert_allclose(result, expected, rtol=1e-10)
 
 
@@ -225,8 +225,8 @@ def test_debye_length_two_species_smaller(hydrogen_maxwellian, electron_maxwelli
     """Adding a second species reduces the Debye length."""
     lm_i = hydrogen_maxwellian
     lm_e = electron_maxwellian
-    ld_single = float(debye_length(lm_i))
-    ld_both = float(debye_length(lm_i, lm_e))
+    ld_single = float(_debye_length(lm_i))
+    ld_both = float(_debye_length(lm_i, lm_e))
     assert ld_both < ld_single
 
 
@@ -235,10 +235,10 @@ def test_nuD_nupar_identity(hydrogen_maxwellian, electron_maxwellian):
     lm_a = hydrogen_maxwellian
     lm_b = electron_maxwellian
     v = lm_a.v_thermal * 1.5
-    gab = gamma_ab(lm_a, lm_b)
+    gab = _gamma_ab(lm_a, lm_b)
     x = v / lm_b.v_thermal
     expected = float(gab * lm_b.density / v**3 * jax.scipy.special.erf(x))
-    result = float(nuD_ab(lm_a, lm_b, v) + nupar_ab(lm_a, lm_b, v) / 2)
+    result = float(_nuD_ab(lm_a, lm_b, v) + _nupar_ab(lm_a, lm_b, v) / 2)
     np.testing.assert_allclose(result, expected, rtol=1e-10)
 
 
@@ -246,8 +246,8 @@ def test_collisionality_includes_self(hydrogen_maxwellian):
     """Collisionality with no extra species should still include self-collision."""
     lm = hydrogen_maxwellian
     v = lm.v_thermal
-    nu = float(collisionality(lm, v))
-    nu_self = float(nuD_ab(lm, lm, v))
+    nu = float(_collisionality(lm, v))
+    nu_self = float(_nuD_ab(lm, lm, v))
     np.testing.assert_allclose(nu, nu_self, rtol=1e-10)
 
 
@@ -258,8 +258,8 @@ def test_collisionality_increases_with_background(
     lm_i = hydrogen_maxwellian
     lm_e = electron_maxwellian
     v = lm_i.v_thermal
-    nu_self = float(collisionality(lm_i, v))
-    nu_both = float(collisionality(lm_i, v, lm_e))
+    nu_self = float(_collisionality(lm_i, v))
+    nu_both = float(_collisionality(lm_i, v, lm_e))
     assert nu_both > nu_self
 
 
@@ -311,7 +311,7 @@ def test_coulomb_logarithm_ee_cold_nrl():
     """e-e ln Λ at T_e=5 eV matches NRL classical-regime formula."""
     T_eV, n = 5.0, 1e19
     lm = LocalMaxwellian(Electron, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
-    result = float(coulomb_logarithm(lm, lm))
+    result = float(_coulomb_logarithm(lm, lm))
     expected = _nrl_lnlambda_ee_cold(n, T_eV)
     np.testing.assert_allclose(result, expected, rtol=3e-2)
 
@@ -320,7 +320,7 @@ def test_coulomb_logarithm_ee_hot_nrl():
     """e-e ln Λ at T_e=100 eV matches NRL quantum-regime formula."""
     T_eV, n = 100.0, 1e19
     lm = LocalMaxwellian(Electron, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
-    result = float(coulomb_logarithm(lm, lm))
+    result = float(_coulomb_logarithm(lm, lm))
     expected = _nrl_lnlambda_ee_hot(n, T_eV)
     np.testing.assert_allclose(result, expected, rtol=3e-2)
 
@@ -334,7 +334,7 @@ def test_coulomb_logarithm_ei_nrl():
     lm_i = LocalMaxwellian(
         Hydrogen, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0
     )
-    result = float(coulomb_logarithm(lm_e, lm_i))
+    result = float(_coulomb_logarithm(lm_e, lm_i))
     expected = _nrl_lnlambda_ei_hot_electron(n, T_eV)
     np.testing.assert_allclose(result, expected, rtol=5e-2)
 
@@ -343,7 +343,7 @@ def test_coulomb_logarithm_ii_nrl():
     """H-H ln Λ at T=1 keV matches NRL ion-ion formula."""
     T_eV, n = 1000.0, 1e19
     lm = LocalMaxwellian(Hydrogen, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
-    result = float(coulomb_logarithm(lm, lm))
+    result = float(_coulomb_logarithm(lm, lm))
     # mu = 1 amu for protons; Za = Zb = 1
     expected = _nrl_lnlambda_ii(n, T_eV, T_eV, Za=1, Zb=1, mu_a=1.0, mu_b=1.0)
     np.testing.assert_allclose(result, expected, rtol=1e-2)
@@ -446,9 +446,9 @@ def test_perpendicular_collisionality_ee_nrl(speed):
     T_eV, n = 1000.0, 1e19
     lm = LocalMaxwellian(Electron, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
     v = fac * lm.v_thermal
-    energy_eV = (lm.species.mass / 2 * v**2) / JOULE_PER_EV
-    result = float(nuD_ab(lm, lm, v))
-    lnl = float(coulomb_logarithm(lm, lm))
+    energy_eV = (lm.species.mass / 2 * v**2) / _JOULE_PER_EV
+    result = float(_nuD_ab(lm, lm, v))
+    lnl = float(_coulomb_logarithm(lm, lm))
     np.testing.assert_allclose(result, fun1(n, T_eV, lnl, energy_eV), rtol=1e-2)
 
 
@@ -465,9 +465,9 @@ def test_parallel_collisionality_ee_nrl(speed):
     T_eV, n = 1000.0, 1e19
     lm = LocalMaxwellian(Electron, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
     v = fac * lm.v_thermal
-    energy_eV = (lm.species.mass / 2 * v**2) / JOULE_PER_EV
-    result = float(nupar_ab(lm, lm, v))
-    lnl = float(coulomb_logarithm(lm, lm))
+    energy_eV = (lm.species.mass / 2 * v**2) / _JOULE_PER_EV
+    result = float(_nupar_ab(lm, lm, v))
+    lnl = float(_coulomb_logarithm(lm, lm))
     np.testing.assert_allclose(result, fun1(n, T_eV, lnl, energy_eV), rtol=1e-2)
 
 
@@ -484,10 +484,10 @@ def test_perpendicular_collisionality_ii_nrl(speed):
     T_eV, n = 1000.0, 1e19
     lm = LocalMaxwellian(Hydrogen, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
     v = fac * lm.v_thermal
-    energy_eV = (lm.species.mass / 2 * v**2) / JOULE_PER_EV
-    result = float(nuD_ab(lm, lm, v))
+    energy_eV = (lm.species.mass / 2 * v**2) / _JOULE_PER_EV
+    result = float(_nuD_ab(lm, lm, v))
     mu1 = mu2 = Z1 = Z2 = 1  # mu = 1 amu for protons; Z1 = Z2 = 1
-    lnl = float(coulomb_logarithm(lm, lm))
+    lnl = float(_coulomb_logarithm(lm, lm))
     np.testing.assert_allclose(
         result, fun1(n, T_eV, lnl, energy_eV, mu1, mu2, Z1, Z2), rtol=5e-2
     )
@@ -506,10 +506,10 @@ def test_parallel_collisionality_ii_nrl(speed):
     T_eV, n = 1000.0, 1e19
     lm = LocalMaxwellian(Hydrogen, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0)
     v = fac * lm.v_thermal
-    energy_eV = (lm.species.mass / 2 * v**2) / JOULE_PER_EV
-    result = float(nupar_ab(lm, lm, v))
+    energy_eV = (lm.species.mass / 2 * v**2) / _JOULE_PER_EV
+    result = float(_nupar_ab(lm, lm, v))
     mu1 = mu2 = Z1 = Z2 = 1  # mu = 1 amu for protons; Z1 = Z2 = 1
-    lnl = float(coulomb_logarithm(lm, lm))
+    lnl = float(_coulomb_logarithm(lm, lm))
     np.testing.assert_allclose(
         result, fun1(n, T_eV, lnl, energy_eV, mu1, mu2, Z1, Z2), rtol=5e-2
     )
@@ -526,8 +526,8 @@ def test_collisionality_density_scaling():
     )
     v = float(lm1.v_thermal)
     # nuD_ab ~ lnΛ * n_b; dividing out lnΛ leaves pure n-scaling
-    nu1 = float(collisionality(lm1, v)) / float(coulomb_logarithm(lm1, lm1))
-    nu2 = float(collisionality(lm2, v)) / float(coulomb_logarithm(lm2, lm2))
+    nu1 = float(_collisionality(lm1, v)) / float(_coulomb_logarithm(lm1, lm1))
+    nu2 = float(_collisionality(lm2, v)) / float(_coulomb_logarithm(lm2, lm2))
     np.testing.assert_allclose(nu2 / nu1, 2.0, rtol=1e-5)
 
 
@@ -540,10 +540,10 @@ def test_collisionality_electron_ion_mass_ratio():
     lm_i = LocalMaxwellian(
         Hydrogen, temperature=T_eV, density=n, dTdrho=0.0, dndrho=0.0
     )
-    nu_e = float(collisionality(lm_e, float(lm_e.v_thermal)))
-    nu_i = float(collisionality(lm_i, float(lm_i.v_thermal)))
-    lnl_e = float(coulomb_logarithm(lm_e, lm_e))
-    lnl_i = float(coulomb_logarithm(lm_i, lm_i))
+    nu_e = float(_collisionality(lm_e, float(lm_e.v_thermal)))
+    nu_i = float(_collisionality(lm_i, float(lm_i.v_thermal)))
+    lnl_e = float(_coulomb_logarithm(lm_e, lm_e))
+    lnl_i = float(_coulomb_logarithm(lm_i, lm_i))
     # nuD(v_th) ~ Z^4 * lnΛ / m^{1/2} * T^{-3/2}; both Z=1 here
     expected_ratio = (lnl_e / lnl_i) * np.sqrt(
         float(Hydrogen.mass) / float(Electron.mass)

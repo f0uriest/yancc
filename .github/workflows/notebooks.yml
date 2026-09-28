@@ -1,0 +1,49 @@
+name: Notebooks
+
+# Runs the example notebooks in the docs, to make sure they still execute. The docs
+# themselves render the outputs stored in the notebooks rather than running them, and
+# the unit tests skip changes to docs/, so this is the only place they get run.
+
+on:
+  push:
+    branches:
+      - master
+      - dev
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'docs/**/*.ipynb'
+      - 'yancc/**'
+      - 'tests/data/**'
+      - 'pyproject.toml'
+      - '.github/workflows/notebooks.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  notebooks:
+    runs-on: ubuntu-latest
+    name: Run example notebooks
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip list
+      - name: Run notebooks
+        run: |
+          lscpu
+          python -m pytest -v -s \
+            --nbmake \
+            --nbmake-timeout=1800 \
+            docs/*.ipynb

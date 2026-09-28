@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from yancc.finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
+from yancc._finite_diff import fd2, fd_coeffs, fdbwd, fdfwd
 
 
 @pytest.mark.parametrize("p", fd_coeffs[2].keys())

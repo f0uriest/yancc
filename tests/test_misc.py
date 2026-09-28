@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from yancc.misc import dke_rhs
+from yancc._misc import dke_rhs
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 

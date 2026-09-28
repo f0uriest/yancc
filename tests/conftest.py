@@ -7,7 +7,7 @@ import warnings
 _original_warn = warnings.warn
 
 
-def smart_warn(message, category=None, stacklevel=1, source=None):
+def smart_warn(message, category=None, stacklevel=1, source=None, **kwargs):
     # ignore deprecation warnings from 3rd party libraries, if we aren't calling them
     # directly.
     # ie, if we call foo, which calls bar, and bar emits a deprecation warning, we
@@ -49,7 +49,8 @@ def smart_warn(message, category=None, stacklevel=1, source=None):
                     return
 
     # otherwise, fall back to original behavior (which pytest turns into an error)
-    return _original_warn(message, category, stacklevel, source)
+    # kwargs holds keyword-only arguments of newer pythons, eg skip_file_prefixes
+    return _original_warn(message, category, stacklevel, source, **kwargs)
 
 
 # Need to do this here before any other imports in order to catch import time
@@ -60,12 +61,11 @@ warnings.warn = smart_warn
 # now the rest of the imports and conftest stuff
 
 
-import desc  # noqa: E402, I001
 import numpy as np  # noqa: E402, I001
 import pytest  # noqa: E402, I001
 import sympy  # noqa: E402, I001
 
-from yancc.collisions import RosenbluthPotentials  # noqa: E402, I001
+from yancc._collisions import RosenbluthPotentials  # noqa: E402, I001
 from yancc.field import Field  # noqa: E402, I001
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen  # noqa: E402, I001
 from yancc.velocity_grids import (  # noqa: E402, I001
@@ -77,8 +77,28 @@ from yancc.velocity_grids import (  # noqa: E402, I001
 @pytest.fixture(scope="session")
 def field():
     """Field for testing."""
-    eq = desc.examples.get("W7-X")
-    field = Field.from_desc(eq, 0.5, 5, 7)
+    # dominant Boozer harmonics of W7-X high-mirror at rho=0.5 (mirror, helical and
+    # toroidal), in booz_xform convention cos(m*theta - n*zeta)
+    nt, nz, NFP = 5, 7, 5
+    theta = np.linspace(0, 2 * np.pi, nt, endpoint=False)[:, None]
+    zeta = np.linspace(0, 2 * np.pi / NFP, nz, endpoint=False)[None, :]
+    Bmag = (
+        2.50302
+        + 0.25660 * np.cos(NFP * zeta)
+        - 0.11118 * np.cos(theta - NFP * zeta)
+        - 0.05205 * np.cos(theta)
+    )
+    field = Field.from_boozer(
+        rho=0.5,
+        Bmag=Bmag,
+        I=0.0,
+        G=14.4,
+        iota=-0.88356,
+        Psi=-2.0004,
+        R_major=5.4832,
+        a_minor=0.5211,
+        NFP=NFP,
+    )
     return field
 
 

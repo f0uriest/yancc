@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.root import deflated_root_scalar
+from yancc._root import deflated_root_scalar
 
 _DATA = pathlib.Path(__file__).parent / "data"
 # solved flux scans to interpolate, as (file, column of the field, columns of the

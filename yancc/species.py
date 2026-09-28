@@ -15,8 +15,8 @@ from .field import Field
 config.update("jax_enable_x64", True)
 
 
-JOULE_PER_EV = jnp.array(elementary_charge)
-EV_PER_JOULE = jnp.array(1 / JOULE_PER_EV)
+_JOULE_PER_EV = jnp.array(elementary_charge)
+_EV_PER_JOULE = jnp.array(1 / _JOULE_PER_EV)
 
 
 class Species(eqx.Module):
@@ -99,7 +99,7 @@ class LocalMaxwellian(eqx.Module):
         self.temperature = jnp.asarray(temperature)
         self.density = jnp.asarray(density)
         self.v_thermal = jnp.sqrt(
-            2 * self.temperature * JOULE_PER_EV / self.species.mass
+            2 * self.temperature * _JOULE_PER_EV / self.species.mass
         )
         self.dndrho = jnp.asarray(dndrho)
         self.dTdrho = jnp.asarray(dTdrho)
@@ -180,7 +180,7 @@ class GlobalMaxwellian(eqx.Module):
     def v_thermal(self, r: ArrayLike) -> jax.Array:
         """float: Thermal speed, in m/s at a given radius ρ."""
         r = jnp.asarray(r)
-        T = self.temperature(r) * JOULE_PER_EV
+        T = self.temperature(r) * _JOULE_PER_EV
         v_thermal = jnp.sqrt(2 * T / self.species.mass)
         return v_thermal
 
@@ -201,11 +201,11 @@ class GlobalMaxwellian(eqx.Module):
         )
 
 
-def collisionality(
+def _collisionality(
     maxwellian_a: LocalMaxwellian,
     v: ArrayLike,
     *others: LocalMaxwellian,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Collisionality between species a and others.
 
@@ -228,15 +228,15 @@ def collisionality(
     v = jnp.asarray(v)
     nu = jnp.array(0.0)
     for ma in others + (maxwellian_a,):
-        nu += nuD_ab(maxwellian_a, ma, v, lnlambda)
+        nu += _nuD_ab(maxwellian_a, ma, v, lnlambda)
     return nu
 
 
-def nuD_ab(
+def _nuD_ab(
     maxwellian_a: LocalMaxwellian,
     maxwellian_b: LocalMaxwellian,
     v: ArrayLike,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Pairwise collision freq. for species a colliding with species b at velocity v.
 
@@ -258,29 +258,29 @@ def nuD_ab(
     v = jnp.asarray(v)
     nb = maxwellian_b.density
     vtb = maxwellian_b.v_thermal
-    prefactor = gamma_ab(maxwellian_a, maxwellian_b, lnlambda) * nb / v**3
-    erf_part = jax.scipy.special.erf(v / vtb) - chandrasekhar(v / vtb)
+    prefactor = _gamma_ab(maxwellian_a, maxwellian_b, lnlambda) * nb / v**3
+    erf_part = jax.scipy.special.erf(v / vtb) - _chandrasekhar(v / vtb)
     return prefactor * erf_part
 
 
-def gamma_ab(
+def _gamma_ab(
     maxwellian_a: LocalMaxwellian,
     maxwellian_b: LocalMaxwellian,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Prefactor for pairwise collisionality."""
     if lnlambda is None:
-        lnlambda = coulomb_logarithm(maxwellian_a, maxwellian_b)
+        lnlambda = _coulomb_logarithm(maxwellian_a, maxwellian_b)
     ea, eb = maxwellian_a.species.charge, maxwellian_b.species.charge
     ma = maxwellian_a.species.mass
     return ea**2 * eb**2 * lnlambda / (4 * jnp.pi * epsilon_0**2 * ma**2)
 
 
-def nupar_ab(
+def _nupar_ab(
     maxwellian_a: LocalMaxwellian,
     maxwellian_b: LocalMaxwellian,
     v: ArrayLike,
-    lnlambda=None,
+    lnlambda: ArrayLike | None = None,
 ) -> jax.Array:
     """Parallel collisionality."""
     v = jnp.asarray(v)
@@ -288,14 +288,14 @@ def nupar_ab(
     vtb = maxwellian_b.v_thermal
     return (
         2
-        * gamma_ab(maxwellian_a, maxwellian_b, lnlambda)
+        * _gamma_ab(maxwellian_a, maxwellian_b, lnlambda)
         * nb
         / v**3
-        * chandrasekhar(v / vtb)
+        * _chandrasekhar(v / vtb)
     )
 
 
-def coulomb_logarithm(
+def _coulomb_logarithm(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
 ) -> jax.Array:
     """Coulomb logarithm for collisions between species a and b.
@@ -312,23 +312,23 @@ def coulomb_logarithm(
     log(lambda) : float
 
     """
-    bmin, bmax = impact_parameter(maxwellian_a, maxwellian_b)
+    bmin, bmax = _impact_parameter(maxwellian_a, maxwellian_b)
     return jnp.log(bmax / bmin)
 
 
-def impact_parameter(
+def _impact_parameter(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
 ) -> tuple[jax.Array, jax.Array]:
     """Impact parameters for classical Coulomb collision."""
     bmin = jnp.maximum(
-        impact_parameter_perp(maxwellian_a, maxwellian_b),
-        debroglie_length(maxwellian_a, maxwellian_b),
+        _impact_parameter_perp(maxwellian_a, maxwellian_b),
+        _debroglie_length(maxwellian_a, maxwellian_b),
     )
-    bmax = debye_length(maxwellian_a, maxwellian_b)
+    bmax = _debye_length(maxwellian_a, maxwellian_b)
     return bmin, bmax
 
 
-def impact_parameter_perp(
+def _impact_parameter_perp(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
 ) -> jax.Array:
     """Distance of the closest approach for a 90° Coulomb collision."""
@@ -345,7 +345,7 @@ def impact_parameter_perp(
     )
 
 
-def debroglie_length(
+def _debroglie_length(
     maxwellian_a: LocalMaxwellian, maxwellian_b: LocalMaxwellian
 ) -> jax.Array:
     """Thermal DeBroglie wavelength."""
@@ -358,15 +358,15 @@ def debroglie_length(
     return hbar / (2 * m_reduced * v_th)
 
 
-def debye_length(*maxwellians: LocalMaxwellian) -> jax.Array:
+def _debye_length(*maxwellians: LocalMaxwellian) -> jax.Array:
     """Scale length for charge screening."""
     den = 0
     for m in maxwellians:
-        den += m.density / (m.temperature * JOULE_PER_EV) * m.species.charge**2
+        den += m.density / (m.temperature * _JOULE_PER_EV) * m.species.charge**2
     return jnp.sqrt(epsilon_0 / den)
 
 
-def chandrasekhar(x: ArrayLike) -> jax.Array:
+def _chandrasekhar(x: ArrayLike) -> jax.Array:
     """Chandrasekhar function."""
     x = jnp.asarray(x)
     return (jax.scipy.special.erf(x) - 2 * x / jnp.sqrt(jnp.pi) * jnp.exp(-(x**2))) / (
@@ -374,7 +374,7 @@ def chandrasekhar(x: ArrayLike) -> jax.Array:
     )
 
 
-def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
+def _rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0) -> jax.Array:
     """Normalized gyroradius ρ* = ρ/a.
 
     Parameters
@@ -393,7 +393,9 @@ def rhostar(species: LocalMaxwellian, field: Field, x: ArrayLike = 1.0):
     return rhostar
 
 
-def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0):
+def _Estar(
+    species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0
+) -> jax.Array:
     """Normalized electric field E* = E_r /(v <B>).
 
     Parameters
@@ -413,9 +415,9 @@ def Estar(species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike 
     return Er / v / field.Bmag_fsa
 
 
-def poloidal_mach(
+def _poloidal_mach(
     species: LocalMaxwellian, field: Field, Erho: ArrayLike, x: ArrayLike = 1.0
-):
+) -> jax.Array:
     """Poloidal Mach number M_p = ω_E /ω_transit.
 
     Ratio of the E×B poloidal rotation frequency to the parallel-streaming
@@ -446,16 +448,16 @@ def poloidal_mach(
     """
     # <b·∇θ> = <B^θ /|B|>, the exact flux-surface-averaged poloidal transit rate
     bdotgradtheta = field.flux_surface_average(field.B_sup_t / field.Bmag)
-    return Estar(species, field, Erho, x) / (field.a_minor * jnp.abs(bdotgradtheta))
+    return _Estar(species, field, Erho, x) / (field.a_minor * jnp.abs(bdotgradtheta))
 
 
-def nustar(
+def _nustar(
     species: LocalMaxwellian,
     field: Field,
     x: ArrayLike = 1.0,
     *others: LocalMaxwellian,
-    lnlambda=None,
-):
+    lnlambda: ArrayLike | None = None,
+) -> jax.Array:
     """Normalized collisionality ν* = ν R₀ /(v ι).
 
     Parameters
@@ -471,7 +473,7 @@ def nustar(
     """
     x = jnp.asarray(x)
     v = x * species.v_thermal
-    nu = collisionality(species, v, *others, lnlambda=lnlambda)
+    nu = _collisionality(species, v, *others, lnlambda=lnlambda)
     return _normalize_collisionality(nu, v, field)
 
 
@@ -497,7 +499,7 @@ def _nustar_species(species, field, x, background=(), lnlambda=None):
     x = jnp.asarray(x)
 
     def nu_ab(spa, spb):
-        return nuD_ab(spa, spb, x * spa.v_thermal, lnlambda)
+        return _nuD_ab(spa, spb, x * spa.v_thermal, lnlambda)
 
     nu = _species_pairs(nu_ab, list(species), list(species) + list(background))
     vth = jnp.stack([sp.v_thermal for sp in species])

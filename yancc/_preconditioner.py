@@ -8,13 +8,11 @@ import jax.numpy as jnp
 import lineax as lx
 from jaxtyping import Array, ArrayLike, Float
 
-from .collisions import RosenbluthPotentials
-from .field import Field
-from .finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from .linalg import InverseLinearOperator, dense_from_mv
-from .multigrid import (
+from ._collisions import RosenbluthPotentials
+from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
+from ._linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
+from ._multigrid import (
     MultigridOperator,
-    get_dke_jacobi2_smoothers,
     get_dke_jacobi_smoothers,
     get_dke_operators,
     get_fields_grids,
@@ -24,9 +22,10 @@ from .multigrid import (
     get_prolongations,
     get_restrictions,
 )
-from .species import LocalMaxwellian, collisionality
-from .trajectories import DKE, MDKE
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from ._trajectories import DKE, MDKE
+from .field import Field
+from .species import LocalMaxwellian, _collisionality
+from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
 
 
 class MDKEPreconditioner(MultigridOperator):
@@ -182,13 +181,6 @@ class MDKEPreconditioner(MultigridOperator):
             )
 
 
-@lx.is_symmetric.register(MDKEPreconditioner)
-@lx.is_diagonal.register(MDKEPreconditioner)
-@lx.is_tridiagonal.register(MDKEPreconditioner)
-def _(operator):
-    return False
-
-
 def _dke_resolutions(field, pitchgrid, speedgrid, species, p1, p2, options):
     """Resolutions of the multigrid levels of a DKEPreconditioner, coarse to fine.
 
@@ -275,7 +267,7 @@ class DKEPreconditioner(MultigridOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     background: list[LocalMaxwellian]
@@ -286,7 +278,7 @@ class DKEPreconditioner(MultigridOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         background: list[LocalMaxwellian] | None,
@@ -312,7 +304,6 @@ class DKEPreconditioner(MultigridOperator):
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
-        smooth_type = options.pop("smooth_type", 1)
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -343,41 +334,22 @@ class DKEPreconditioner(MultigridOperator):
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
         )
-        if smooth_type == 1:
-            smoothers = get_dke_jacobi_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                coulomb_log=coulomb_log,
-            )
-        else:
-            smoothers = get_dke_jacobi2_smoothers(
-                fields=fields,
-                pitchgrids=grids,
-                speedgrid=speedgrid,
-                species=species,
-                Erho=Erho,
-                background=background,
-                potentials=potentials,
-                p1=self.p1,
-                p2=self.p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=smooth_weights,
-                operator_weights=smoother_weights,
-                coulomb_log=coulomb_log,
-                **options,
-            )
+        smoothers = get_dke_jacobi_smoothers(
+            fields=fields,
+            pitchgrids=grids,
+            speedgrid=speedgrid,
+            species=species,
+            Erho=Erho,
+            background=background,
+            potentials=potentials,
+            p1=self.p1,
+            p2=self.p2,
+            gauge=gauge,
+            smooth_solver=smooth_solver,
+            weight=smooth_weights,
+            operator_weights=smoother_weights,
+            coulomb_log=coulomb_log,
+        )
         # The direct solve on the coarsest grid needs the operator as a dense matrix.
         # Building it a chunk of columns at a time keeps peak memory near the size of
         # the matrix itself, rather than that times the number of intermediates in a
@@ -385,9 +357,12 @@ class DKEPreconditioner(MultigridOperator):
         coarse_matrix = dense_from_mv(
             operators[0].mv, operators[0].in_size(), as_matrix_chunk
         )
-        coarse_opinv = InverseLinearOperator(
-            lx.MatrixLinearOperator(coarse_matrix), lx.LU(), throw=False
-        )
+        # The coarse matrix is factored after row/column equilibration. With several
+        # species its entries span many orders of magnitude, and an unscaled LU has
+        # an error floor large enough to leave the nearly singular heavy-species
+        # modes with no correct digits, which stalls the outer Krylov solve at a
+        # residual that depends on floating point details of the hardware.
+        coarse_opinv = DenseLUInverseOperator(coarse_matrix, equilibrate=True)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,
@@ -433,14 +408,7 @@ class DKEPreconditioner(MultigridOperator):
         )
 
 
-@lx.is_symmetric.register(DKEPreconditioner)
-@lx.is_diagonal.register(DKEPreconditioner)
-@lx.is_tridiagonal.register(DKEPreconditioner)
-def _(operator):
-    return False
-
-
-class DKEMPreconditioner(lx.AbstractLinearOperator):
+class DKEMPreconditioner(AbstractYanccOperator):
     """Preconditioner for the DKE using block diagonal MDKE preconditioners.
 
     Parameters
@@ -461,7 +429,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
 
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
     background: list[LocalMaxwellian]
@@ -474,7 +442,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
         self,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         background: list[LocalMaxwellian] | None = None,
@@ -501,7 +469,7 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             others = species[:i] + species[i + 1 :] + background
             for x in speedgrid.x:
                 v = x * spec.v_thermal
-                nu = collisionality(spec, v, *others)
+                nu = _collisionality(spec, v, *others)
                 erhohat = Erho / v
                 nuhat = nu / v
                 temp_erhohat.append(erhohat)
@@ -557,19 +525,6 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
             dtype=self.field.Bmag.dtype,
         )
 
-    def out_structure(self):
-        """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (
-                self.field.ntheta
-                * self.field.nzeta
-                * self.pitchgrid.nalpha
-                * self.speedgrid.nx
-                * len(self.species),
-            ),
-            dtype=self.field.Bmag.dtype,
-        )
-
     def transpose(self):
         """Transpose of the operator.
 
@@ -611,10 +566,3 @@ class DKEMPreconditioner(lx.AbstractLinearOperator):
                 f"N={ns * nx * na * nt * nz:,d}",
                 ordered=True,
             )
-
-
-@lx.is_symmetric.register(DKEMPreconditioner)
-@lx.is_diagonal.register(DKEMPreconditioner)
-@lx.is_tridiagonal.register(DKEMPreconditioner)
-def _(operator):
-    return False
