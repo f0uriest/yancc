@@ -143,6 +143,10 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_solver=smooth_solver,
             weight=smooth_weights,
         )
+        # The MDKE has no species mass ratios to badly scale the coarse operator, so
+        # its LU factorization is never the ill-conditioned case iterative refinement
+        # is for; skip it rather than pay for the check on every coarse solve.
+        coarse_opinv = DenseLUInverseOperator(operators[0], refine=0)
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
         )
@@ -160,7 +164,7 @@ class MDKEPreconditioner(MultigridOperator):
             v1=v1,
             v2=v2,
             smooth_method=smooth_method,
-            coarse_opinv=None,
+            coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
             coarse_weight=coarse_weight,
             verbose=max(0, verbose - 2),

@@ -409,6 +409,14 @@ def _tridiag_solve(l, d, u, b, *args):
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
 
 
+# Estimated 1-norm condition number above which a factored solve is refined. A
+# factored solve has relative error of order cond * eps, so near cond ~ 1/eps it has
+# lost essentially all accuracy along the worst conditioned directions. Well below
+# that the refined and unrefined solves are interchangeable as preconditioners, and
+# the extra operator product and solve per step are pure overhead.
+_REFINE_COND = 1e15
+
+
 class DenseLUInverseOperator(lx.AbstractLinearOperator):
     """Inverse of a linear operator, via the LU factorization of its dense matrix.
 
@@ -421,9 +429,11 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         This does not change the inverse, but improves the factorization's accuracy
         for badly scaled matrices.
     refine : int
-        Number of steps of iterative refinement against ``operator`` to apply after
-        each triangular solve, which improves the accuracy for ill-conditioned
-        matrices.
+        Maximum number of steps of iterative refinement against ``operator`` to apply
+        after each triangular solve, which improves the accuracy for ill-conditioned
+        matrices. Steps only run when the matrix is estimated to be badly enough
+        conditioned for the solve to lose most of its accuracy, so a well-conditioned
+        matrix pays only for a condition number estimate at construction.
     batch_size : int, optional
         Number of columns of the identity to map ``operator`` over at a time when
         materializing it. Default maps over all columns at once; a smaller batch
@@ -435,6 +445,7 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
     _r: jax.Array
     _c: jax.Array
     _operator: lx.AbstractLinearOperator
+    _needs_refine: jax.Array
     _refine: int = eqx.field(static=True)
 
     def __init__(
@@ -445,6 +456,7 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         batch_size: int | None = None,
     ):
         matrix = dense_from_mv(operator.mv, operator.in_size(), batch_size)
+        norm1 = matrix_1norm(matrix)
         if equilibrate:
             r, c = _ruiz_scale(matrix)
             matrix = r[:, None] * matrix * c[None, :]
@@ -463,6 +475,21 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         self._c = jax.lax.stop_gradient(c)
         self._operator = operator
         self._refine = refine
+        if refine:
+            # Whether this factorization needs refining depends only on how badly
+            # conditioned the matrix is, not on any particular right hand side, so it
+            # is decided once here rather than on every matrix-vector product.
+            # Deciding it per-``mv`` call from the actual ``vector`` would make ``mv``
+            # a nonlinear function of its input (the branch taken would depend on
+            # ``vector``), which breaks the operator's transpose.
+            inv_norm = _hager_1norm_est(
+                self._solve, self._solve_transpose, matrix.shape[0], (), matrix.dtype, 5
+            )
+            # Negated comparison so that a non-finite estimate (singular factors)
+            # also refines.
+            self._needs_refine = ~(norm1 * inv_norm <= _REFINE_COND)
+        else:
+            self._needs_refine = jnp.array(False)
 
     def mv(self, vector):
         """Matrix vector product."""
@@ -473,10 +500,15 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         # the Krylov iteration count, differ between compilations and hardware.
         # Refinement against the operator (whose residual is far more accurate than
         # the solve) removes most of that residual for the cost of one operator
-        # product and one more solve per step. The operator is used instead of the
-        # matrix so no second n x n array has to be kept.
+        # product and one more solve per step, so it is only applied when the
+        # factorization was flagged as needing it at construction.
         for _ in range(self._refine):
-            x = x + self._solve(vector - self._operator.mv(x))
+            x = jax.lax.cond(
+                self._needs_refine,
+                lambda x: x + self._solve(vector - self._operator.mv(x)),
+                lambda x: x,
+                x,
+            )
         return x
 
     def _solve(self, vector):
@@ -489,6 +521,22 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         )
         x = jax.lax.linalg.triangular_solve(lu, y, left_side=True, lower=False)
         return self._c * x[:, 0]
+
+    def _solve_transpose(self, vector):
+        lu = self._luT.T
+        # A^-T = diag(r) (LU)^-T P diag(c) with the permutation undone at the end:
+        # (diag(r) A diag(c))^T = U^T L^T P.
+        y = jax.lax.linalg.triangular_solve(
+            lu,
+            (self._c * vector)[:, None],
+            left_side=True,
+            lower=False,
+            transpose_a=True,
+        )
+        z = jax.lax.linalg.triangular_solve(
+            lu, y, left_side=True, lower=True, unit_diagonal=True, transpose_a=True
+        )
+        return self._r * jnp.zeros_like(z[:, 0]).at[self._perm].set(z[:, 0])
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""

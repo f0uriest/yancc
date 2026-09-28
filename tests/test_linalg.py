@@ -223,10 +223,30 @@ def test_dense_lu_inverse_operator():
     # second restores it, which pins down the formula regardless of how well the
     # matched-operator case happens to refine.
     b = jnp.array(rng.standard_normal(n))
+    # the transposed solve reuses the same factors, scaling and pivoting
+    np.testing.assert_allclose(
+        Aref._solve_transpose(b), np.linalg.solve(A.T, np.asarray(b)), atol=1e-10
+    )
+
+    # refinement is only enabled once the estimated condition number is large enough
+    # for the solve to lose most of its accuracy, and never when it is disabled
+    for scale, needed in [(1e-10, False), (1e-18, True)]:
+        Bop = lx.MatrixLinearOperator(
+            jnp.array(A * np.array([1.0] * (n - 1) + [scale]))
+        )
+        assert bool(yancc._linalg.DenseLUInverseOperator(Bop)._needs_refine) == needed
+    assert not yancc._linalg.DenseLUInverseOperator(Bop, refine=0)._needs_refine
+
     op2 = lx.MatrixLinearOperator(2 * jnp.array(A))
     for refine, expected in [(1, np.zeros(n)), (2, np.linalg.solve(A, b))]:
         Ainv2 = yancc._linalg.DenseLUInverseOperator(Aop, refine=refine)
+        # well conditioned, matched operator: refinement is flagged as unneeded
+        assert not Ainv2._needs_refine
         Ainv2 = eqx.tree_at(lambda m: m._operator, Ainv2, op2)
+        # the need-for-refinement flag is fixed at construction from the matched
+        # operator, so it must be forced open here to exercise the (deliberately
+        # mismatched) refinement step below.
+        Ainv2 = eqx.tree_at(lambda m: m._needs_refine, Ainv2, jnp.array(True))
         np.testing.assert_allclose(Ainv2.mv(b), expected, atol=1e-10)
 
 
