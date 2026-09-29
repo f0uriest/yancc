@@ -1,6 +1,7 @@
 """Solution objects and computation of output moments."""
 
 import re
+from collections.abc import Callable
 
 import equinox as eqx
 import jax
@@ -8,15 +9,15 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.constants import elementary_charge, proton_mass
 
+from ._misc import _d3v, _dr, radial_magnetic_drift
 from .field import Field
-from .misc import _d3v, _dr, radial_magnetic_drift
-from .species import JOULE_PER_EV, LocalMaxwellian
-from .velocity_grids import AbstractSpeedGrid, UniformPitchAngleGrid
+from .species import _JOULE_PER_EV, LocalMaxwellian
+from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
 
-MDKE_OUTPUTS = {}
-DKE_OUTPUTS = {}
+_MDKE_OUTPUTS = {}
+_DKE_OUTPUTS = {}
 
-DKE_DEFAULT_OUTPUT_QTYS = (
+_DKE_DEFAULT_OUTPUT_QTYS = (
     "<heat_flux>",
     "<particle_flux>",
     "<V||B>",
@@ -27,8 +28,8 @@ DKE_DEFAULT_OUTPUT_QTYS = (
 _SUPERSCRIPT_DIGITS = str.maketrans("0123456789-+=()", "⁰¹²³⁴⁵⁶⁷⁸⁹⁻⁺⁼⁽⁾")
 
 
-def clean_units(s: str) -> str:
-    r"""Render a LaTeX units string from ``DKE_OUTPUTS`` as plain unicode.
+def _clean_units(s: str) -> str:
+    r"""Render a LaTeX units string from ``_DKE_OUTPUTS`` as plain unicode.
 
     For example ``"kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}"`` becomes
     ``"kg·m⁻¹·s⁻³ = W·m⁻³"``. Returns the empty string for ``"None"`` or empty
@@ -52,7 +53,13 @@ def clean_units(s: str) -> str:
     return out.strip()
 
 
-def register_mdke_output(name, label, units, description, dim):
+def _register_mdke_output(
+    name: str,
+    label: str,
+    units: str,
+    description: str,
+    dim: tuple[int | str, ...],
+) -> Callable[[Callable], Callable]:
     """Decorator to wrap a function and add it to the list of things we can compute.
 
     Parameters
@@ -66,8 +73,8 @@ def register_mdke_output(name, label, units, description, dim):
         Units of the quantity in LaTeX format.
     description : str
         Description of the quantity.
-    dim : int
-        Size of output array
+    dim : tuple of int or str
+        Shape of the output array, as sizes or names of grid dimensions.
     """
 
     def _decorator(func):
@@ -78,13 +85,19 @@ def register_mdke_output(name, label, units, description, dim):
             "fun": func,
             "dim": dim,
         }
-        MDKE_OUTPUTS[name] = d
+        _MDKE_OUTPUTS[name] = d
         return func
 
     return _decorator
 
 
-def register_dke_output(name, label, units, description, dim):
+def _register_dke_output(
+    name: str,
+    label: str,
+    units: str,
+    description: str,
+    dim: tuple[int | str, ...],
+) -> Callable[[Callable], Callable]:
     """Decorator to wrap a function and add it to the list of things we can compute.
 
     Parameters
@@ -98,8 +111,8 @@ def register_dke_output(name, label, units, description, dim):
         Units of the quantity in LaTeX format.
     description : str
         Description of the quantity.
-    dim : int
-        Size of output array
+    dim : tuple of int or str
+        Shape of the output array, as sizes or names of grid dimensions.
     """
 
     def _decorator(func):
@@ -110,7 +123,7 @@ def register_dke_output(name, label, units, description, dim):
             "fun": func,
             "dim": dim,
         }
-        DKE_OUTPUTS[name] = d
+        _DKE_OUTPUTS[name] = d
         return func
 
     return _decorator
@@ -154,7 +167,7 @@ class DKESolution(eqx.Module):
     rhs: jax.Array
     field: Field
     pitchgrid: UniformPitchAngleGrid
-    speedgrid: AbstractSpeedGrid
+    speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: jax.Array
     EparB: jax.Array
@@ -169,7 +182,7 @@ class DKESolution(eqx.Module):
         rhs: jax.Array,
         field: Field,
         pitchgrid: UniformPitchAngleGrid,
-        speedgrid: AbstractSpeedGrid,
+        speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: jax.Array,
         EparB: jax.Array,
@@ -184,8 +197,10 @@ class DKESolution(eqx.Module):
             particle_source = jnp.full(ns, jnp.nan)
             heat_source = jnp.full(ns, jnp.nan)
         elif f1.size == N + 2 * ns:
-            heat_source = f1[-ns:]
-            particle_source = f1[-2 * ns : -ns]
+            # one (particle, heat) pair per species, matching DKESources columns
+            sources = f1[N:].reshape((ns, 2))
+            particle_source = sources[:, 0]
+            heat_source = sources[:, 1]
             f1 = f1[:N].reshape(shape)
         else:
             raise ValueError("got wrong size for f1")
@@ -212,18 +227,17 @@ class DKESolution(eqx.Module):
     def f1_krylov(self) -> jax.Array:
         """Distribution function, including source terms, as seen by krylov solver."""
         f1 = self.f1.flatten()
-        sources = jnp.concatenate([self._particle_source, self._heat_source])
-        sources = jnp.nan_to_num(sources, nan=0.0)
+        sources = jnp.stack([self._particle_source, self._heat_source], axis=1)
+        sources = jnp.nan_to_num(sources, nan=0.0).flatten()
         return jnp.concatenate([f1, sources])
 
-    def get(self, qty, **kwargs):
+    def get(self, qty: str, **kwargs) -> jax.Array:
         """Compute desired moments of the solution.
 
         Parameters
         ----------
         qty : str
-            Quantity to compute. Currently only "Dij" is supported, to return the
-            monoenergetic transport coefficients.
+            Quantity to compute, one of ``qtys_list()``.
 
         Returns
         -------
@@ -231,14 +245,14 @@ class DKESolution(eqx.Module):
             Desired output quantity as an array.
 
         """
-        assert qty in DKE_OUTPUTS.keys()
-        return DKE_OUTPUTS[qty]["fun"](self, **kwargs)
+        assert qty in _DKE_OUTPUTS.keys()
+        return _DKE_OUTPUTS[qty]["fun"](self, **kwargs)
 
     def qtys_list(self) -> list[str]:
         """List of all computable output quantities."""
-        return list(DKE_OUTPUTS.keys())
+        return list(_DKE_OUTPUTS.keys())
 
-    def print_summary(self, qtys: tuple[str, ...] = DKE_DEFAULT_OUTPUT_QTYS) -> None:
+    def print_summary(self, qtys: tuple[str, ...] = _DKE_DEFAULT_OUTPUT_QTYS) -> None:
         """Print headline output moments with units.
 
         Per-species quantities (shape ``(ns,)``) render as
@@ -249,7 +263,7 @@ class DKESolution(eqx.Module):
         width = max(len(q) for q in qtys)
         for qty in qtys:
             vals = self.get(qty)
-            units = clean_units(DKE_OUTPUTS[qty].get("units", ""))
+            units = _clean_units(_DKE_OUTPUTS[qty].get("units", ""))
             if jnp.ndim(vals) == 0:
                 suffix = f" ({units})" if units else ""
                 s = f"{qty:<{width}s}: " + "{: .3e}" + suffix
@@ -302,7 +316,7 @@ class MDKESolution(eqx.Module):
         self.nuhat = nuhat
         self.erhohat = erhohat
 
-    def get(self, qty, **kwargs):
+    def get(self, qty: str, **kwargs) -> jax.Array:
         """Compute desired moments of the solution.
 
         Parameters
@@ -320,15 +334,15 @@ class MDKESolution(eqx.Module):
         # this is kind of a dummy API for now, but future proofing to if we want
         # to compute more output qtys, rather than keep adding to a dict and possibly
         # computing a lot of wasted stuff we do it on the fly as needed.
-        assert qty in MDKE_OUTPUTS.keys()
-        return MDKE_OUTPUTS[qty]["fun"](self, **kwargs)
+        assert qty in _MDKE_OUTPUTS.keys()
+        return _MDKE_OUTPUTS[qty]["fun"](self, **kwargs)
 
     def qtys_list(self) -> list[str]:
         """List of all computable output quantities."""
-        return list(MDKE_OUTPUTS.keys())
+        return list(_MDKE_OUTPUTS.keys())
 
 
-@register_mdke_output(
+@_register_mdke_output(
     name="Dij",
     label="$D_{ij}$",
     units="\\mathrm{Various}",
@@ -337,21 +351,21 @@ class MDKESolution(eqx.Module):
 )
 def _mdke_Dij(sol, normalization=None, **kwargs):
     """Monoenergetic transport coefficients."""
-    f = sol.f.reshape((-1, 3))
-    s = sol.rhs.reshape((-1, 3))
+    f = sol.f.reshape((3, -1))
+    s = sol.rhs.reshape((3, -1))
     na, nt, nz = (
         sol.pitchgrid.nalpha,
         sol.field.ntheta,
         sol.field.nzeta,
     )
-    sf = s.T[:, None] * f.T[None, :]  # shape (3,3,N)
+    sf = s[:, None] * f[None, :]  # shape (3,3,N)
     Dij_itz = sf.reshape((3, 3, na, nt, nz))
     Dij_i = sol.field.flux_surface_average(Dij_itz)  # shape (3,3,na)
     Dij = jnp.sum(Dij_i * sol.pitchgrid.wxi, axis=-1)  # shape (3,3)
     return Dij
 
 
-@register_mdke_output(
+@_register_mdke_output(
     name="Dij_DKES",
     label="$D_{ij,DKES}$",
     units="\\mathrm{Various}",
@@ -375,7 +389,7 @@ def _mdke_Dij_dkes(sol, **kwargs):
     return Dij * scale
 
 
-@register_dke_output(
+@_register_dke_output(
     name="<particle_flux>",
     label="\\Gamma = \\langle \\int d^3v f_s \\mathbf{v}_m \\cdot "
     "\\nabla \\rho \\rangle",
@@ -397,7 +411,7 @@ def _dke_particle_flux(sol, **kwargs):
     return particle_flux
 
 
-@register_dke_output(
+@_register_dke_output(
     name="<heat_flux>",
     label="Q = \\langle \\int d^3v 1/2 m v^2 f_s \\mathbf{v}_m "
     "\\cdot \\nabla \\rho \\rangle",
@@ -422,7 +436,7 @@ def _dke_heat_flux(sol, **kwargs):
     return heat_flux
 
 
-@register_dke_output(
+@_register_dke_output(
     name="V||",
     label="V_{||} = 1/n_s \\int d^3v v_{||} f_s",
     units="m \\cdot s^{-1}",
@@ -444,7 +458,7 @@ def _dke_Vpar(sol, **kwargs):
     return Vpar
 
 
-@register_dke_output(
+@_register_dke_output(
     name="<V||B>",
     label="V_{||} B = 1/n_s \\langle B \\int d^3v v_{||} f_s \\rangle",
     units="T \\cdot m \\cdot s^{-1}",
@@ -460,7 +474,7 @@ def _dke_VparB(sol, **kwargs):
     return BVpar
 
 
-@register_dke_output(
+@_register_dke_output(
     name="<J||B>",
     label="J_{||}B = \\sum_s q_s/n_s \\langle B \\int d^3v v_{||} f_s \\rangle",
     units="A \\cdot T \\cdot m^{-3}",
@@ -476,7 +490,7 @@ def _dke_bootstrap_current(sol, **kwargs):
     return bootstrap_current
 
 
-@register_dke_output(
+@_register_dke_output(
     name="J_rho",
     label="J_{\\rho} = \\sum_s q_s \\Gamma_s",
     units="A \\cdot m^{-3}",
@@ -491,7 +505,7 @@ def _dke_radial_current(sol, **kwargs):
     return radial_current
 
 
-@register_dke_output(
+@_register_dke_output(
     name="J||",
     label="J_{||} = \\sum_s q_s V_{||,s}",
     units="A \\cdot m^{-3}",
@@ -507,7 +521,7 @@ def _dke_parallel_current(sol, **kwargs):
     return Jpar
 
 
-@register_dke_output(
+@_register_dke_output(
     name="particle_source",
     label="S_p",
     units="s^{-1}",
@@ -518,7 +532,7 @@ def _dke_particle_source(sol, **kwargs):
     return sol._particle_source
 
 
-@register_dke_output(
+@_register_dke_output(
     name="heat_source",
     label="S_h",
     units="s^{-1}",
@@ -529,7 +543,7 @@ def _dke_heat_source(sol, **kwargs):
     return sol._heat_source
 
 
-@register_dke_output(
+@_register_dke_output(
     name="particleFlux_vm_rN_sfincs",
     label="\\mathrm{particleFlux\\_vm\\_rN}",
     units="None",
@@ -542,12 +556,12 @@ def _dke_particleFlux_vm_rN_sfincs(sol, **kwargs):
     Tbar = kwargs.get("Tbar", 1e3)
     nbar = kwargs.get("nbar", 1e20)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("<particle_flux>") * Rbar / (nbar * vbar)
 
 
-@register_dke_output(
+@_register_dke_output(
     name="heatFlux_vm_rN_sfincs",
     label="\\mathrm{heatFlux\\_vm\\_rN}",
     units="None",
@@ -560,12 +574,12 @@ def _dke_heatFlux_vm_rN_sfincs(sol, **kwargs):
     Tbar = kwargs.get("Tbar", 1e3)
     nbar = kwargs.get("nbar", 1e20)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("<heat_flux>") * Rbar / (nbar * vbar**3 * mbar)
 
 
-@register_dke_output(
+@_register_dke_output(
     name="flow_sfincs",
     label="\\mathrm{flow}",
     units="None",
@@ -578,12 +592,12 @@ def _dke_flow_sfincs(sol, **kwargs):
     Tbar = kwargs.get("Tbar", 1e3)
     nbar = kwargs.get("nbar", 1e20)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("V||") * density[:, None, None] / (nbar * vbar)
 
 
-@register_dke_output(
+@_register_dke_output(
     name="FSABFlow_sfincs",
     label="\\mathrm{FSABFlow}",
     units="None",
@@ -597,12 +611,12 @@ def _dke_FSABFlow_sfincs(sol, **kwargs):
     nbar = kwargs.get("nbar", 1e20)
     Bbar = kwargs.get("Bbar", 1.0)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("<V||B>") / (vbar * Bbar) * density / nbar
 
 
-@register_dke_output(
+@_register_dke_output(
     name="FSABjHat_sfincs",
     label="\\mathrm{FSABjHat}",
     units="None",
@@ -615,12 +629,12 @@ def _dke_FSABjHat_sfincs(sol, **kwargs):
     nbar = kwargs.get("nbar", 1e20)
     Bbar = kwargs.get("Bbar", 1.0)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("<J||B>") / (elementary_charge * nbar * vbar * Bbar)
 
 
-@register_dke_output(
+@_register_dke_output(
     name="j_rN_sfincs",
     label="\\mathrm{j_rN}",
     units="None",
@@ -633,12 +647,12 @@ def _dke_j_rN_sfincs(sol, **kwargs):
     nbar = kwargs.get("nbar", 1e20)
     Rbar = kwargs.get("Rbar", 1.0)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("J_rho") * Rbar / (elementary_charge * nbar * vbar)
 
 
-@register_dke_output(
+@_register_dke_output(
     name="jHat_sfincs",
     label="\\mathrm{jHat}",
     units="None",
@@ -650,6 +664,6 @@ def _dke_jHat_sfincs(sol, **kwargs):
     Tbar = kwargs.get("Tbar", 1e3)
     nbar = kwargs.get("nbar", 1e20)
     mbar *= proton_mass
-    Tbar *= JOULE_PER_EV
+    Tbar *= _JOULE_PER_EV
     vbar = jnp.sqrt(2 * Tbar / mbar)
     return sol.get("J||") / (elementary_charge * nbar * vbar)

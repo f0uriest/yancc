@@ -1,6 +1,8 @@
 """Magnetic field data structures."""
 
 import functools
+import os
+from typing import Any
 
 import equinox as eqx
 import interpax
@@ -8,6 +10,22 @@ import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Float, Int
 from scipy.constants import mu_0
+
+
+class _FieldSource(eqx.Enumeration):
+    """Provenance of a Field's data (which constructor built it)."""
+
+    unknown = "unknown"
+    manual = "manual"
+    desc = "desc"
+    vmec = "vmec"
+    booz_xform = "booz_xform"
+    ipp_bc = "ipp_bc"
+    boozer = "boozer"
+
+
+# labels indexed by the integer code, for display of a (possibly traced) source
+_FIELD_SOURCE_NAMES: tuple[str, ...] = tuple(_FieldSource._index_to_message)
 
 
 class Field(eqx.Module):
@@ -34,14 +52,16 @@ class Field(eqx.Module):
     sqrtg : jax.Array, shape(ntheta, nzeta)
         Coordinate jacobian determinant from (rho, theta, zeta) to (R, phi, Z). Units
         of m^3
-    Psi : float
+    Psi : float, optional
         Total toroidal flux within the LCFS (in Webers, not divided by 2pi).
-    iota : float
-        Rotational transform.
-    R_major : float
-        Major radius.
-    a_minor : float
-        Minor radius.
+        If None, recovered from the field as π<sqrtg B^ζ>/rho.
+    iota : float, optional
+        Rotational transform. If None, recovered exactly as the flux-derivative ratio
+        <sqrtg B^θ>/<sqrtg B^ζ>.
+    R_major : float, optional
+        Major radius. If None, estimated as abs(G)/B0.
+    a_minor : float, optional
+        Minor radius. If None, estimated as sqrt(<sqrtg>/(R_major*rho)).
     NFP : int
         Number of field periods.
     dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
@@ -79,6 +99,7 @@ class Field(eqx.Module):
     ntheta: int = eqx.field(static=True)
     nzeta: int = eqx.field(static=True)
     NFP: Int[Array, ""]
+    source: _FieldSource
 
     def __init__(
         self,
@@ -89,16 +110,18 @@ class Field(eqx.Module):
         B_sub_z: Float[ArrayLike, "ntheta nzeta"],
         Bmag: Float[ArrayLike, "ntheta nzeta"],
         sqrtg: Float[ArrayLike, "ntheta nzeta"],
-        Psi: Float[ArrayLike, ""],
-        iota: Float[ArrayLike, ""],
-        R_major: Float[ArrayLike, ""],
-        a_minor: Float[ArrayLike, ""],
+        Psi: Float[ArrayLike, ""] | None = None,
+        iota: Float[ArrayLike, ""] | None = None,
+        R_major: Float[ArrayLike, ""] | None = None,
+        a_minor: Float[ArrayLike, ""] | None = None,
         NFP: Int[ArrayLike, ""] = 1,
         *,
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
+        source: _FieldSource = _FieldSource.manual,
     ):
+        self.source = source
         self.rho = jnp.asarray(rho)
         self.NFP = jnp.asarray(NFP)
         self.B_sup_t = jnp.asarray(B_sup_t)
@@ -109,9 +132,6 @@ class Field(eqx.Module):
         self.Bmag = jnp.asarray(Bmag)
         self.ntheta = self.sqrtg.shape[0]
         self.nzeta = self.sqrtg.shape[1]
-        assert (self.ntheta % 2 == 1) and (self.nzeta % 2 == 1), (
-            "ntheta and nzeta must be odd"
-        )
         if dBdt is None:
             dBdt = self._dfdt(self.Bmag)
         if dBdz is None:
@@ -129,8 +149,27 @@ class Field(eqx.Module):
         ) / self.sqrtg
         self.Bmag_fsa = self.flux_surface_average(self.Bmag)
         self.B2mag_fsa = self.flux_surface_average(self.Bmag**2)
-        self.I = self.flux_surface_average(self.B_sub_t)
-        self.G = self.flux_surface_average(self.B_sub_z)
+        self.I = self.B_sub_t.mean()
+        self.G = self.B_sub_z.mean()
+        # Psi, iota, R_major and a_minor don't enter the solve (only diagnostics,
+        # printing and output scaling), so recover them from the field geometry
+        # when not supplied. Psi and iota come out (essentially) exactly since
+        # they are flux integrals of sqrtg·B^ζ, sqrtg·B^θ; R_major/a_minor are
+        # order-few-percent circular-torus estimates.
+        if Psi is None:
+            # π<sqrtg B^ζ>/rho: dΨ_tor/dρ = ∮ sqrtg B^ζ dθ with Ψ_tor(ρ) = Ψρ²
+            Psi = jnp.pi * (self.sqrtg * self.B_sup_z).mean() / self.rho
+        if iota is None:
+            # ι = Ψ_pol'/Ψ_tor' = <sqrtg B^θ>/<sqrtg B^ζ>
+            iota = (self.sqrtg * self.B_sup_t).mean() / (
+                self.sqrtg * self.B_sup_z
+            ).mean()
+        if R_major is None:
+            # <B_sub_z> = G ≈ R <B_tor>
+            R_major = jnp.abs(self.G) / self.B0
+        if a_minor is None:
+            # (ρ,θ,ζ) volume element dV = sqrtg dρ dθ dζ with V ≈ 2π²R (ρ a)²
+            a_minor = jnp.sqrt(jnp.abs(self.sqrtg).mean() / (R_major * self.rho))
         self.Psi = jnp.asarray(Psi)
         self.iota = jnp.asarray(iota)
         self.R_major = jnp.asarray(R_major)
@@ -160,13 +199,27 @@ class Field(eqx.Module):
             Normalized surface label = sqrt(s).
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
-            Both must be odd.
         """
-        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
+        from desc.grid import Grid, QuadratureGrid  # pyright: ignore
 
-        from desc.grid import LinearGrid  # pyright: ignore[reportMissingImports]
+        def surface_grid(M, N):
+            # jitable so that rho may be traced
+            theta = jnp.linspace(0, 2 * np.pi, M, endpoint=False)
+            zeta = jnp.linspace(0, 2 * np.pi / eq.NFP, N, endpoint=False)
+            return Grid.create_meshgrid([rho, theta, zeta], NFP=eq.NFP, jitable=True)
 
-        grid = LinearGrid(rho=rho, theta=ntheta, zeta=nzeta, endpoint=False, NFP=eq.NFP)
+        # Volume and flux surface quantities are computed on full resolution grids,
+        # and flux surface quantities are passed as seed data to the final grid, so
+        # that DESC doesn't need to construct its own (non-jitable) grids internally.
+        vol_grid = QuadratureGrid(eq.L_grid, eq.M_grid, eq.N_grid, eq.NFP)
+        vol_data = eq.compute(["a", "R0"], grid=vol_grid)
+
+        fsa_grid = surface_grid(2 * eq.M_grid + 1, 2 * eq.N_grid + 1)
+        fsa_data = eq.compute(["iota"], grid=fsa_grid, override_grid=False)
+
+        grid = surface_grid(ntheta, nzeta)
+        seed = {"iota": jnp.broadcast_to(fsa_data["iota"][0], (grid.num_nodes,))}
+
         keys = [
             "B^theta",
             "B^zeta",
@@ -176,12 +229,9 @@ class Field(eqx.Module):
             "|B|_t",
             "|B|_z",
             "sqrt(g)",
-            "psi_r",
             "iota",
-            "a",
-            "R0",
         ]
-        desc_data = eq.compute(keys, grid=grid)
+        desc_data = eq.compute(keys, grid=grid, data=seed, override_grid=False)
 
         data = {
             "B_sup_t": desc_data["B^theta"],
@@ -195,23 +245,29 @@ class Field(eqx.Module):
         }
 
         data = {
-            key: val.reshape((grid.num_theta, grid.num_zeta), order="F")
-            for key, val in data.items()
+            key: val.reshape((ntheta, nzeta), order="F") for key, val in data.items()
         }
 
         data["Psi"] = eq.Psi
-        data["a_minor"] = desc_data["a"]
-        data["R_major"] = desc_data["R0"]
+        data["a_minor"] = vol_data["a"]
+        data["R_major"] = vol_data["R0"]
         data["iota"] = desc_data["iota"][0]
 
         return cls(
             rho=rho,
             **data,
             NFP=eq.NFP,
+            source=_FieldSource.desc,
         )
 
     @classmethod
-    def from_vmec(cls, wout, rho: Float[ArrayLike, ""], ntheta: int, nzeta: int):
+    def from_vmec(
+        cls,
+        wout: str | os.PathLike,
+        rho: Float[ArrayLike, ""],
+        ntheta: int,
+        nzeta: int,
+    ) -> "Field":
         """Construct Field from VMEC equilibrium.
 
         Parameters
@@ -223,7 +279,6 @@ class Field(eqx.Module):
         ntheta, nzeta : int
             Number of points on a surface in poloidal and toroidal directions.
         """
-        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
         s = rho**2
@@ -264,16 +319,16 @@ class Field(eqx.Module):
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
 
-        sqrtg = vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn)
-        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
-        B_sub_t = vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
-        B_sub_z = vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
-        B_sup_t = vmec_eval(theta[:, None], zeta[None, :], bsupu_mnc, 0, xm, xn)
-        B_sup_z = vmec_eval(theta[:, None], zeta[None, :], bsupv_mnc, 0, xm, xn)
+        sqrtg = _vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn)
+        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
+        B_sub_t = _vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
+        B_sub_z = _vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
+        B_sup_t = _vmec_eval(theta[:, None], zeta[None, :], bsupu_mnc, 0, xm, xn)
+        B_sup_z = _vmec_eval(theta[:, None], zeta[None, :], bsupv_mnc, 0, xm, xn)
 
         B0 = jnp.abs(b_mnc).max()
-        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dt=1)
-        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dz=1)
+        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dt=1)
+        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dz=1)
 
         sign = file.variables["signgs"][:].filled()
         sqrtg *= sign
@@ -298,12 +353,12 @@ class Field(eqx.Module):
         data["R_major"] = R_major
         data["a_minor"] = a_minor
 
-        return cls(rho=rho, **data, NFP=nfp)
+        return cls(rho=rho, **data, NFP=nfp, source=_FieldSource.vmec)
 
     @classmethod
     def from_booz_xform(
         cls,
-        booz: str,
+        booz: str | os.PathLike,
         rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
@@ -322,7 +377,6 @@ class Field(eqx.Module):
         cutoff : float
             Modes with abs(b_mn) < cutoff * abs(b_00) will be excluded.
         """
-        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
         from netCDF4 import Dataset
 
         s = rho**2
@@ -373,9 +427,9 @@ class Field(eqx.Module):
         mask = jnp.abs(b_mnc) > cutoff * B0
 
         # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
-        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
-        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
-        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
+        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
+        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
+        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
 
         # make jacobian positive
         sign = jnp.sign(bvco + iota * buco)
@@ -395,12 +449,13 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
+            source=_FieldSource.booz_xform,
         )
 
     @classmethod
     def from_ipp_bc(
         cls,
-        path: str,
+        path: str | os.PathLike,
         rho: Float[ArrayLike, ""],
         ntheta: int,
         nzeta: int,
@@ -419,10 +474,8 @@ class Field(eqx.Module):
         cutoff : float
             Modes with abs(b_mn) < cutoff * abs(b_00) will be excluded.
         """
-        assert (ntheta % 2 == 1) and (nzeta % 2 == 1), "ntheta and nzeta must be odd"
-
         s = rho**2
-        data = read_bc(path)
+        data = _read_bc(path)
         nfp = data["nfp"]
         theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
         zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
@@ -446,9 +499,9 @@ class Field(eqx.Module):
         b_mnc = b_mnc.flatten()
         mask = mask.flatten()
         # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
-        Bmag = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
-        dBdt = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
-        dBdz = vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
+        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
+        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
+        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
 
         # make jacobian positive
         sign = jnp.sign(G + iota * I)
@@ -468,6 +521,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
+            source=_FieldSource.ipp_bc,
         )
 
     @classmethod
@@ -479,14 +533,15 @@ class Field(eqx.Module):
         G: Float[ArrayLike, ""],
         iota: Float[ArrayLike, ""],
         Psi: Float[ArrayLike, ""],
-        R_major: Float[ArrayLike, ""],
-        a_minor: Float[ArrayLike, ""],
+        R_major: Float[ArrayLike, ""] | None = None,
+        a_minor: Float[ArrayLike, ""] | None = None,
         NFP: Int[ArrayLike, ""] = 1,
         *,
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
-    ):
+        source: _FieldSource = _FieldSource.boozer,
+    ) -> "Field":
         """Construct a field in Boozer coordinates.
 
         Parameters
@@ -501,10 +556,10 @@ class Field(eqx.Module):
             Rotational transform.
         Psi : float
             Total flux through LCFS in webers.
-        R_major : float
-            Major radius.
-        a_minor : float
-            Minor radius.
+        R_major : float, optional
+            Major radius. If None, estimated as abs(G)/B0.
+        a_minor : float, optional
+            Minor radius. If None, estimated as sqrt(<sqrtg>/(R_major*rho)).
         NFP : int
             Number of field periods.
         dBdt, dBdz : jax.Array, shape(ntheta, nzeta), optional
@@ -528,7 +583,7 @@ class Field(eqx.Module):
         data["B0"] = B0
         data["R_major"] = R_major
         data["a_minor"] = a_minor
-        return cls(rho=rho, **data, NFP=NFP)
+        return cls(rho=rho, **data, NFP=NFP, source=source)
 
     @functools.partial(jnp.vectorize, signature="(m,n)->()", excluded=[0])
     def flux_surface_average(self, f: Float[Array, "ntheta nzeta"]) -> Float[Array, ""]:
@@ -578,10 +633,20 @@ class Field(eqx.Module):
             R_major=self.R_major,
             a_minor=self.a_minor,
             NFP=self.NFP,
+            source=self.source,
         )
 
 
-def vmec_eval(t, z, xc, xs, m, n, dt=0, dz=0):
+def _vmec_eval(
+    t: ArrayLike,
+    z: ArrayLike,
+    xc: ArrayLike,
+    xs: ArrayLike,
+    m: ArrayLike,
+    n: ArrayLike,
+    dt: ArrayLike = 0,
+    dz: ArrayLike = 0,
+) -> Array:
     """Evaluate a vmec style double-fourier series.
 
     eg sum_mn xc*cos(m*t-n*z) + xs*sin(m*t-n*z)
@@ -602,11 +667,11 @@ def vmec_eval(t, z, xc, xs, m, n, dt=0, dz=0):
     """
     xc, xs, m, n, dt, dz = jnp.atleast_1d(xc, xs, m, n, dt, dz)
     xc, xs, m, n, dt, dz = jnp.broadcast_arrays(xc, xs, m, n, dt, dz)
-    return _vmec_eval(t, z, xc, xs, m, n, dt, dz)
+    return _vmec_eval_single(t, z, xc, xs, m, n, dt, dz)
 
 
 @functools.partial(jnp.vectorize, signature="(),(),(n),(n),(n),(n),(n),(n)->()")
-def _vmec_eval(t, z, xc, xs, m, n, dt, dz):
+def _vmec_eval_single(t, z, xc, xs, m, n, dt, dz):
     arg = m * t - n * z
     arg += dt * jnp.pi / 2
     arg -= dz * jnp.pi / 2
@@ -747,8 +812,8 @@ def _combine_surf_data(surf_data, global_data):
     return all_data
 
 
-def read_bc(path):
-    """Read an IPP boozer.bc file as a dict of ndarray."""
+def _read_bc(path: str | os.PathLike) -> dict[str, Any]:
+    """Read an IPP boozer.bc file as a dict of global scalars and per-surface arrays."""
     lines = open(path).readlines()
     lines = _strip_comments(lines)
     global_data, lines = _read_globals(lines)

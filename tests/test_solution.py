@@ -4,20 +4,21 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.solution import DKESolution, MDKESolution, clean_units
+from yancc._misc import DKEConstraint, DKESources
+from yancc.solution import DKESolution, MDKESolution, _clean_units
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def test_clean_units_empty_and_none():
     """clean_units returns the empty string for empty / "None" input."""
-    assert clean_units("") == ""
-    assert clean_units("None") == ""
+    assert _clean_units("") == ""
+    assert _clean_units("None") == ""
 
 
 def test_clean_units_renders_latex_to_unicode():
     r"""Render a LaTeX units string to unicode (superscripts, \cdot -> ·)."""
     assert (
-        clean_units("kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}")
+        _clean_units("kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}")
         == "kg·m⁻¹·s⁻³ = W·m⁻³"
     )
 
@@ -76,19 +77,40 @@ def test_dkesolution_f1_size_N_has_nan_sources(dummy_field, species1):
     assert np.all(np.isnan(np.asarray(sol.get("heat_source"))))
 
 
-def test_dkesolution_f1_with_sources_roundtrips(dummy_field, species1):
-    """f1 of size N + 2*ns splits off the particle/heat solvability sources."""
+def test_dkesolution_f1_with_sources_roundtrips(dummy_field, species2):
+    """f1 of size N + 2*ns splits off per-species particle/heat solvability sources.
+
+    The source unknowns are ordered like the DKESources columns: one (particle,
+    heat) pair per species. The particle column carries density but no energy and
+    the heat column energy but no density, as measured by DKEConstraint.
+    """
     pitchgrid = UniformPitchAngleGrid(5)
     speedgrid = MaxwellSpeedGrid(3)
-    ns = len(species1)
+    ns = len(species2)
     N = ns * speedgrid.nx * pitchgrid.nalpha * dummy_field.ntheta * dummy_field.nzeta
     particle = jnp.arange(ns, dtype=float) + 1.0
     heat = jnp.arange(ns, dtype=float) + 10.0
-    f1 = jnp.concatenate([jnp.zeros(N), particle, heat])
+    sources = jnp.stack([particle, heat], axis=1).flatten()
+    f1 = jnp.concatenate([jnp.arange(N, dtype=float), sources])
 
-    sol, _, _ = _make_dke_solution(dummy_field, species1, f1)
+    sol, _, _ = _make_dke_solution(dummy_field, species2, f1)
     np.testing.assert_allclose(np.asarray(sol.get("particle_source")), particle)
     np.testing.assert_allclose(np.asarray(sol.get("heat_source")), heat)
+    np.testing.assert_allclose(np.asarray(sol.f1_krylov), np.asarray(f1))
+
+    # nx=5 makes the Maxwell quadrature exact for the density/energy moments
+    speedgrid = MaxwellSpeedGrid(5)
+    B = DKESources(dummy_field, pitchgrid, speedgrid, species2).as_matrix()
+    C = DKEConstraint(dummy_field, pitchgrid, speedgrid, species2).as_matrix()
+    CB = np.asarray(C @ B)  # rows: (density, energy) per species
+    for i in range(ns):
+        particle_col, heat_col = 2 * i, 2 * i + 1
+        density_row, energy_row = 2 * i, 2 * i + 1
+        scale = np.abs(CB[density_row]).max() + np.abs(CB[energy_row]).max()
+        np.testing.assert_allclose(CB[energy_row, particle_col] / scale, 0, atol=1e-12)
+        np.testing.assert_allclose(CB[density_row, heat_col] / scale, 0, atol=1e-12)
+        assert abs(CB[density_row, particle_col]) > 1e-3 * scale
+        assert abs(CB[energy_row, heat_col]) > 1e-3 * scale
 
 
 def test_dkesolution_qtys_list(dummy_field, species1):

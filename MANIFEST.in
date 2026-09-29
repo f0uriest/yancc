@@ -1,0 +1,14 @@
+include LICENSE
+include README.rst
+include CITATION.cff
+include versioneer.py
+include yancc/_version.py
+exclude .pymon
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .pymon
+prune docs
+prune local
+prune benchmarks
+prune publications
+prune htmlcov

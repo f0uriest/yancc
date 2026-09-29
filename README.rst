@@ -40,10 +40,14 @@ A minimal end-to-end DKE solve for a single hydrogen species:
 
 .. code-block:: python
 
-    from yancc.field import Field
-    from yancc.solve import solve_dke
-    from yancc.species import Hydrogen, LocalMaxwellian
-    from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+    from yancc import (
+        Field,
+        Hydrogen,
+        LocalMaxwellian,
+        MaxwellSpeedGrid,
+        UniformPitchAngleGrid,
+        solve_dke,
+    )
 
     # Field and grids.
     rho = 0.5
