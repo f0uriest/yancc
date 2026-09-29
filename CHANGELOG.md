@@ -2,6 +2,17 @@ Changelog
 =========
 
 
+- New smoothers, including a theta/zeta plane smoother using surface averaged wind
+  and fast diagonalization via FFT, and theta/zeta line smoothers retaining coupling
+  between the L0 and L1 Legendre modes in pitch to damp errors that are not smoothed
+  by collisions.
+- The multigrid option ``smooth_type`` is now a comma separated string listing the
+  smoothers to apply and their order, for both the DKE and MDKE. The new defaults are
+  ``"plane,s,x,a,l01t,l01z"`` for the DKE (the frozen plane, block-Jacobi lines in
+  species, speed and pitch, and new ``"l01t"`` and ``"l01z"`` theta and zeta line
+  smoothers acting on the lowest two Legendre moments in pitch) and ``"plane,a"`` for
+  the MDKE (the frozen plane and pitch lines). The previous integer values are no
+  longer accepted. See the tuning guide.
 - Refactoring to reduce compile time, should be ~50% less
 - Fix small indexing bug with monoenergetic distribution function. Moments such as
   ``D_ij`` are unaffected, but directly indexing the distribution function was

@@ -7,8 +7,11 @@ import pytest
 
 from yancc._misc import dke_rhs
 from yancc._multigrid import (
+    _DKE_SMOOTHER_TOKENS,
+    _MDKE_SMOOTHER_TOKENS,
+    _parse_smooth_type,
     adpative_smooth,
-    get_dke_jacobi_smoothers,
+    get_dke_smoothers,
     krylov1_smooth,
     krylov1s_smooth,
     krylov2_smooth,
@@ -18,9 +21,11 @@ from yancc._multigrid import (
 from yancc._smoothers import (
     DKEFrozenPlaneSmoother,
     DKEJacobiSmoother,
+    DKEL01LineSmoother,
     DKELaplacian,
     MDKEFrozenPlaneSmoother,
     MDKEJacobiSmoother,
+    MDKEL01LineSmoother,
     optimal_smoothing_parameter_3d,
     optimal_smoothing_parameter_4d,
     permute_f_3d,
@@ -169,7 +174,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
     b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
-    smoothers = get_dke_jacobi_smoothers(
+    smoothers = get_dke_smoothers(
         [field],
         [pitchgrid],
         speedgrid,
@@ -180,6 +185,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         "2d",
         2,
         True,
+        "z,t,a,x,s",
         "dense",
         None,
         operator_weights=operator_weights,
@@ -288,6 +294,115 @@ def test_optimal_smoothing_parameter_4d_unknown_axis():
     with pytest.warns(UserWarning, match="ax="):
         w = optimal_smoothing_parameter_4d("2d", 2, 1e-3, "q")
     np.testing.assert_allclose(float(w), 0.01)
+
+
+def test_get_dke_smoothers_order(field, pitchgrid, speedgrid, species2, potentials2):
+    (group,) = get_dke_smoothers(
+        [field],
+        [pitchgrid],
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        [],
+        potentials2,
+        "2d",
+        2,
+        True,
+        "l01t,plane,x,l01z",
+        None,
+        None,
+        operator_weights=jnp.ones(8).at[-2:].set(0),
+    )
+    assert [type(op) for op in group] == [
+        DKEL01LineSmoother,
+        DKEFrozenPlaneSmoother,
+        DKEJacobiSmoother,
+        DKEL01LineSmoother,
+    ]
+    assert group[2].axorder == "atzsx"
+    assert [group[0].line, group[3].line] == ["t", "z"]
+
+
+def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentials2):
+    """L01 line blocks match the projection of the dense DKE/MDKE block diagonals."""
+    ns, nx = len(species2), speedgrid.nx
+    na, nt, nz = pitchgrid.nalpha, field.ntheta, field.nzeta
+    Erho = jnp.array(1e3)
+    for line in "tz":
+        M = DKEL01LineSmoother(
+            field, pitchgrid, speedgrid, species2, Erho, None, potentials2, line=line
+        )
+        n, nother = (nt, nz) if line == "t" else (nz, nt)
+
+        def op(axorder):
+            return DKE(
+                field,
+                pitchgrid,
+                speedgrid,
+                species2,
+                Erho,
+                potentials=potentials2,
+                p1="2d",
+                p2=2,
+                axorder=axorder,
+                gauge=True,
+                operator_weights=jnp.ones(8).at[-1].set(0),
+            )
+
+        W, Q = M._W, M._Q
+        D = op("sxzat" if line == "t" else "sxtaz").block_diagonal("dense")
+        D = D.reshape(ns, nx, nother, na, n, n)
+        t1 = jnp.einsum("la,sxoaij,am->sxolmij", W, D, Q)
+        Aa = op("sxtza").block_diagonal("dense").reshape(ns, nx, nt, nz, na, na)
+        Aa = Aa - Aa * jnp.eye(na)
+        k2 = jnp.einsum("la,sxtzab,bm->sxtzlm", W, Aa, Q)
+        if line == "t":
+            k2 = jnp.moveaxis(k2, 2, 3)
+        B = jnp.transpose(t1, (0, 1, 2, 5, 3, 6, 4)) + jnp.einsum(
+            "sxoilm,ij->sxoiljm", k2, jnp.eye(n)
+        )
+        B = B.reshape(ns * nx * nother, 2 * n, 2 * n)
+        np.testing.assert_allclose(
+            jnp.linalg.inv(M._inv), B, atol=1e-10 * float(jnp.abs(B).max())
+        )
+
+        # monoenergetic analog, same construction without species and speed
+        Mm = MDKEL01LineSmoother(field, pitchgrid, 1e-3, 1e-2, line=line)
+
+        def mop(axorder):
+            return MDKE(field, pitchgrid, 1e-3, 1e-2, "2d", 2, axorder, True)
+
+        D = mop("zat" if line == "t" else "taz").block_diagonal("dense")
+        t1 = jnp.einsum("la,oaij,am->olmij", W, D.reshape(nother, na, n, n), Q)
+        Aa = mop("tza").block_diagonal("dense").reshape(nt, nz, na, na)
+        Aa = Aa - Aa * jnp.eye(na)
+        k2 = jnp.einsum("la,tzab,bm->tzlm", W, Aa, Q)
+        if line == "t":
+            k2 = jnp.moveaxis(k2, 0, 1)
+        B = jnp.transpose(t1, (0, 3, 1, 4, 2)) + jnp.einsum(
+            "oilm,ij->oiljm", k2, jnp.eye(n)
+        )
+        B = B.reshape(nother, 2 * n, 2 * n)
+        np.testing.assert_allclose(
+            jnp.linalg.inv(Mm._inv), B, atol=1e-10 * float(jnp.abs(B).max())
+        )
+
+
+def test_parse_smooth_type():
+    assert _parse_smooth_type(" plane, x,l01t ", _DKE_SMOOTHER_TOKENS) == [
+        "plane",
+        "x",
+        "l01t",
+    ]
+    assert _parse_smooth_type("plane,a,l01z", _MDKE_SMOOTHER_TOKENS) == [
+        "plane",
+        "a",
+        "l01z",
+    ]
+    with pytest.raises(ValueError, match="unknown"):
+        _parse_smooth_type("plane,x", _MDKE_SMOOTHER_TOKENS)
+    with pytest.raises(ValueError, match="empty"):
+        _parse_smooth_type("plane,,x", _DKE_SMOOTHER_TOKENS)
 
 
 # ---------------------------------------------------------------------------
