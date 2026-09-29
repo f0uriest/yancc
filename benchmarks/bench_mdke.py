@@ -162,8 +162,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    if args.res_scale != 1.0:
+        cases = [case.scaled(args.res_scale) for case in cases]
+        label += f" res_scale={args.res_scale:g}"
     label += suffix
     header = _env_header()
+    header["res_scale"] = args.res_scale
     print(
         f"# bench_mdke {label}  yancc={header['yancc_version']}  {header['device']}",
         flush=True,
@@ -235,7 +239,14 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
     # Case params aren't stored in the results JSON; recover them from the current
     # catalog by name (blank for cases no longer present, e.g. dropped baselines).
-    by_name = {c.name: c for c in CASES}
+    # The grid column shows the current run's (possibly scaled) resolution.
+    scale = ch.get("res_scale", 1.0)
+    if bh.get("res_scale", 1.0) != scale:
+        print(
+            f"# WARNING: baseline res_scale={bh.get('res_scale', 1.0):g} differs from "
+            f"current res_scale={scale:g}"
+        )
+    by_name = {c.name: c.scaled(scale) for c in CASES}
     blank = " " * len(_CASE_HDR)
 
     regressions = 0
@@ -313,6 +324,16 @@ def main() -> int:
         help="print every available case name and exit (no solve)",
     )
     add_arguments(pr)
+    pr.add_argument(
+        "--res-scale",
+        "--res_scale",
+        dest="res_scale",
+        type=float,
+        default=1.0,
+        metavar="S",
+        help="scale the pitch, theta and zeta resolutions (na, nt, nz) of every case "
+        "by S, keeping the parity of each size (nz = 1 stays 1). Default 1.",
+    )
     pr.add_argument(
         "--out", help="results JSON path; if omitted, only print to the terminal"
     )
