@@ -101,6 +101,23 @@ def _parse_smooth_type(smooth_type: str, valid: tuple[str, ...]) -> list[str]:
     return tokens
 
 
+def _smoother_weights(weight, tokens: list[str]) -> list[Any]:
+    """Relaxation weight for each smoother token.
+
+    A dict gives the weight of each token, with tokens not in it using the smoother's
+    default, while any other weight applies to every smoother.
+    """
+    if not isinstance(weight, dict):
+        return [weight for _ in tokens]
+    unknown = [key for key in weight if key not in tokens]
+    if unknown:
+        raise ValueError(
+            f"smoother weights given for {unknown}, which are not in smooth_type "
+            f"{tokens}"
+        )
+    return [weight.get(tok) for tok in tokens]
+
+
 @eqx.filter_jit
 @jax.named_call
 def get_dke_smoothers(
@@ -119,6 +136,7 @@ def get_dke_smoothers(
     weight,
     operator_weights=None,
     coulomb_log=None,
+    operators=None,
     **options,
 ):
     """Get the multigrid smoothers for each field, pitchgrid.
@@ -128,10 +146,37 @@ def get_dke_smoothers(
     smoothers along speed, pitch, species, zeta and theta, ``"plane"`` is the frozen
     (theta, zeta) plane smoother, and ``"l01t"`` and ``"l01z"`` are theta and zeta line
     smoothers on the l = 0, 1 Legendre subspace in pitch.
+
+    ``weight`` is the relaxation weight of every smoother, or a dict from smoother
+    names in ``smooth_type`` to the weight of each. Smoothers without a weight, or all
+    of them if ``weight`` is None, use their default.
+
+    ``operators``, if given, are the DKE operator on each level built from the same
+    arguments, and are shared by the smoothers rather than building new ones.
     """
     tokens = _parse_smooth_type(smooth_type, _DKE_SMOOTHER_TOKENS)
+    weights = _smoother_weights(weight, tokens)
+    if operators is None:
+        operators = [None] * len(fields)
     smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
+    for field, pitchgrid, operator in zip(fields, pitchgrids, operators):
+        if operator is None:
+            # every smoother on a level is built from the same operator, which only
+            # differs in the axis ordering, so it is built once and relabeled
+            operator = DKE(
+                field,
+                pitchgrid,
+                speedgrid,
+                species,
+                Erho,
+                background,
+                potentials,
+                p1=p1,
+                p2=p2,
+                gauge=gauge,
+                operator_weights=operator_weights,
+                coulomb_log=coulomb_log,
+            )
         common: dict[str, Any] = dict(
             field=field,
             pitchgrid=pitchgrid,
@@ -145,21 +190,22 @@ def get_dke_smoothers(
             gauge=gauge,
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
+            operator=operator,
         )
         group = []
-        for tok in tokens:
+        for tok, w in zip(tokens, weights):
             if tok in _DKE_LINE_AXORDERS:
                 smoother = DKEJacobiSmoother(
                     **common,
                     axorder=_DKE_LINE_AXORDERS[tok],
                     smooth_solver=smooth_solver,
-                    weight=weight,
+                    weight=w,
                     **options,
                 )
             elif tok == "plane":
-                smoother = DKEFrozenPlaneSmoother(**common, weight=weight)
+                smoother = DKEFrozenPlaneSmoother(**common, weight=w)
             else:  # tok in ("l01t", "l01z"), the only remaining valid token
-                smoother = DKEL01LineSmoother(**common, line=tok[-1])
+                smoother = DKEL01LineSmoother(**common, line=tok[-1], weight=w)
             group.append(smoother)
         smoothers.append(group)
     return smoothers
@@ -183,6 +229,7 @@ def get_mdke_smoothers(
     smooth_type,
     smooth_solver,
     weight,
+    operators=None,
 ):
     """Get the multigrid smoothers for each field, pitchgrid.
 
@@ -191,10 +238,24 @@ def get_mdke_smoothers(
     pitch, theta and zeta, ``"plane"`` is the frozen (theta, zeta) plane smoother, and
     ``"l01t"`` and ``"l01z"`` are theta and zeta line smoothers on the l = 0, 1
     Legendre subspace in pitch.
+
+    ``weight`` is the relaxation weight of every smoother, or a dict from smoother
+    names in ``smooth_type`` to the weight of each. Smoothers without a weight, or all
+    of them if ``weight`` is None, use their default.
+
+    ``operators``, if given, are the MDKE operator on each level built from the same
+    arguments, and are shared by the smoothers rather than building new ones.
     """
     tokens = _parse_smooth_type(smooth_type, _MDKE_SMOOTHER_TOKENS)
+    weights = _smoother_weights(weight, tokens)
+    if operators is None:
+        operators = [None] * len(fields)
     smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
+    for field, pitchgrid, operator in zip(fields, pitchgrids, operators):
+        if operator is None:
+            # every smoother on a level is built from the same operator, which only
+            # differs in the axis ordering, so it is built once and relabeled
+            operator = MDKE(field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, gauge=gauge)
         common: dict[str, Any] = dict(
             field=field,
             pitchgrid=pitchgrid,
@@ -203,20 +264,21 @@ def get_mdke_smoothers(
             p1=p1,
             p2=p2,
             gauge=gauge,
+            operator=operator,
         )
         group = []
-        for tok in tokens:
+        for tok, w in zip(tokens, weights):
             if tok in _MDKE_LINE_AXORDERS:
                 smoother = MDKEJacobiSmoother(
                     **common,
                     axorder=_MDKE_LINE_AXORDERS[tok],
                     smooth_solver=smooth_solver,
-                    weight=weight,
+                    weight=w,
                 )
             elif tok == "plane":
-                smoother = MDKEFrozenPlaneSmoother(**common, weight=weight)
+                smoother = MDKEFrozenPlaneSmoother(**common, weight=w)
             else:  # tok in ("l01t", "l01z"), the only remaining valid token
-                smoother = MDKEL01LineSmoother(**common, line=tok[-1])
+                smoother = MDKEL01LineSmoother(**common, line=tok[-1], weight=w)
             group.append(smoother)
         smoothers.append(group)
     return smoothers

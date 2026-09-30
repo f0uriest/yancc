@@ -24,7 +24,12 @@ from ._linalg import (
     lu_solve_banded,
     lu_solve_banded_periodic,
 )
-from ._trajectories import DKE, MDKE, _parse_axorder_shape_3d, _parse_axorder_shape_4d
+from ._trajectories import (
+    DKE,
+    MDKE,
+    _parse_axorder_shape_3d,
+    _parse_axorder_shape_4d,
+)
 from .field import Field
 from .species import LocalMaxwellian, _nustar_species
 from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid, _AbstractSpeedGrid
@@ -240,6 +245,9 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
         selects "cr" for large matrices or "dense" when the memory savings are small.
     weight : array-like, optional
         Under-relaxation parameter.
+    operator : MDKE, optional
+        MDKE operator built from the same arguments. If given, it is reused rather
+        than building a new one.
 
     """
 
@@ -264,7 +272,8 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
         axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = True,
         smooth_solver: str | None = None,
-        weight: jax.Array | None = None,
+        weight: ArrayLike | None = None,
+        operator: MDKE | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -296,9 +305,9 @@ class MDKEJacobiSmoother(AbstractYanccOperator):
 
         # "cr" consumes the same banded storage as "banded"
         bd_fmt = "banded" if self.smooth_solver in ("banded", "cr") else "dense"
-        mats = MDKE(
-            field, pitchgrid, erhohat, nuhat, p1, p2, axorder, gauge
-        ).block_diagonal(bd_fmt, self.bandwidth)
+        if operator is None:
+            operator = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, gauge)
+        mats = operator.block_diagonal(bd_fmt, self.bandwidth, axorder)
 
         # The pitch line smoother (convolved axis "a") is the only case with a
         # non-periodic band, so it uses the standard (non-periodic) banded/CR
@@ -418,7 +427,9 @@ class DKEJacobiSmoother(AbstractYanccOperator):
     weight : array-like, optional
         Under-relaxation parameter.
     operator_weights : array-like, optional
-
+    operator : DKE, optional
+        DKE operator built from the same arguments. If given, it is reused rather
+        than building a new one.
 
     """
 
@@ -449,9 +460,10 @@ class DKEJacobiSmoother(AbstractYanccOperator):
         axorder="sxatz",
         gauge: Bool[ArrayLike, ""] = True,
         smooth_solver: str | None = None,
-        weight: jax.Array | None = None,
+        weight: ArrayLike | None = None,
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
+        operator: DKE | None = None,
     ):
         assert len(axorder) == 5 and set(axorder) == set("sxatz")
         self.field = field
@@ -508,21 +520,22 @@ class DKEJacobiSmoother(AbstractYanccOperator):
 
         # "cr" consumes the same banded storage as "banded"
         bd_fmt = "banded" if self.smooth_solver in ("banded", "cr") else "dense"
-        mats = DKE(
-            field,
-            pitchgrid,
-            speedgrid,
-            species,
-            Erho,
-            background=background,
-            potentials=potentials,
-            p1=p1,
-            p2=p2,
-            axorder=axorder,
-            gauge=gauge,
-            operator_weights=operator_weights,
-            coulomb_log=coulomb_log,
-        ).block_diagonal(bd_fmt, self.bandwidth)
+        if operator is None:
+            operator = DKE(
+                field,
+                pitchgrid,
+                speedgrid,
+                species,
+                Erho,
+                background=background,
+                potentials=potentials,
+                p1=p1,
+                p2=p2,
+                gauge=gauge,
+                operator_weights=operator_weights,
+                coulomb_log=coulomb_log,
+            )
+        mats = operator.block_diagonal(bd_fmt, self.bandwidth, axorder)
 
         # The pitch line smoother (convolved axis "a") is the only case with a
         # non-periodic band, so it uses the standard (non-periodic) banded/CR
@@ -675,6 +688,9 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
         Per-term weights for the DKE operator.
     coulomb_log : float, optional
         Coulomb logarithm for the collision operator.
+    operator : DKE, optional
+        DKE operator built from the same arguments. If given, it is reused rather
+        than building a new one.
 
     """
 
@@ -700,9 +716,10 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
         p1="2d",
         p2=2,
         gauge: Bool[ArrayLike, ""] = True,
-        weight: jax.Array | None = None,
+        weight: ArrayLike | None = None,
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
+        operator: DKE | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -714,21 +731,22 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
             operator_weights = jnp.ones(8).at[-1].set(0)
         self.weight = jnp.asarray(0.7 if weight is None else weight)
 
-        op = DKE(
-            field,
-            pitchgrid,
-            speedgrid,
-            species,
-            Erho,
-            background=background,
-            potentials=potentials,
-            p1=p1,
-            p2=p2,
-            axorder="sxatz",
-            gauge=gauge,
-            operator_weights=operator_weights,
-            coulomb_log=coulomb_log,
-        )
+        if operator is None:
+            operator = DKE(
+                field,
+                pitchgrid,
+                speedgrid,
+                species,
+                Erho,
+                background=background,
+                potentials=potentials,
+                p1=p1,
+                p2=p2,
+                gauge=gauge,
+                operator_weights=operator_weights,
+                coulomb_log=coulomb_log,
+            )
+        op = operator
 
         ns, nx, na = len(species), speedgrid.nx, pitchgrid.nalpha
         nt, nz = field.ntheta, field.nzeta
@@ -741,13 +759,14 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
             op.diagonal().reshape(ns, nx, na, nt, nz).mean(axis=(3, 4)).reshape(-1)
         )
         # circulant symbols of the forward/backward upwind stencils (first column
-        # generates it); pick the upwind stencil per block by the frozen wind's sign
+        # generates it); pick the upwind stencil per block by the frozen wind's sign.
+        # The operator is real, so only the non-negative zeta frequencies are needed.
         et_fd = jnp.fft.fft(op._opt._fd[:, 0])
         et_bd = jnp.fft.fft(op._opt._bd[:, 0])
-        ez_fd = jnp.fft.fft(op._opz._fd[:, 0])
-        ez_bd = jnp.fft.fft(op._opz._bd[:, 0])
+        ez_fd = jnp.fft.fft(op._opz._fd[:, 0])[: nz // 2 + 1]
+        ez_bd = jnp.fft.fft(op._opz._bd[:, 0])[: nz // 2 + 1]
         et = jnp.where((cbar_t > 0)[:, None], et_bd[None, :], et_fd[None, :])  # n1,nt
-        ez = jnp.where((cbar_z > 0)[:, None], ez_bd[None, :], ez_fd[None, :])  # n1,nz
+        ez = jnp.where((cbar_z > 0)[:, None], ez_bd[None, :], ez_fd[None, :])
         # remove the frozen stencil's own diagonal so d matches the exact block mean
         # diagonal without double counting the theta/zeta stencil diagonal
         Dt00 = jnp.where(cbar_t > 0, op._opt._bd[0, 0], op._opt._fd[0, 0])
@@ -766,12 +785,12 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
     def mv(self, vector):
         """Matrix vector product."""
         with jax.named_scope("DKEFrozenPlaneSmoother.mv"):
-            n1, nt, nz = self.invsym.shape
+            n1, nt, nz = self.invsym.shape[0], self.field.ntheta, self.field.nzeta
             # native sxatz flatten -> (ns*nx*na, nt, nz); theta, zeta are inner axes
             x = vector.reshape(n1, nt, nz)
-            y = jnp.fft.ifft2(
-                jnp.fft.fft2(x, axes=(1, 2)) * self.invsym, axes=(1, 2)
-            ).real
+            y = jnp.fft.irfft2(
+                jnp.fft.rfft2(x, axes=(1, 2)) * self.invsym, s=(nt, nz), axes=(1, 2)
+            )
             return (self.weight * y).reshape(-1)
 
     def in_structure(self):
@@ -901,6 +920,9 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
         Whether to impose the gauge constraint by fixing f at a single point.
     weight : array-like, optional
         Under-relaxation parameter, scalar. Defaults to 0.7
+    operator : MDKE, optional
+        MDKE operator built from the same arguments. If given, it is reused rather
+        than building a new one.
 
     """
 
@@ -921,13 +943,16 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
         p1="2d",
         p2=2,
         gauge: Bool[ArrayLike, ""] = True,
-        weight: jax.Array | None = None,
+        weight: ArrayLike | None = None,
+        operator: MDKE | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
         self.weight = jnp.asarray(0.7 if weight is None else weight)
 
-        op = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, "atz", gauge)
+        if operator is None:
+            operator = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, gauge=gauge)
+        op = operator
 
         na = pitchgrid.nalpha
         nt, nz = field.ntheta, field.nzeta
@@ -941,10 +966,11 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
         # generates it); pick the upwind stencil per block by the frozen wind's sign
         et_fd = jnp.fft.fft(op._opt._fd[:, 0])
         et_bd = jnp.fft.fft(op._opt._bd[:, 0])
-        ez_fd = jnp.fft.fft(op._opz._fd[:, 0])
-        ez_bd = jnp.fft.fft(op._opz._bd[:, 0])
+        # the operator is real, so only the non-negative zeta frequencies are needed
+        ez_fd = jnp.fft.fft(op._opz._fd[:, 0])[: nz // 2 + 1]
+        ez_bd = jnp.fft.fft(op._opz._bd[:, 0])[: nz // 2 + 1]
         et = jnp.where((cbar_t > 0)[:, None], et_bd[None, :], et_fd[None, :])  # na,nt
-        ez = jnp.where((cbar_z > 0)[:, None], ez_bd[None, :], ez_fd[None, :])  # na,nz
+        ez = jnp.where((cbar_z > 0)[:, None], ez_bd[None, :], ez_fd[None, :])
         # remove the frozen stencil's own diagonal so d matches the exact block mean
         # diagonal without double counting the theta/zeta stencil diagonal
         Dt00 = jnp.where(cbar_t > 0, op._opt._bd[0, 0], op._opt._fd[0, 0])
@@ -963,12 +989,12 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
     def mv(self, vector):
         """Matrix vector product."""
         with jax.named_scope("MDKEFrozenPlaneSmoother.mv"):
-            na, nt, nz = self.invsym.shape
+            na, nt, nz = self.invsym.shape[0], self.field.ntheta, self.field.nzeta
             # native atz flatten -> (na, nt, nz); theta, zeta are inner axes
             x = vector.reshape(na, nt, nz)
-            y = jnp.fft.ifft2(
-                jnp.fft.fft2(x, axes=(1, 2)) * self.invsym, axes=(1, 2)
-            ).real
+            y = jnp.fft.irfft2(
+                jnp.fft.rfft2(x, axes=(1, 2)) * self.invsym, s=(nt, nz), axes=(1, 2)
+            )
             return (self.weight * y).reshape(-1)
 
     def in_structure(self):
@@ -1066,9 +1092,12 @@ class DKEL01LineSmoother(AbstractYanccOperator):
     line : {"t", "z"}
         Which angle line to solve.
     weight : array-like, optional
-        Under-relaxation parameter.
+        Under-relaxation parameter. Defaults to 1.
     operator_weights : array-like, optional
         Per-term weights of the DKE operator.
+    operator : DKE, optional
+        DKE operator built from the same arguments. If given, it is reused rather
+        than building a new one.
 
     """
 
@@ -1099,9 +1128,10 @@ class DKEL01LineSmoother(AbstractYanccOperator):
         p2=2,
         line: str = "t",
         gauge: Bool[ArrayLike, ""] = True,
-        weight: jax.Array | None = None,
+        weight: ArrayLike | None = None,
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
+        operator: DKE | None = None,
     ):
         if line not in ("t", "z"):
             raise ValueError(f"line must be 't' or 'z', got {line}")
@@ -1133,8 +1163,8 @@ class DKEL01LineSmoother(AbstractYanccOperator):
         W = jnp.stack([0.5 * wxi, 1.5 * wxi * xi], axis=0)
         self._W, self._Q = W, Q
 
-        def _op(axorder: str) -> DKE:
-            return DKE(
+        if operator is None:
+            operator = DKE(
                 field=field,
                 pitchgrid=pitchgrid,
                 speedgrid=speedgrid,
@@ -1144,7 +1174,6 @@ class DKEL01LineSmoother(AbstractYanccOperator):
                 potentials=potentials,
                 p1=p1,
                 p2=p2,
-                axorder=axorder,
                 gauge=gauge,
                 operator_weights=operator_weights,
                 coulomb_log=coulomb_log,
@@ -1155,7 +1184,7 @@ class DKEL01LineSmoother(AbstractYanccOperator):
         # projected in banded storage, only expanding the small projected blocks.
         bw = min(max(fd_coeffs[1][p1].size // 2, fd_coeffs[2][p2].size // 2), n // 2)
         axD = "sxzat" if line == "t" else "sxtaz"
-        D = _op(axD).block_diagonal("banded", bw=bw)
+        D = operator.block_diagonal("banded", bw=bw, axorder=axD)
         D = D.reshape(ns, nx, nother, na, 2 * bw + 1, n)
         t1 = jnp.einsum("la,sxoahj,am->sxolmhj", W, D, Q)
         del D
@@ -1167,7 +1196,7 @@ class DKEL01LineSmoother(AbstractYanccOperator):
         # different pitch nodes, the rest only add to the diagonal. Rather than
         # forming the (na, na) blocks, which are dense due to the field particle
         # term, W A Q is found by applying each term to the columns of Q.
-        op = _op("sxatz")
+        op = operator
         ow = operator_weights
         shape = (ns, nx, na, nt, nz)
 
@@ -1297,7 +1326,10 @@ class MDKEL01LineSmoother(AbstractYanccOperator):
     gauge : bool
         Whether to impose the gauge constraint by fixing f at a single point.
     weight : array-like, optional
-        Under-relaxation parameter.
+        Under-relaxation parameter. Defaults to 1.
+    operator : MDKE, optional
+        MDKE operator built from the same arguments. If given, it is reused rather
+        than building a new one.
 
     """
 
@@ -1320,7 +1352,8 @@ class MDKEL01LineSmoother(AbstractYanccOperator):
         p2=2,
         line: str = "t",
         gauge: Bool[ArrayLike, ""] = True,
-        weight: jax.Array | None = None,
+        weight: ArrayLike | None = None,
+        operator: MDKE | None = None,
     ):
         if line not in ("t", "z"):
             raise ValueError(f"line must be 't' or 'z', got {line}")
@@ -1346,8 +1379,10 @@ class MDKEL01LineSmoother(AbstractYanccOperator):
         # banded storage and only then expanded
         bw = min(max(fd_coeffs[1][p1].size // 2, fd_coeffs[2][p2].size // 2), n // 2)
         axD = "zat" if line == "t" else "taz"
-        D = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, axD, gauge)
-        D = D.block_diagonal("banded", bw=bw).reshape(nother, na, 2 * bw + 1, n)
+        if operator is None:
+            operator = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, gauge=gauge)
+        D = operator.block_diagonal("banded", bw=bw, axorder=axD)
+        D = D.reshape(nother, na, 2 * bw + 1, n)
         t1 = jnp.einsum("la,oahj,am->olmhj", W, D, Q)
         del D
         t1 = banded_to_dense(bw, bw, t1)
@@ -1356,7 +1391,7 @@ class MDKEL01LineSmoother(AbstractYanccOperator):
         # blocks already carry the full pointwise diagonal. Only the pitch and pitch
         # angle scattering terms couple different pitch nodes, and both are local in
         # (theta, zeta), so one probe per column of Q gives W A Q at every point.
-        op = MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, "atz", gauge)
+        op = operator
 
         def pitch_mv(v):
             return op._opa.mv(v) + op._opp.mv(v)

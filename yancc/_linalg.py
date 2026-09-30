@@ -165,10 +165,10 @@ class AbstractDKEOperator(AbstractYanccOperator):
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
 
     @abc.abstractmethod
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder: str = "sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of the operator.
-
-        Blocks are along the last axis of ``axorder``.
 
         Parameters
         ----------
@@ -178,6 +178,11 @@ class AbstractDKEOperator(AbstractYanccOperator):
         bw : int, optional
             Lower and upper bandwidth of the banded storage. Defaults to a
             bandwidth that holds all nonzero entries of the blocks.
+        axorder : str, optional
+            Ordering of the axes, a permutation of "sxatz" (or "atz" for operators
+            without species and speed). Blocks are along the last axis, and ordered
+            by the remaining axes in the given order. Defaults to "sxatz" (or "atz"),
+            giving blocks along zeta.
         """
 
 

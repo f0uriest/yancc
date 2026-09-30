@@ -1,5 +1,8 @@
 """Tests for constructing smoothing operators."""
 
+from typing import Any
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -12,6 +15,7 @@ from yancc._multigrid import (
     _parse_smooth_type,
     adpative_smooth,
     get_dke_smoothers,
+    get_mdke_smoothers,
     krylov1_smooth,
     krylov1s_smooth,
     krylov2_smooth,
@@ -37,41 +41,19 @@ from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def test_permutations_mdke(field, pitchgrid):
-    """Test that re-ordering the grid points gives equivalent operators."""
-    p1 = "2a"
-    p2 = 2
-    erhohat = 1e-4
-    nuhat = 1e-4
-    N = field.ntheta * field.nzeta * pitchgrid.nalpha
-
-    A0f = MDKE(
-        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="atz", gauge=True
-    ).as_matrix()
-    A1f = MDKE(
-        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="zat", gauge=True
-    ).as_matrix()
-    A2f = MDKE(
-        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="tza", gauge=True
-    ).as_matrix()
-
-    P0f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "atz")
-    P1f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "zat")
-    P2f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "tza")
-
-    # dummy check that Ps are permutation matrices
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f @ P0f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P1f @ P1f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P2f @ P2f.T)
-
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f.T @ P0f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P1f.T @ P1f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P2f.T @ P2f)
-
-    # applying permutation matrices should be the same as the operator in
-    # re-ordered basis
-    np.testing.assert_allclose(A0f, P0f @ A0f @ P0f.T)
-    np.testing.assert_allclose(A0f, P1f @ A1f @ P1f.T)
-    np.testing.assert_allclose(A0f, P2f @ A2f @ P2f.T)
+    """The smoothers' reordering of f matches the layout of the operator blocks."""
+    op = MDKE(field, pitchgrid, 1e-4, 1e-4, p1="2a", p2=2, gauge=True)
+    A = np.asarray(op.as_matrix())
+    N = A.shape[0]
+    sizes = {"a": pitchgrid.nalpha, "t": field.ntheta, "z": field.nzeta}
+    for axorder in ["atz", "zat", "tza"]:
+        # maps f in the axorder layout to the canonical (a, t, z) layout
+        P = np.asarray(jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, axorder))
+        np.testing.assert_allclose(P @ P.T, np.eye(N))
+        m = sizes[axorder[-1]]
+        Ap = P.T @ A @ P
+        blocks = [Ap[k : k + m, k : k + m] for k in range(0, N, m)]
+        np.testing.assert_allclose(op.block_diagonal(axorder=axorder), blocks)
 
 
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
@@ -296,8 +278,21 @@ def test_optimal_smoothing_parameter_4d_unknown_axis():
     np.testing.assert_allclose(float(w), 0.01)
 
 
-def test_get_dke_smoothers_order(field, pitchgrid, speedgrid, species2, potentials2):
-    (group,) = get_dke_smoothers(
+def _assert_arrays_close(a, b):
+    """Assert two pytrees have the same structure and matching floating point leaves."""
+    jax.tree_util.tree_map(
+        np.testing.assert_allclose,
+        eqx.filter(a, eqx.is_inexact_array),
+        eqx.filter(b, eqx.is_inexact_array),
+    )
+
+
+def test_get_smoothers_order_and_shared_operator(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """Smoothers come in smooth_type order, and sharing work between them is exact."""
+    ow = jnp.ones(8).at[-2:].set(0)
+    dke_args = (
         [field],
         [pitchgrid],
         speedgrid,
@@ -310,9 +305,9 @@ def test_get_dke_smoothers_order(field, pitchgrid, speedgrid, species2, potentia
         True,
         "l01t,plane,x,l01z",
         None,
-        None,
-        operator_weights=jnp.ones(8).at[-2:].set(0),
+        {"l01t": 0.5, "x": 0.3},
     )
+    (group,) = get_dke_smoothers(*dke_args, operator_weights=ow)
     assert [type(op) for op in group] == [
         DKEL01LineSmoother,
         DKEFrozenPlaneSmoother,
@@ -321,6 +316,72 @@ def test_get_dke_smoothers_order(field, pitchgrid, speedgrid, species2, potentia
     ]
     assert group[2].axorder == "atzsx"
     assert [group[0].line, group[3].line] == ["t", "z"]
+    # each smoother built on its own, with no shared operator
+    kw: dict[str, Any] = dict(
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species2,
+        Erho=jnp.array(1e3),
+        background=[],
+        potentials=potentials2,
+        p1="2d",
+        p2=2,
+        gauge=True,
+        operator_weights=ow,
+    )
+    direct = [
+        DKEL01LineSmoother(**kw, line="t", weight=0.5),
+        DKEFrozenPlaneSmoother(**kw),
+        DKEJacobiSmoother(**kw, axorder="atzsx", weight=0.3),
+        DKEL01LineSmoother(**kw, line="z"),
+    ]
+    _assert_arrays_close(direct, group)
+
+    # a shared level operator gives the same smoothers
+    op = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        p1="2d",
+        p2=2,
+        gauge=True,
+        operator_weights=ow,
+    )
+    shared = get_dke_smoothers(*dke_args, operator_weights=ow, operators=[op])
+    _assert_arrays_close([group], shared)
+
+    mdke_args = (
+        [field],
+        [pitchgrid],
+        1e-3,
+        1e-2,
+        "2d",
+        2,
+        True,
+        "a,t,z,plane,l01t,l01z",
+    )
+    own = get_mdke_smoothers(*mdke_args, None, None)
+    with pytest.raises(ValueError, match="not in smooth_type"):
+        get_mdke_smoothers(*mdke_args, None, {"plane": 0.5, "s": 0.5})
+    # a single weight applies to every smoother
+    (group,) = get_mdke_smoothers(*mdke_args, None, 0.5)
+    for sm in group:
+        np.testing.assert_allclose(sm.weight, 0.5)
+    op = MDKE(field, pitchgrid, 1e-3, 1e-2, "2d", 2, True)
+    shared = get_mdke_smoothers(*mdke_args, None, None, operators=[op])
+    assert [type(sm) for sm in shared[0]] == [
+        MDKEJacobiSmoother,
+        MDKEJacobiSmoother,
+        MDKEJacobiSmoother,
+        MDKEFrozenPlaneSmoother,
+        MDKEL01LineSmoother,
+        MDKEL01LineSmoother,
+    ]
+    _assert_arrays_close(own, shared)
 
 
 def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentials2):
@@ -334,26 +395,25 @@ def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentia
         )
         n, nother = (nt, nz) if line == "t" else (nz, nt)
 
-        def op(axorder):
-            return DKE(
-                field,
-                pitchgrid,
-                speedgrid,
-                species2,
-                Erho,
-                potentials=potentials2,
-                p1="2d",
-                p2=2,
-                axorder=axorder,
-                gauge=True,
-                operator_weights=jnp.ones(8).at[-1].set(0),
-            )
+        op = DKE(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            Erho,
+            potentials=potentials2,
+            p1="2d",
+            p2=2,
+            gauge=True,
+            operator_weights=jnp.ones(8).at[-1].set(0),
+        )
 
         W, Q = M._W, M._Q
-        D = op("sxzat" if line == "t" else "sxtaz").block_diagonal("dense")
+        D = op.block_diagonal("dense", axorder="sxzat" if line == "t" else "sxtaz")
         D = D.reshape(ns, nx, nother, na, n, n)
         t1 = jnp.einsum("la,sxoaij,am->sxolmij", W, D, Q)
-        Aa = op("sxtza").block_diagonal("dense").reshape(ns, nx, nt, nz, na, na)
+        Aa = op.block_diagonal("dense", axorder="sxtza")
+        Aa = Aa.reshape(ns, nx, nt, nz, na, na)
         Aa = Aa - Aa * jnp.eye(na)
         k2 = jnp.einsum("la,sxtzab,bm->sxtzlm", W, Aa, Q)
         if line == "t":
@@ -369,12 +429,10 @@ def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentia
         # monoenergetic analog, same construction without species and speed
         Mm = MDKEL01LineSmoother(field, pitchgrid, 1e-3, 1e-2, line=line)
 
-        def mop(axorder):
-            return MDKE(field, pitchgrid, 1e-3, 1e-2, "2d", 2, axorder, True)
-
-        D = mop("zat" if line == "t" else "taz").block_diagonal("dense")
+        mop = MDKE(field, pitchgrid, 1e-3, 1e-2, "2d", 2, True)
+        D = mop.block_diagonal("dense", axorder="zat" if line == "t" else "taz")
         t1 = jnp.einsum("la,oaij,am->olmij", W, D.reshape(nother, na, n, n), Q)
-        Aa = mop("tza").block_diagonal("dense").reshape(nt, nz, na, na)
+        Aa = mop.block_diagonal("dense", axorder="tza").reshape(nt, nz, na, na)
         Aa = Aa - Aa * jnp.eye(na)
         k2 = jnp.einsum("la,tzab,bm->tzlm", W, Aa, Q)
         if line == "t":
@@ -575,9 +633,7 @@ def test_frozen_plane_mdke_matches_dense_block(pitchgrid):
     )
     # use the public MDKE.as_matrix (catches a change to the private op attributes
     # the smoother reads).
-    A = np.asarray(
-        MDKE(cfield, pitchgrid, erhohat, nuhat, "2d", 2, "atz", False).as_matrix()
-    )
+    A = np.asarray(MDKE(cfield, pitchgrid, erhohat, nuhat, "2d", 2, False).as_matrix())
     M = np.asarray(sm.as_matrix())
 
     na, npl = pitchgrid.nalpha, nt * nz
@@ -629,7 +685,6 @@ def test_frozen_plane_dke_matches_dense_block(speedgrid, species2, potentials2):
             potentials=potentials2,
             p1="2d",
             p2=2,
-            axorder="sxatz",
             gauge=False,
             operator_weights=ow,
         ).as_matrix()

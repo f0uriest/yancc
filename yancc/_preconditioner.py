@@ -147,6 +147,10 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_type=smooth_type,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
+            # the level operators can be shared when the smoothers use the same ones
+            operators=(
+                operators if (smooth_p1, smooth_p2) == (self.p1, self.p2) else None
+            ),
         )
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
@@ -359,6 +363,13 @@ class DKEPreconditioner(MultigridOperator):
             weight=smooth_weights,
             operator_weights=smoother_weights,
             coulomb_log=coulomb_log,
+            # the level operators can be shared when the smoothers use the same ones
+            operators=(
+                operators
+                if (smooth_p1, smooth_p2) == (self.p1, self.p2)
+                and smoother_weights is operator_weights
+                else None
+            ),
         )
         # The direct solve on the coarsest grid needs the operator as a dense matrix.
         # Building it a chunk of columns at a time keeps peak memory near the size of

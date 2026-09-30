@@ -228,7 +228,10 @@ Cycle and smoothing
 
 ``smooth_weights`` *(default None)*
    Optional damping weights applied to each smoother. The default ``None`` uses
-   specially tuned weights based on the collisionality of the problem.
+   specially tuned weights based on the collisionality of the problem. A single value
+   applies to every smoother. A dict with entries from ``smooth_type`` as keys, e.g.
+   ``{"plane": 0.8, "l01t": 0.9}``, sets the weight of each of those smoothers, with
+   the others using their defaults.
 
 ``p1``, ``p2`` *(default "2d", 2)*
    Finite-difference order used inside the preconditioner. Lower order than
