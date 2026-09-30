@@ -1,0 +1,1555 @@
+"""GCROT(m,k) and LGMRES krylov solvers."""
+
+import operator
+from collections.abc import Callable
+from functools import partial
+from typing import Any, cast
+
+import equinox as eqx
+import jax
+import jax.flatten_util
+import jax.numpy as jnp
+import lineax as lx
+import numpy as np
+from jax import lax
+from jax import scipy as jsp
+from jax.tree_util import tree_leaves, tree_map
+from jaxtyping import Array, ArrayLike, Float, Int, PyTree
+
+from ._utils import safediv
+
+_dot = partial(jnp.dot, precision=lax.Precision.HIGHEST)
+_vdot = partial(jnp.vdot, precision=lax.Precision.HIGHEST)
+_einsum = partial(jnp.einsum, precision=lax.Precision.HIGHEST)
+
+
+def _norm(x: PyTree[Array], axis=None) -> jax.Array:
+    xs = tree_leaves(x)
+    return jnp.linalg.norm(
+        jnp.array(list(map(lambda y: jnp.linalg.norm(y, axis=axis), xs))), axis=axis
+    )
+
+
+########
+# this stuff is from jax,
+# https://github.com/jax-ml/jax/blob/5aa339561871ccf037f1216237cf4e5db937376c/jax/_src/scipy/sparse/linalg.py#L594-L705
+#
+#
+# used under the apache license:
+#     https://www.apache.org/licenses/LICENSE-2.0
+########
+
+
+def _tree_vdot(x, y):
+    xs = tree_leaves(x)
+    ys = tree_leaves(y)
+    return sum(map(_vdot, xs, ys))
+
+
+_add = partial(tree_map, operator.add)
+_sub = partial(tree_map, operator.sub)
+_mul = partial(tree_map, operator.mul)
+
+
+def _safe_normalize(x, thresh=None):
+    """
+    Returns the L2-normalized vector (which can be a pytree) x, and optionally
+    the computed norm. If the computed norm is less than the threshold `thresh`,
+    which by default is the machine precision of x's dtype, it will be
+    taken to be 0, and the normalized x to be the zero vector.
+    """
+    norm = _norm(x)
+    dtype = jnp.result_type(*tree_leaves(x))
+    if thresh is None:
+        thresh = jnp.finfo(norm.dtype).eps
+    thresh = thresh.astype(dtype).real
+
+    use_norm = jnp.array(norm > thresh)
+    normalized_x = tree_map(lambda y: jnp.where(use_norm, y / norm, jnp.array(0.0)), x)
+    norm = jnp.where(use_norm, norm, jnp.array(0.0))
+    return normalized_x, norm
+
+
+def _rotate_vectors(H, i, cs, sn):
+    x1 = H[i]
+    y1 = H[i + 1]
+    x2 = cs.conj() * x1 - sn.conj() * y1
+    y2 = sn * x1 + cs * y1
+    H = H.at[i].set(x2)
+    H = H.at[i + 1].set(y2)
+    return H
+
+
+def _givens_rotation(a: jax.Array, b: jax.Array):
+    b_zero = abs(b) == 0
+    a_lt_b = abs(a) < abs(b)
+    t = -jnp.where(a_lt_b, a, b) / jnp.where(a_lt_b, b, a)
+    r = lax.rsqrt(1 + abs(t) ** 2).astype(t.dtype)
+    cs = jnp.where(b_zero, 1, jnp.where(a_lt_b, r * t, r))
+    sn = jnp.where(b_zero, 0, jnp.where(a_lt_b, r, r * t))
+    return cs, sn
+
+
+def _apply_givens_rotations(H_row, givens, k):
+    """
+    Applies the Givens rotations stored in the vectors cs and sn to the vector
+    H_row. Then constructs and applies a new Givens rotation that eliminates
+    H_row's k'th element.
+    """
+    # This call successively applies each of the
+    # Givens rotations stored in givens[:, :k] to H_col.
+
+    def apply_ith_rotation(i, H_row):
+        return _rotate_vectors(H_row, i, *givens[i, :])
+
+    R_row = lax.fori_loop(0, k, apply_ith_rotation, H_row)
+
+    givens_factors = _givens_rotation(R_row[k], R_row[k + 1])
+    givens = givens.at[k, :].set(givens_factors)
+    R_row = _rotate_vectors(R_row, k, *givens_factors)
+    return R_row, givens
+
+
+####
+# begin non-jax stuff
+####
+
+
+def _weighted_problem(matvec, b, lpsolve, rpsolve, sqrtw):
+    """Rewrite a linear problem so the plain 2-norm is the sqrt(w)-weighted norm.
+
+    Solving ``D A x = D b`` with ``D = diag(sqrtw)`` leaves the solution space
+    unchanged, so only residual-space quantities are scaled: the operator output,
+    the rhs, and the input of the preconditioners (the right preconditioner maps
+    residuals to solutions, so it sees ``D^-1`` first).
+
+    Returns (matvec, b, lpsolve, rpsolve, scale, unscale) where scale/unscale act
+    on residual-space pytrees with a trailing (column) dimension.
+    """
+    if sqrtw is None:
+        return matvec, b, lpsolve, rpsolve, _identity, _identity
+
+    def mul(v):
+        return tree_map(lambda s, x: s * x, sqrtw, v)
+
+    def div(v):
+        return tree_map(lambda s, x: x / s, sqrtw, v)
+
+    def scale_cols(V):
+        return tree_map(lambda s, X: s.reshape((-1, 1)) * X, sqrtw, V)
+
+    def unscale_cols(V):
+        return tree_map(lambda s, X: X / s.reshape((-1, 1)), sqrtw, V)
+
+    return (
+        lambda v: mul(matvec(v)),
+        mul(b),
+        lambda r: mul(lpsolve(div(r))),
+        lambda r: rpsolve(div(r)),
+        scale_cols,
+        unscale_cols,
+    )
+
+
+def _roll_prepend(X: jax.Array, y: jax.Array) -> jax.Array:
+    return jnp.roll(X, shift=1, axis=1).at[:, 0].set(y)
+
+
+def _identity(x: PyTree[ArrayLike]) -> PyTree[ArrayLike]:
+    return x
+
+
+def _matvec_columns(matvec, X):
+    """Apply a linear matvec to each column (last axis) of every leaf of X.
+
+    Returns the result and the number of matvecs applied. Columns that are zero map
+    to zero without applying matvec.
+    """
+    # Mapping matvec over all columns at once with vmap makes every intermediate
+    # array inside the matvec as wide as X, which for an operator with many large
+    # intermediates costs several times the memory of X itself. Applying it to one
+    # column at a time bounds the extra memory at a single matvec's working set.
+    ncol = tree_leaves(X)[0].shape[-1]
+    col = tree_map(lambda x: x[..., 0], X)
+    out_struct = jax.eval_shape(matvec, col)
+    Y = tree_map(lambda s: jnp.zeros((*s.shape, ncol), dtype=s.dtype), out_struct)
+
+    def zero(x):
+        return tree_map(lambda s: jnp.zeros(s.shape, dtype=s.dtype), out_struct)
+
+    def body(i, carry):
+        Y, count = carry
+        x = tree_map(lambda x: x[..., i], X)
+        nonzero = jnp.any(jnp.array([jnp.any(leaf != 0) for leaf in tree_leaves(x)]))
+        y = _cond_any(nonzero, lambda x: matvec(x), zero, x)
+        Y = tree_map(lambda Y, y: Y.at[..., i].set(y), Y, y)
+        return Y, count + nonzero
+
+    return lax.fori_loop(0, ncol, body, (Y, jnp.array(0)))
+
+
+def _maybe_print(flag, j, res, pre=""):
+    # Under vmap, print a single line for the whole batch instead of one per element,
+    # reporting the largest iteration count and residual among elements that print.
+    j = eqx.internal.unvmap_max(cast(jax.Array, jnp.where(flag, jnp.asarray(j), 0)))
+    res = eqx.internal.unvmap_max(cast(jax.Array, jnp.where(flag, res, -jnp.inf)))
+    flag = eqx.internal.unvmap_any(flag)
+
+    def truefun():
+        jax.debug.print(pre + "iter={j:3d}   res={res:.3e}", j=j, res=res, ordered=True)
+
+    def falsefun():
+        pass
+
+    jax.lax.cond(flag, truefun, falsefun)
+
+
+def _cond_any(pred, true_fun, false_fun, *operands):
+    """``lax.cond`` that stays lazy in its true branch under vmap.
+
+    Returns ``true_fun(*operands)`` where ``pred`` is True and ``false_fun(*operands)``
+    where it is False. ``false_fun`` is always evaluated, so it should be cheap.
+    """
+    # With a batched predicate, lax.cond evaluates both branches for every element.
+    # Here true_fun is skipped whenever pred is False for the whole batch, and the
+    # per-element choice is made with a select. Unbatched, this is just lax.cond.
+    out = lax.cond(eqx.internal.unvmap_any(pred), true_fun, false_fun, *operands)
+    other = false_fun(*operands)
+    return tree_map(lambda a, b: jnp.where(pred, a, b), out, other)
+
+
+def _gram_schmidt(Q, x, k, method="cgs2"):
+    """Orthogonalize x against the columns of Q.
+
+    Parameters
+    ----------
+    Q : array or tree of arrays
+        A matrix of orthonormal columns.
+    x : array or tree of arrays
+        A vector. It will be replaced with a new vector q which is orthonormal
+        to the columns of Q, such that x in span(col(Q), q).
+    k : int
+        Number of columns of Q to orthogonalize against.
+    method : {"cgs", "cgs2", "mgs"}
+        Classical gram schmidt, classical gram schmidt with re-orthogonalization, or
+        modified gram schmidt. Classical is the fastest but can be unstable,
+        classical with re-orthogonalization is usually the most accurate. The speed
+        improvement on CPU is marginal, and on GPU is basically nill.
+
+    Returns
+    -------
+    q : array or tree of arrays
+        A unit vector, orthonormal to the first k columns of Q, such that
+        x in span(col(Q), q).
+    r : array
+        Stores the overlaps of x with the fist k vectors in Q.
+    """
+    assert method in ["cgs", "cgs2", "mgs"]
+    # flatten trees into dense 1D/2D arrays
+    leaves_Q, treedef_Q = jax.tree_util.tree_flatten(Q)
+    leaves_x, treedef_x = jax.tree_util.tree_flatten(x)
+
+    def prepare_Q_leaf(leaf):
+        # keep the column (basis-vector) axis last: [N_leaf, ncols]. This is a
+        # view of the basis, so we never materialize a [ncols, N] transpose.
+        return jnp.reshape(leaf, (-1, leaf.shape[-1]))
+
+    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=0)
+    x_flat = jnp.concatenate([jnp.reshape(l, (-1,)) for l in leaves_x], axis=-1)
+
+    max_k = Q_mat.shape[1]
+    if method in ["cgs", "cgs2"]:
+        # dynamic mask to handle the dynamic k
+        mask = jnp.arange(max_k) < k
+
+        # --- PASS 1: Classical Gram-Schmidt ---
+        # .conj() ensures complex numbers are handled correctly. Contracting the
+        # N axis (axis 0 of Q_mat) keeps the basis in its natural [N, ncols]
+        # layout -- no transpose materialized.
+        h1 = x_flat @ Q_mat.conj()
+        h1 = jnp.where(mask, h1, 0.0)  # Apply mask for dynamic k
+        x1 = x_flat - (Q_mat @ h1)  # Vectorized subtraction
+
+        if method == "cgs":
+            h_final = h1
+            x_flat_final = x1
+        else:
+            # --- PASS 2: Re-orthogonalization ("Twice is Enough") ---
+            h2 = x1 @ Q_mat.conj()
+            h2 = jnp.where(mask, h2, 0.0)  # Apply mask for dynamic k
+            x_flat_final = x1 - (Q_mat @ h2)
+
+            h_final = h1 + h2
+
+    else:  # method == "mgs"
+        h = jnp.zeros(max_k, dtype=Q_mat.dtype)
+
+        def loop(i, carry):
+            h_carry, x_carry = carry
+            q_i = Q_mat[:, i]
+            alpha = jnp.vdot(q_i, x_carry)
+            h_carry = h_carry.at[i].set(alpha)
+            x_carry = x_carry - alpha * q_i
+
+            return h_carry, x_carry
+
+        h_final, x_flat_final = jax.lax.fori_loop(0, k, loop, (h, x_flat))
+
+    # 3. Unflatten using numpy for static indices
+    split_indices = np.cumsum([l.size for l in leaves_x])[:-1]
+    x_flat_split = jnp.split(x_flat_final, split_indices)
+
+    x_final_leaves = [
+        jnp.reshape(flat_leaf, orig_leaf.shape)
+        for flat_leaf, orig_leaf in zip(x_flat_split, leaves_x)
+    ]
+
+    x_final = jax.tree_util.tree_unflatten(treedef_x, x_final_leaves)
+
+    return x_final, h_final
+
+
+def _increment_parts(flexible, V, Z, y: Array, count, lv, outer_v):
+    """Split the solution-space increment ``Z y`` around the right preconditioner.
+
+    Returns ``(pre, post)`` such that ``Z y = post + rpsolve(pre)`` when
+    ``flexible=False``, and ``Z y = pre`` (with ``post`` zero) when
+    ``flexible=True``. ``count`` is the number of completed Arnoldi steps (filled
+    basis vectors). ``outer_v``/``lv`` describe LGMRES-style augmentation vectors
+    prepended to the Krylov basis.
+    """
+    if flexible:
+        pre = tree_map(lambda x: _dot(x, y), Z)
+        return pre, tree_map(jnp.zeros_like, pre)
+    # flexible=False: Z was never stored. Columns [0, lv) of the Krylov basis come
+    # from outer_v directly; column lv is the special v0 step rpsolve(V[:, 0]);
+    # columns (lv, count) are rpsolve(V[:, j]). By linearity of rpsolve the inner
+    # part folds into a single rpsolve call.
+    size = y.shape[0]
+    js = jnp.arange(size)
+    filled = js < count
+    v_basis_idx = jnp.where(js == lv, 0, js)
+    V_basis = tree_map(lambda x: x[..., v_basis_idx], V)
+    y_inner = jnp.where(filled & (js >= lv), y, jnp.zeros_like(y))
+    pre = tree_map(lambda x: _dot(x, y_inner), V_basis)
+
+    lv_pad = tree_leaves(outer_v)[0].shape[-1]
+    js_pad = jnp.arange(lv_pad)
+    y_outer = jnp.where(
+        (js_pad < lv) & (js_pad < count), y[:lv_pad], jnp.zeros_like(y[:lv_pad])
+    )
+    post = tree_map(lambda x: _dot(x, y_outer), outer_v)
+    return pre, post
+
+
+@eqx.filter_jit
+def _fgmres(  # noqa: C901
+    matvec: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]],
+    v0: PyTree[ArrayLike],
+    m: int,
+    k: int,
+    atol: Float[ArrayLike, ""],
+    lpsolve: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]] | None = None,
+    rpsolve: Callable[[PyTree[ArrayLike]], PyTree[ArrayLike]] | None = None,
+    C: PyTree[ArrayLike] | None = None,
+    lc: int | None = None,
+    outer_v: PyTree[ArrayLike] | None = None,
+    outer_Av: PyTree[ArrayLike] | None = None,
+    lv: int | None = None,
+    verbose: bool = False,
+    *,
+    print_every: ArrayLike = jnp.array(1),
+    gs_method: str = "cgs2",
+    flexible: bool = True,
+    stabilize_every: ArrayLike = jnp.array(10),
+    res_scale: ArrayLike = jnp.array(1.0),
+    return_increment: bool = False,
+) -> tuple:
+    """FGMRES Arnoldi process, with optional projection or augmentation
+
+    Parameters
+    ----------
+    matvec : callable
+        Operation A*x
+    v0 : pytree of jax.Array
+        Initial residual.
+    m : int
+        Number of FGMRES rounds.
+    k : int
+        Number of vectors to carry between inner FGMRES iterations.
+    atol : float
+        Absolute tolerance for early exit
+    lpsolve : callable
+        Left preconditioner L
+    rpsolve : callable
+        Right preconditioner R
+    C : pytree of jax.Array
+        Matrix C in GCROT(m,k) algorithm. Assumes the first `lc` columns are
+        orthonormal, all others are zero.
+    lc : int
+        Number of nonzero columns of C. Default C.shape[1]
+    outer_v : pytree of jax.Array
+        Augmentation vectors in LGMRES.
+    outer_Av : pytree of jax.Array
+        Augmentation vectors in LGMRES.
+    lv : int
+        Number of nonzero columns of outer_v. Default outer_v.shape[1]
+    flexible : bool
+        If True (default), use FGMRES, which allows the right preconditioner
+        ``rpsolve`` to vary between iterations. The preconditioned Krylov basis
+        ``Z`` is stored explicitly. If False, assume both preconditioners are
+        linear and don't store ``Z``; the returned ``Z`` is a scalar placeholder
+        and the caller is responsible for reconstructing the update via
+        ``rpsolve(V @ y)`` (plus any augmentation contributions). Saves
+        ``O(N * (m+k))`` memory.
+    stabilize_every : int, jax.Array
+        Period for refreshing the residual norm with its genuine value. If > 0
+        (default 10), every ``stabilize_every`` Arnoldi steps recompute
+        ``||v0 - (I - C Cᴴ) L A R (Z y)||`` with one extra preconditioned mat-vec
+        and use it for the stopping test and the reported residual. The cheap
+        recursively-updated Givens residual can drift below the true residual once
+        the Hessenberg becomes ill-conditioned, causing a false early exit.
+    res_scale : float, jax.Array
+        Factor multiplying the residual only in the verbose printout (default
+        1.0). Used so that the printed residual lines up with the residual tracked
+        by the outer loop (GCROT or LGMRES). Affects the printout only, never the
+        stopping test or the returned res/res_arr, which are always normalized to start
+        at 1.
+    return_increment : bool
+        If True, also return the solution-space increment ``Z y`` (for
+        ``flexible=False``, reconstructed with the right preconditioner) as an
+        additional final output.
+
+    Returns
+    -------
+    H : ndarray
+        Upper Hessenberg matrix.
+    B : ndarray
+        Projections corresponding to matrix C
+    V : pytree of jax.Array
+        Columns of matrix V
+    Z : pytree of jax.Array
+        Columns of matrix Z. A scalar placeholder if ``flexible=False``.
+    y : ndarray
+        Solution to ||H y - e_1||_2 = min!
+    j : int
+        Number of iterations.
+    nmv : int
+        Number of matrix vector products
+    res : float
+        Final residual.
+    breakdown : bool
+        Whether the Arnoldi process broke down.
+    res_arr : ndarray
+        Residual after each Arnoldi step.
+    dx : pytree of jax.Array
+        Solution-space increment ``Z y``. Only returned if ``return_increment``.
+    """
+    nmv = 0
+    atol = jnp.asarray(atol)
+    print_every = jnp.asarray(print_every)
+    stabilize_every = jnp.asarray(stabilize_every)
+    res_scale = jnp.asarray(res_scale)
+
+    if lpsolve is None:
+        lpsolve = _identity
+
+    if rpsolve is None:
+        rpsolve = _identity
+
+    if outer_v is None:
+        assert lv is None, "if outer_v is None, lv must also be None"
+        assert outer_Av is None, "if outer_v is None, outer_Av must also be None"
+        outer_v = tree_map(lambda x: jnp.zeros((*x.shape, 1), dtype=x.dtype), v0)
+        outer_Av = tree_map(lambda x: jnp.zeros((*x.shape, 1), dtype=x.dtype), v0)
+        lv = 0
+
+    if lv is None:
+        lv = tree_leaves(outer_v)[0].shape[1]
+
+    assert lv is not None
+
+    if outer_Av is None:
+        outer_Av, nmv_Av = _matvec_columns(matvec, outer_v)
+        nmv += nmv_Av
+
+    if C is None:
+        assert lc is None, "if C is None, lc must also be None"
+        C = tree_map(lambda x: jnp.zeros((*x.shape, 1), dtype=x.dtype), v0)
+        lc = 0
+    else:
+        C = tree_map(jnp.asarray, C)
+
+    if lc is None:
+        lc = tree_leaves(C)[0].shape[1]
+
+    assert lc is not None
+    maxiter = m + jnp.maximum(k - lc, 0) + lv
+    size = m + k + tree_leaves(outer_v)[0].shape[1]
+
+    # krylov space V = [V0, Av0, A^2v0, ...]
+    V = tree_map(
+        lambda x: jnp.pad(x[..., None], ((0, 0),) * x.ndim + ((0, size),)),
+        v0,
+    )
+    dtype = jnp.result_type(*tree_leaves(v0))
+    # preconditioned krylov space [Mv0, (MA)Mv0, (MA)^2Mv0, ...]
+    if flexible:
+        Z = tree_map(lambda x: jnp.zeros_like(x[:, 1:]), V)
+    else:
+        # Placeholder; never indexed. Kept in the carry so the loop's tree
+        # structure is invariant of `flexible`. Caller reconstructs Z @ y from V
+        # using the (assumed-linear) right preconditioner.
+        Z = jnp.zeros((), dtype=dtype)
+    eps = jnp.finfo(dtype).eps
+    res = jnp.array(_norm(v0))
+    res_arr = jnp.full(size, res)
+
+    # Orthogonal projection coefficients
+    B = jnp.zeros((tree_leaves(C)[0].shape[1], size), dtype=v0.dtype)
+
+    # H=QR. We only need R here but need H itself in outer loop, never need Q, we only
+    # store Q*e1*beta = beta_vec
+    R = jnp.eye(size, size + 1, dtype=v0.dtype)
+    H = jnp.zeros((size, size + 1), dtype=v0.dtype)
+    beta_vec = jnp.zeros((size + 1), dtype=dtype).at[0].set(res.astype(dtype))
+    givens = jnp.zeros((size, 2), dtype=dtype)
+
+    breakdown = jnp.array(False)
+
+    # FGMRES Arnoldi process.
+    #
+    # The loop is a small state machine so that the preconditioner and operator
+    # each appear at exactly one call site in the traced program. Every call site
+    # of rpsolve/matvec is compiled separately (branches of lax.cond included), and
+    # for an expensive matvec/preconditioner this dominates compile time. Modes:
+    #   ARNOLDI  : one Arnoldi step, applying the preconditioner to V[:, j] (or
+    #              using stored augmentation vectors for j < lv).
+    #   STABILIZE: recompute the true residual of the current iterate, replacing
+    #              the recursively updated Givens residual. Runs as a separate
+    #              iteration right after the step that requests it, and the stopping
+    #              test is only evaluated after it.
+    #   FINAL    : reconstruct the increment Z y (only if return_increment).
+    #   DONE     : exit.
+    ARNOLDI, STABILIZE, FINAL, DONE = (jnp.int32(i) for i in range(4))
+    finish = FINAL if return_increment else DONE
+
+    def _lstsq_y(R, beta_vec):
+        return jnp.linalg.lstsq(R[:, :-1].T, beta_vec[:-1])[0]
+
+    def arnoldi_cond(carry):
+        return carry[0][10] != DONE
+
+    def arnoldi_loop(carry):
+        # L A Z = C B + V H
+        state, V, Z = carry
+        j, mode, y = state[0], state[10], state[11]
+        is_arnoldi = mode == ARNOLDI
+        is_stabilize = mode == STABILIZE
+        is_final = mode == FINAL
+        outer = is_arnoldi & (j < lv)
+        zero = tree_map(jnp.zeros_like, v0)
+
+        def arnoldi_input():
+            vj = tree_map(lambda x, x0: jnp.where(j == lv, x0, x[..., j]), V, v0)
+            return vj, zero
+
+        def increment_input():
+            return _increment_parts(flexible, V, Z, y, j, lv, outer_v)
+
+        # elements that are done need neither, so they don't trigger the increment
+        pre, post = _cond_any(is_stabilize | is_final, increment_input, arnoldi_input)
+        # flexible increments are already Z y, so only Arnoldi steps precondition
+        need_rp = ~outer & (is_arnoldi | ((is_stabilize | is_final) & (not flexible)))
+        z = _add(_cond_any(need_rp, lambda v: rpsolve(v), lambda v: v, pre), post)
+        w = _cond_any(
+            ~outer & (is_arnoldi | is_stabilize),
+            lambda z: lpsolve(matvec(z)),
+            lambda z: zero,
+            z,
+        )
+        # Each step only updates the elements that are in its mode, so the steps can
+        # be applied in sequence, each skipped unless some element is in its mode.
+        # Unbatched, exactly one of them runs. The mode masks are taken before any
+        # step runs, so a step's mode transition doesn't trigger a later step.
+        #
+        # The bases V and Z are only read inside the steps, which return the new
+        # columns, and are written here outside of any lax.cond. If the bases were
+        # outputs of a cond, XLA may be unable to alias the branch outputs to the
+        # input buffers (it doesn't on GPU), and then copies the full basis every
+        # iteration, doubling its peak memory.
+        steps = [
+            (is_arnoldi, arnoldi_step),
+            (is_stabilize, stabilize_step),
+            (is_final, final_step),
+        ]
+        cols = (zero, zero)
+        for active, step in steps:
+            state, cols = lax.cond(
+                eqx.internal.unvmap_any(active),
+                step,
+                lambda state, cols, V, z, w, active: (state, cols),
+                state,
+                cols,
+                V,
+                z,
+                w,
+                active,
+            )
+
+        # commit the Arnoldi step's columns for Arnoldi elements only
+        def put(X, i, value):
+            return X.at[..., i].set(jnp.where(is_arnoldi, value, X[..., i]))
+
+        v_col, z_col = cols
+        V = tree_map(lambda X, u: put(X, j + 1, u), V, v_col)
+        if flexible:
+            Z = tree_map(lambda X, u: put(X, j, u), Z, z_col)
+        return state, V, Z
+
+    def arnoldi_step(state, cols, V, z, w, active):
+        (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = state  # fmt: skip
+        outer = j < lv
+        z = tree_map(lambda x, zz: jnp.where(outer, x[..., j], zz), outer_v, z)
+        w = tree_map(lambda x, ww: jnp.where(outer, x[..., j], ww), outer_Av, w)
+        _, w_norm = _safe_normalize(w)
+
+        # GCROT projection: L A -> (1 - C C^H) L A
+        # i.e. orthogonalize against C
+        w, Bj = _gram_schmidt(C, w, lc, gs_method)
+        w, h = _gram_schmidt(V, w, j + 1, gs_method)
+        unit_w, w_norm_1 = _safe_normalize(w, thresh=eps * w_norm)
+        h = h.at[j + 1].set(w_norm_1.astype(dtype))
+        R_row, new_givens = _apply_givens_rotations(h, givens, j)
+        new_R = R.at[j, :].set(R_row)
+        new_beta_vec = _rotate_vectors(beta_vec, j, *new_givens[j, :])
+        new_res = abs(new_beta_vec[j + 1])
+        new_breakdown = h[j + 1] < eps * w_norm
+
+        # Periodically replace the cheap recursive residual norm with the genuine one
+        do_stab = (stabilize_every > 0) & (
+            jnp.mod(j + 1, jnp.maximum(stabilize_every, 1)) == 0
+        )
+        if verbose:
+            _maybe_print(
+                active
+                & ~do_stab
+                & (print_every < jnp.inf)
+                & (jnp.mod(j, print_every) == 0),
+                j,
+                new_res * res_scale,
+                pre="    FGMRES  ",
+            )
+        cont = (j + 1 < maxiter) & (new_res > atol) & ~new_breakdown
+        new_mode = jnp.where(do_stab, STABILIZE, jnp.where(cont, ARNOLDI, finish))
+        # y is only read outside of Arnoldi steps
+        y = _cond_any(
+            active & (new_mode != ARNOLDI),
+            lambda: _lstsq_y(new_R, new_beta_vec),
+            lambda: y,
+        )
+
+        # commit the step for active elements only, updating just the touched slices
+        def put(X, i, value):
+            return X.at[..., i].set(jnp.where(active, value, X[..., i]))
+
+        B = put(B, j, Bj)
+        R = R.at[j, :].set(jnp.where(active, R_row, R[j, :]))
+        H = H.at[j, :].set(jnp.where(active, h, H[j, :]))
+        givens = jnp.where(active, new_givens, givens)
+        beta_vec = jnp.where(active, new_beta_vec, beta_vec)
+        res_arr = put(res_arr, j + 1, new_res)
+        res = jnp.where(active, new_res, res)
+        breakdown = jnp.where(active, new_breakdown, breakdown)
+        mode = jnp.where(active, new_mode, mode)
+        nmv = jnp.where(active & ~outer, nmv + 1, nmv)
+        j = jnp.where(active, j + 1, j)
+        state = (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode,
+                 y, dx)  # fmt: skip
+        return state, (unit_w, z)
+
+    def stabilize_step(state, cols, V, z, w, active):
+        (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+         dx) = state  # fmt: skip
+        w, _ = _gram_schmidt(C, w, lc, gs_method)
+        new_res = _norm(_sub(v0, w))
+        if verbose:
+            _maybe_print(
+                active & (print_every < jnp.inf) & (jnp.mod(j - 1, print_every) == 0),
+                j - 1,
+                new_res * res_scale,
+                pre="    FGMRES  ",
+            )
+        cont = (j < maxiter) & (new_res > atol) & ~breakdown
+        res_arr = res_arr.at[j].set(jnp.where(active, new_res, res_arr[j]))
+        res = jnp.where(active, new_res, res)
+        nmv = jnp.where(active, nmv + 1, nmv)
+        mode = jnp.where(active, jnp.where(cont, ARNOLDI, finish), mode)
+        state = (j, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode,
+                 y, dx)  # fmt: skip
+        return state, cols
+
+    def final_step(state, cols, V, z, w, active):
+        mode = jnp.where(active, DONE, state[10])
+        dx = tree_map(lambda new, old: jnp.where(active, new, old), z, state[12])
+        return (*state[:10], mode, state[11], dx), cols
+
+    cont0 = (maxiter > 0) & (res > atol)
+    mode = jnp.where(cont0, ARNOLDI, finish)
+    y = jnp.zeros(size, dtype=dtype)
+    dx = tree_map(jnp.zeros_like, v0)
+    state = (0, nmv, B, R, H, givens, beta_vec, res, breakdown, res_arr, mode, y,
+             dx)  # fmt: skip
+    state, V, Z = lax.while_loop(arnoldi_cond, arnoldi_loop, (state, V, Z))
+    j, nmv, B, R, H, _, beta_vec, res, breakdown, res_arr, _, _, dx = state
+    y = _lstsq_y(R, beta_vec)
+
+    if return_increment:
+        return H, B, V, Z, y, j, nmv, res, breakdown, res_arr, dx
+    return H, B, V, Z, y, j, nmv, res, breakdown, res_arr
+
+
+@eqx.filter_jit
+def gcrotmk(
+    A: lx.AbstractLinearOperator,
+    b: PyTree[ArrayLike],
+    x0: PyTree[ArrayLike] | None = None,
+    *,
+    rtol: Float[ArrayLike, ""] = jnp.array(1e-5),
+    atol: Float[ArrayLike, ""] = jnp.array(0.0),
+    maxiter: Int[ArrayLike, ""] = jnp.array(1000),
+    ML: lx.AbstractLinearOperator | None = None,
+    MR: lx.AbstractLinearOperator | None = None,
+    m: int = 20,
+    k: int | None = None,
+    C: PyTree[ArrayLike] | None = None,
+    U: PyTree[ArrayLike] | None = None,
+    verbose: bool = False,
+    print_every: ArrayLike = jnp.array(1),
+    print_every_inner: ArrayLike = jnp.array(1),
+    refine: bool = True,
+    flexible: bool = True,
+    stabilize_every: ArrayLike = 10,
+    throw: bool = False,
+    weights: PyTree[ArrayLike] | None = None,
+) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
+    """
+    Solve a matrix equation using flexible GCROT(m,k) algorithm.
+
+    Parameters
+    ----------
+    A : lineax.LinearOperator
+        System matrix as lineax.LinearOperator.
+    b : jax.Array
+        Right hand side of the linear system. Has shape (N,) or (N,1).
+    x0 : jax.Array
+        Starting guess for the solution.
+    rtol, atol : float, optional
+        Parameters for the convergence test. For convergence,
+        ``norm(b - A @ x) <= max(rtol*norm(b), atol)`` should be satisfied.
+        The default is ``rtol=1e-5`` and ``atol=0.0``.
+    maxiter : int, optional
+        Maximum number of iterations.  Iteration will stop after maxiter
+        steps even if the specified tolerance has not been achieved. The
+        default is ``1000``.
+    ML, MR : lineax.LinearOperator, optional
+        Left and/or right Preconditioner for `A`.  The preconditioners should be such
+        that `ML @ A @ MR` is better conditioned than `A` itself. gcrotmk is a
+        'flexible' algorithm and the right preconditioner `MR` can vary from iteration
+        to iteration. Effective preconditioning dramatically improves the rate of
+        convergence, which implies that fewer iterations are needed to reach a given
+        error tolerance.
+    m : int, optional
+        Number of inner FGMRES iterations per each outer iteration.
+        Default: 20
+    k : int, optional
+        Number of vectors to carry between inner FGMRES iterations.
+        According to [2]_, good values are around `m`.
+        Default: `m`
+    C, U : pytree of jax.Array, optional
+        Matrices C and U in the GCROT(m,k) algorithm. For details, see [2]_.
+        If not given, start from empty matrices. If ``U`` is given but ``C`` is
+        ``None`` then ``C`` is recomputed via ``C = A U`` on start and
+        orthogonalized as described in [3]_. ``U`` should have the same tree structure
+        as ``x`` but with a trailing dimension, and ``C`` should have the same
+        structure as ``b`` but with a trailing dimension.
+    verbose : bool, optional
+        If True, print convergence information at each iteration.
+        Default: False.
+    print_every : int, optional
+        Print convergence info every this many outer iterations. Default: 1.
+    print_every_inner : int, optional
+        Print convergence info every this many inner (FGMRES) iterations. Default: 1.
+    refine : bool, optional
+        If True (default), ensure a strict decrease even if inner FGMRES breaks down
+        by performing line search along supplied direction.
+    flexible : bool, optional
+        If True (default), use flexible GMRES inside, which permits ``MR`` to be
+        nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
+        ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
+        cutting inner-iteration storage roughly in half.
+    stabilize_every : int, optional
+        Period for refreshing the inner-FGMRES residual norm with its genuine
+        value. Every ``stabilize_every`` Arnoldi steps the true residual is
+        recomputed (one extra mat-vec) and used for the inner stopping test,
+        guarding against the cheap Givens residual drifting below ``b - A x`` on
+        an ill-conditioned Hessenberg (a false early exit). The Krylov subspace is
+        untouched. Default: 10; set to 0 to disable.
+    throw : bool, optional
+        If True, raise an error if the solver does not converge. Default: False.
+    weights : pytree of jax.Array, optional
+        Positive weights ``w`` with the same structure as ``b``. If given, all
+        residual norms (both the minimization and the convergence test) use
+        ``sqrt(sum(w * r**2))`` instead of the 2-norm, and ``rtol``/``atol`` and the
+        returned residual refer to this norm. Transposed solves (e.g. for
+        derivatives) use the dual weights ``1/w``. ``C`` is given and returned in
+        the unweighted residual space. Default: unweighted.
+
+    Returns
+    -------
+    x : pytree of ndarray
+        The solution found.
+    iters : int
+        Number of iterations.
+    nmv : int
+        Number of matrix vector products.
+    residual : float
+        Residual of the linear system.
+    success : jax.Array
+        Boolean flag, True if the solver converged to the requested tolerance,
+        False if it hit ``maxiter`` first.
+    C, U : pytree of jax.Array
+        Matrices C and U in the GCROT(m,k) algorithm. For details, see [2]_.
+
+    References
+    ----------
+    .. [1] E. de Sturler, ''Truncation strategies for optimal Krylov subspace
+           methods'', SIAM J. Numerical Analysis 36, 864 (1999).
+    .. [2] J.E. Hicken and D.W. Zingg, ''A simplified and flexible variant
+           of GCROT for solving nonsymmetric linear systems'',
+           SIAM Journal of  Scientific Computing 32, 172 (2010).
+    .. [3] M.L. Parks, E. de Sturler, G. Mackey, D.D. Johnson, S. Maiti,
+           ''Recycling Krylov subspaces for sequences of linear systems'',
+           SIAM Journal of  Scientific Computing 28, 1651 (2006).
+
+    """
+    if ML is None:
+        ML = lx.IdentityLinearOperator(A.out_structure())
+    if MR is None:
+        MR = lx.IdentityLinearOperator(A.in_structure())
+
+    if x0 is None:
+        x = tree_map(jnp.zeros_like, A.in_structure())
+    else:
+        x = x0
+
+    if k is None:
+        k = m
+
+    if weights is None:
+        sqrtw = sqrtw_t = None
+    else:
+        sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
+        sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
+
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, C, U, sqrtw, msg):
+        matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
+            matvec, b, lpsolve, rpsolve, sqrtw
+        )
+        xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
+            matvec,
+            b,
+            x,
+            lpsolve,
+            rpsolve,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            None if C is None else scale(C),
+            U,
+            verbose,
+            print_every,
+            print_every_inner,
+            refine,
+            flexible,
+            stabilize_every,
+        )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, msg)
+        return xsol, (j, nmv, beta, success, unscale(Cnew), Unew)
+
+    def _solve(A, b):
+        return _solve_weighted(
+            A, b, ML.mv, MR.mv, C, U, sqrtw, "GCROT forward solve did not converge"
+        )
+
+    def _transpose_solve(At, b):
+        # The recycled pair must satisfy C = A U for the operator being solved, which
+        # the projection and the re-orthogonalization of U both rely on. The pair built
+        # for A doesn't satisfy it for A^T (nor does the pair with C and U exchanged,
+        # which would need A^T A U = U), so the transposed system is solved without
+        # recycling rather than with vectors that would corrupt its residuals.
+        return _solve_weighted(
+            At,
+            b,
+            ML.transpose().mv,
+            MR.transpose().mv,
+            None,
+            None,
+            sqrtw_t,
+            "GCROT tangent solve did not converge",
+        )
+
+    # custom_linear_solve is unannotated and pyright can infer NoReturn for it
+    x, (j_outer, nmv, res, success, C, U) = cast(
+        Any,
+        jax.lax.custom_linear_solve(
+            A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+        ),
+    )
+    return x, j_outer, nmv, res, success, C, U
+
+
+def _gcrot_init_UC(
+    U: PyTree[ArrayLike] | None,
+    C: PyTree[ArrayLike] | None,
+    x: PyTree[ArrayLike],
+    matvec: Callable,
+    k: int,
+    nmv: Int[Array, ""],
+) -> tuple[PyTree[Array], PyTree[Array], Int[Array, ""], Int[Array, ""], int]:
+    if U is None:
+        assert C is None
+        lc = jnp.array(0)
+        U = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        C = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+    else:  # U provided
+        U = tree_map(lambda x: jnp.atleast_2d(x.T).T, U)
+        lc = tree_leaves(U)[0].shape[-1]  # number of supplied Us
+        k = max(k, lc)
+        if C is None:
+            C, nmv_C = _matvec_columns(matvec, U)
+            nmv += nmv_C
+        C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
+        # re-orthogonalize old vectors
+        c = tree_map(lambda x: x[..., 0], C)
+        unflatten = jax.flatten_util.ravel_pytree(c)[1]
+        Carr: jax.Array = jax.vmap(
+            lambda x: jax.flatten_util.ravel_pytree(x)[0], in_axes=1, out_axes=1
+        )(C)
+
+        Q, R, P = jsp.linalg.qr(Carr, mode="economic", pivoting=True)
+        #   AUP = CP = Q R
+        #   U' = U P R^-1
+        tol = jnp.finfo(R.dtype).eps * jnp.abs(R[0, 0]) * max(Q.shape)
+        mask = jnp.abs(jnp.diag(R)) > tol
+        # Columns of Q beyond the rank of C are orthonormal but not the image of
+        # anything in U, so they are dropped from both. Leaving them in C would let the
+        # projection onto C remove parts of the residual that x never accounts for, so
+        # the residual would no longer be b - A x and could even look converged.
+        # Pivoting puts the dropped columns last, so R^-1 D only involves the leading,
+        # well conditioned block of R. The dropped pivots, which can be exactly zero,
+        # are replaced by one so the solve for the zero columns of D stays finite.
+        D = jnp.diag(mask.astype(R.dtype))
+        R = R + jnp.diag(jnp.where(mask, 0, 1 - jnp.diag(R)))
+        # The permutation, R^-1 and the dropped columns are combined into one small
+        # matrix, so that U' and C' are each a single product with the large arrays.
+        # Applying them separately would need a gather and a masking step, which XLA
+        # may fuse into later uses of U' and C', keeping the unmasked factors alive
+        # to recompute them for as long as U' and C' are needed.
+        Rinv_D = jax.lax.linalg.triangular_solve(R, D, left_side=True, lower=False)
+        M = jnp.zeros_like(Rinv_D).at[P].set(Rinv_D)
+        U = tree_map(lambda x: _dot(x, M), U)
+        C = jax.vmap(unflatten, in_axes=1, out_axes=1)(_dot(Q, D))
+        # pad to full size
+        U = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), U)
+        C = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), C)
+        # if initial data wasn't full rank, only some are valid
+        lc = jnp.sum(mask)
+    return U, C, nmv, lc, k
+
+
+def _gcrot_initial_projection(x, r, beta, U, C):
+    # Solve first the projection operation with respect to the C, U matrices
+    #   y = argmin_y || b - A (x + U y) ||^2 = C^H (b - A x)
+    #   x' = x + U y
+    y = sum(tree_leaves(tree_map(lambda c, r: _einsum("nk,n->k", c.conj(), r), C, r)))
+    x = _add(x, tree_map(lambda x: _dot(x, y), U))
+    r = _sub(r, tree_map(lambda x: _dot(x, y), C))
+    beta = _norm(r)
+    return x, r, beta
+
+
+def _gcrotmk_solve(
+    matvec,
+    b,
+    x,
+    lpsolve,
+    rpsolve,
+    rtol,
+    atol,
+    maxiter,
+    m,
+    k,
+    C,
+    U,
+    verbose,
+    print_every,
+    print_every_inner,
+    refine,
+    flexible,
+    stabilize_every,
+):
+    print_every = jnp.asarray(print_every)
+    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+    print_every_inner = jnp.asarray(print_every_inner)
+    print_every_inner = jnp.where(print_every_inner == 0, jnp.inf, print_every_inner)
+
+    b_norm = _norm(b)
+    tol = jnp.maximum(atol, rtol * b_norm)
+    ptol_max_factor = 1.0
+    r = _sub(b, matvec(x))
+    dtype = jnp.result_type(*tree_leaves(r))
+    eps = jnp.finfo(dtype).eps
+    nmv = jnp.array(1)
+    beta = _norm(r)
+
+    U, C, nmv, lc, k = _gcrot_init_UC(U, C, x, matvec, k, nmv)
+
+    # Unused columns of U and C are zero, so the projection is a no-op without
+    # recycled vectors, and it is cheap enough to do unconditionally. Passing U and C
+    # into a lax.cond instead lets XLA give them a different layout inside the branch
+    # (it does on GPU), which costs a transposed copy of each that stays live for as
+    # long as U and C themselves.
+    x, r, beta = _gcrot_initial_projection(x, r, beta, U, C)
+    if verbose:
+        _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="GCROT  ")
+
+    # Recycled vectors are written into a free column, or over the oldest one once
+    # all k are in use, rather than shifting the others along to make room. A shift
+    # can't be done in place, so it would allocate new copies of U and C every outer
+    # iteration. age records the order the columns were added in, and the supplied
+    # columns count as older than any new ones, with the first the most recent.
+    age = -jnp.arange(k)
+
+    def gcrotmk_cond(carry):
+        j_outer, _, _, _, beta, _, _, _, _, _ = carry
+        return jnp.logical_and(j_outer < maxiter, beta > tol)
+
+    def gcmotmk_loop(carry):
+        j_outer, nmv, x, r, beta, C, U, lc, age, ptol_max_factor = carry
+
+        v0 = lpsolve(r)
+        inner_res_0 = _norm(v0)
+
+        v0 = _mul(safediv(jnp.array(1.0), inner_res_0, fill=jnp.array(1.0)), v0)
+        ptol = jnp.minimum(ptol_max_factor, safediv(tol, beta, jnp.array(1.0)))
+
+        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr, Zy = _fgmres(
+            matvec,
+            v0=v0,
+            m=m,
+            k=k,
+            rpsolve=rpsolve,
+            lpsolve=lpsolve,
+            atol=ptol,
+            C=C,
+            lc=lc,
+            verbose=verbose,
+            print_every=print_every_inner,
+            flexible=flexible,
+            stabilize_every=stabilize_every,
+            res_scale=inner_res_0 / b_norm,
+            return_increment=True,
+        )
+        y *= inner_res_0
+        nmv += nmv_inner
+
+        # Inner loop tolerance control
+        ptol_max_factor = jnp.where(
+            pres > ptol,
+            jnp.minimum(1.0, 1.5 * ptol_max_factor),
+            jnp.maximum(eps, 0.25 * ptol_max_factor),
+        )
+
+        # u := (Z - U B) y. _fgmres returns Z y for the unscaled y.
+        Zy = _mul(inner_res_0, Zy)
+        By = B @ y
+        UBy = tree_map(lambda x: _dot(x, By), U)
+        u = _sub(Zy, UBy)
+
+        # c := V H y
+        Hy = H.T @ y
+        c = tree_map(lambda x: _dot(x, Hy), V)
+
+        x1 = _add(x, u)
+        r1 = _sub(b, matvec(x1))
+        nmv += 1
+        beta1 = _norm(r1)
+
+        def _refine(u, c, x, r, x1, r1, nmv, beta):
+            # if the inner solve suffers from roundoff error, u may not actually
+            # decrease the residual. In that case we do a simple line search
+            # to damp the update and ensure the residual doesn't increase.
+            Au = matvec(u)
+            damp = jnp.linalg.lstsq(Au[:, None], r)[0][0]
+            u = damp * u
+            c = damp * c
+            x = _add(x, u)
+            r = _sub(b, matvec(x))
+            beta = _norm(r)
+            nmv += 1
+            return u, c, x, r, nmv, beta
+
+        def _norefine(u, c, x, r, x1, r1, nmv, beta):
+            return u, c, x1, r1, nmv, beta
+
+        u, c, x, r, nmv, beta = _cond_any(
+            refine & (beta1 > beta), _refine, _norefine, u, c, x, r, x1, r1, nmv, beta1
+        )
+
+        # Normalize cx, maintaining cx = A ux
+        # This new cx is orthogonal to the previous C, by construction
+        alpha = safediv(jnp.array(1.0), _norm(c))
+        # the first lc columns are the ones in use, so fill in order until all are
+        slot = jnp.where(lc < k, lc, jnp.argmin(age))
+        U = tree_map(lambda X, y: X.at[:, slot].set(y), U, _mul(alpha, u))
+        C = tree_map(lambda X, y: X.at[:, slot].set(y), C, _mul(alpha, c))
+        age = age.at[slot].set(j_outer + 1)
+        lc = jnp.minimum(lc + 1, k)
+
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(
+                    print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
+                ),
+                j_outer + 1,
+                safediv(beta, b_norm),
+                pre="GCROT  ",
+            )
+        return j_outer + 1, nmv, x, r, beta, C, U, lc, age, ptol_max_factor
+
+    carry = (0, nmv, x, r, beta, C, U, lc, age, ptol_max_factor)
+    carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
+    j_outer, nmv, x, r, beta, C, U, _, age, _ = carry
+    success = beta <= tol
+    # Include the solution vector to the span, returning the columns newest first
+    # and dropping the oldest to make room.
+    order = jnp.argsort(-age)[:-1]
+    U = tree_map(lambda X, y: jnp.concatenate([y[:, None], X[:, order]], axis=1), U, x)
+    C = tree_map(
+        lambda X, y: jnp.concatenate([y[:, None], X[:, order]], axis=1),
+        C,
+        _sub(b, r),
+    )
+
+    return x, (j_outer, nmv, beta, success, C, U)
+
+
+def _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv):
+    if outer_v is None:
+        assert outer_Av is None
+        lv = 0
+        outer_v = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+        outer_Av = tree_map(lambda x: jnp.zeros((x.size, k), dtype=x.dtype), x)
+    else:  # outer_v provided
+        outer_v = tree_map(lambda x: jnp.atleast_2d(x.T).T, outer_v)
+        lv = tree_leaves(outer_v)[0].shape[-1]  # number of supplied vs
+        if outer_Av is None:
+            outer_Av, nmv_Av = _matvec_columns(matvec, outer_v)
+            nmv += nmv_Av
+        # pad to full size
+        outer_v = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_v)
+        outer_Av = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lv))), outer_Av)
+    # An augmentation vector is used as a basis vector together with its image, so a
+    # zero column would put a zero vector in the basis and break the inner iteration.
+    # A solve returns fewer vectors than were asked for whenever the space it built
+    # was smaller, so the columns actually carrying a vector are counted and moved to
+    # the front, and the rest are left out of the count.
+    mask = _norm(outer_v, axis=0) > 0
+    lv = jnp.sum(mask)
+    idx = jnp.argsort(mask, descending=True)
+    outer_v = tree_map(lambda x: x[:, idx], outer_v)
+    outer_Av = tree_map(lambda x: x[:, idx], outer_Av)
+    return outer_v, outer_Av, lv, nmv
+
+
+@eqx.filter_jit
+def lgmres(
+    A: lx.AbstractLinearOperator,
+    b: PyTree[ArrayLike],
+    x0: PyTree[ArrayLike] | None = None,
+    *,
+    rtol: Float[ArrayLike, ""] = jnp.array(1e-5),
+    atol: Float[ArrayLike, ""] = jnp.array(0.0),
+    maxiter: Int[ArrayLike, ""] = jnp.array(1000),
+    ML: lx.AbstractLinearOperator | None = None,
+    MR: lx.AbstractLinearOperator | None = None,
+    m: int = 30,
+    k: int = 3,
+    outer_v: PyTree[ArrayLike] | None = None,
+    outer_Av: PyTree[ArrayLike] | None = None,
+    verbose: bool = False,
+    print_every: ArrayLike = jnp.array(1),
+    print_every_inner: ArrayLike = jnp.array(1),
+    refine: bool = True,
+    flexible: bool = True,
+    stabilize_every: ArrayLike = 10,
+    throw: bool = False,
+    weights: PyTree[ArrayLike] | None = None,
+) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
+    """
+    Solve a matrix equation using the LGMRES algorithm.
+
+    The LGMRES algorithm [1]_ [2]_ is designed to avoid some problems
+    in the convergence in restarted GMRES, and often converges in fewer
+    iterations.
+
+    Parameters
+    ----------
+    A : {sparse array, ndarray, LinearOperator}
+        The real or complex N-by-N matrix of the linear system.
+        Alternatively, ``A`` can be a linear operator which can
+        produce ``Ax`` using, e.g.,
+        ``scipy.sparse.linalg.LinearOperator``.
+    b : ndarray
+        Right hand side of the linear system. Has shape (N,) or (N,1).
+    x0 : ndarray
+        Starting guess for the solution.
+    rtol, atol : float, optional
+        Parameters for the convergence test. For convergence,
+        ``norm(b - A @ x) <= max(rtol*norm(b), atol)`` should be satisfied.
+        The default is ``rtol=1e-5``, the default for ``atol`` is ``0.0``.
+    maxiter : int, optional
+        Maximum number of iterations.  Iteration will stop after maxiter
+        steps even if the specified tolerance has not been achieved.
+    ML, MR : lineax.LinearOperator, optional
+        Left and/or right Preconditioner for `A`.  The preconditioners should be such
+        that `ML @ A @ MR` is better conditioned than `A` itself. gcrotmk is a
+        'flexible' algorithm and the right preconditioner `MR` can vary from iteration
+        to iteration. Effective preconditioning dramatically improves the rate of
+        convergence, which implies that fewer iterations are needed to reach a given
+        error tolerance.
+    m : int, optional
+        Number of inner GMRES iterations per each outer iteration.
+    k : int, optional
+        Number of vectors to carry between inner GMRES iterations.
+        According to [1]_, good values are in the range of 1...3.
+        However, note that if you want to use the additional vectors to
+        accelerate solving multiple similar problems, larger values may
+        be beneficial.
+    outer_v, outer_Av : pytree of jax.Array, optional
+        Vectors and corresponding matrix-vector products, used to augment the Krylov
+        subspace, and carried between inner GMRES iterations. If ``outer_v`` is given
+        but ``outer_Av`` is ``None`` then ``outer_Av`` is recomputed automatically.
+         ``outer_v`` should have the same tree structure as ``x`` but with a trailing
+        dimension, and ``outer_Av`` should have the same structure as ``b`` but with
+        a trailing dimension.
+    verbose : bool, optional
+        If True, print convergence information at each iteration.
+        Default: False.
+    print_every : int, optional
+        Print convergence info every this many outer iterations. Default: 1.
+    print_every_inner : int, optional
+        Print convergence info every this many inner (FGMRES) iterations. Default: 1.
+    refine : bool, optional
+        If True (default), ensure a strict decrease even if inner FGMRES breaks down
+        by performing line search along supplied direction.
+    flexible : bool, optional
+        If True (default), use flexible GMRES inside, which permits ``MR`` to be
+        nonlinear (e.g. a Krylov-smoothed multigrid cycle). If False, assume
+        ``MR`` is linear and skip storing the preconditioned Krylov basis ``Z``,
+        cutting inner-iteration storage roughly in half.
+    stabilize_every : int, optional
+        Period for refreshing the inner-FGMRES residual norm with its genuine
+        value. Every ``stabilize_every`` Arnoldi steps the true residual is
+        recomputed (one extra mat-vec) and used for the inner stopping test,
+        guarding against the cheap Givens residual drifting below ``b - A x`` on
+        an ill-conditioned Hessenberg (a false early exit). The Krylov subspace is
+        untouched. Default: 10; set to 0 to disable.
+    throw : bool, optional
+        If True, raise an error if the solver does not converge. Default: False.
+    weights : pytree of jax.Array, optional
+        Positive weights ``w`` with the same structure as ``b``. If given, all
+        residual norms (both the minimization and the convergence test) use
+        ``sqrt(sum(w * r**2))`` instead of the 2-norm, and ``rtol``/``atol`` and the
+        returned residual refer to this norm. Transposed solves (e.g. for
+        derivatives) use the dual weights ``1/w``. ``outer_Av`` is given and
+        returned in the unweighted residual space. Default: unweighted.
+
+    Returns
+    -------
+    x : pytree of ndarray
+        The solution found.
+    iters : int
+        Number of iterations.
+    nmv : int
+        Number of matrix vector products.
+    residual : float
+        Residual of the linear system.
+    success : jax.Array
+        Boolean flag, True if the solver converged to the requested tolerance,
+        False if it hit ``maxiter`` first.
+    outer_v, outer_Av : pytree of jax.Array
+        Vectors and corresponding matrix-vector products, used to augment the Krylov
+        subspace, and carried between inner GMRES iterations.
+
+    Notes
+    -----
+    The LGMRES algorithm [1]_ [2]_ is designed to avoid the
+    slowing of convergence in restarted GMRES, due to alternating
+    residual vectors. Typically, it often outperforms GMRES(m) of
+    comparable memory requirements by some measure, or at least is not
+    much worse.
+
+    Another advantage in this algorithm is that you can supply it with
+    'guess' vectors in the `outer_v` argument that augment the Krylov
+    subspace. If the solution lies close to the span of these vectors,
+    the algorithm converges faster. This can be useful if several very
+    similar matrices need to be inverted one after another, such as in
+    Newton-Krylov iteration where the Jacobian matrix often changes
+    little in the nonlinear steps.
+
+    References
+    ----------
+    .. [1] A.H. Baker and E.R. Jessup and T. Manteuffel, "A Technique for
+             Accelerating the Convergence of Restarted GMRES", SIAM J. Matrix
+             Anal. Appl. 26, 962 (2005).
+    .. [2] A.H. Baker, "On Improving the Performance of the Linear Solver
+             restarted GMRES", PhD thesis, University of Colorado (2003).
+
+    """
+    if ML is None:
+        ML = lx.IdentityLinearOperator(A.out_structure())
+    if MR is None:
+        MR = lx.IdentityLinearOperator(A.in_structure())
+
+    if x0 is None:
+        x = tree_map(jnp.zeros_like, A.in_structure())
+    else:
+        x = x0
+
+    if weights is None:
+        sqrtw = sqrtw_t = None
+    else:
+        sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
+        sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
+
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, outer_v, outer_Av, sqrtw, msg):
+        matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
+            matvec, b, lpsolve, rpsolve, sqrtw
+        )
+        xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
+            matvec,
+            b,
+            x,
+            lpsolve,
+            rpsolve,
+            rtol,
+            atol,
+            maxiter,
+            m,
+            k,
+            outer_v,
+            None if outer_Av is None else scale(outer_Av),
+            verbose,
+            print_every,
+            print_every_inner,
+            refine,
+            flexible,
+            stabilize_every,
+        )
+        if throw:
+            xsol = eqx.error_if(xsol, ~success, msg)
+        return xsol, (j, nmv, beta, success, ov, unscale(oAv))
+
+    def _solve(A, b):
+        return _solve_weighted(
+            A,
+            b,
+            ML.mv,
+            MR.mv,
+            outer_v,
+            outer_Av,
+            sqrtw,
+            "LGMRES forward solve did not converge",
+        )
+
+    def _transpose_solve(At, b):
+        # The augmentation vectors are used as a basis together with their images
+        # outer_Av = A outer_v, which are substituted for the operator application
+        # rather than recomputed. Those images are wrong for A^T, so the transposed
+        # system is solved without augmentation rather than with a basis whose Arnoldi
+        # relation doesn't hold.
+        return _solve_weighted(
+            At,
+            b,
+            ML.transpose().mv,
+            MR.transpose().mv,
+            None,
+            None,
+            sqrtw_t,
+            "LGMRES tangent solve did not converge",
+        )
+
+    # custom_linear_solve is unannotated and pyright can infer NoReturn for it
+    x, (j_outer, nmv, res, success, outer_v, outer_Av) = cast(
+        Any,
+        jax.lax.custom_linear_solve(
+            A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
+        ),
+    )
+    return x, j_outer, nmv, res, success, outer_v, outer_Av
+
+
+def _lgmres_solve(
+    matvec,
+    b,
+    x,
+    lpsolve,
+    rpsolve,
+    rtol,
+    atol,
+    maxiter,
+    m,
+    k,
+    outer_v,
+    outer_Av,
+    verbose,
+    print_every,
+    print_every_inner,
+    refine,
+    flexible,
+    stabilize_every,
+):
+    print_every = jnp.asarray(print_every)
+    print_every = jnp.where(print_every == 0, jnp.inf, print_every)
+    print_every_inner = jnp.asarray(print_every_inner)
+    print_every_inner = jnp.where(print_every_inner == 0, jnp.inf, print_every_inner)
+
+    b_norm = _norm(b)
+    tol = jnp.maximum(atol, rtol * b_norm)
+    ptol_max_factor = 1.0
+    r = _sub(b, matvec(x))
+    dtype = jnp.result_type(*tree_leaves(r))
+    eps = jnp.finfo(dtype).eps
+    nmv = 1
+    beta = _norm(r)
+    if verbose:
+        _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="LGMRES  ")
+
+    outer_v, outer_Av, lv, nmv = _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv)
+
+    def lgmres_cond(carry):
+        j_outer, nmv, x, r, beta, _, _, _, _ = carry
+        return jnp.logical_and(j_outer < maxiter, beta > tol)
+
+    def lgmres_loop(carry):
+        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor = carry
+
+        # -- inner LGMRES iteration
+        v0 = lpsolve(r)
+        inner_res_0 = _norm(v0)
+
+        v0 = _mul(safediv(jnp.array(1.0), inner_res_0, fill=jnp.array(1.0)), v0)
+        ptol = jnp.minimum(ptol_max_factor, safediv(tol, beta, fill=jnp.array(1.0)))
+
+        H, B, V, Z, y, j_inner, nmv_inner, pres, breakdown, res_arr, dx = _fgmres(
+            matvec,
+            v0=v0,
+            m=m,
+            k=0,
+            lpsolve=lpsolve,
+            rpsolve=rpsolve,
+            atol=ptol,
+            outer_v=outer_v,
+            outer_Av=outer_Av,
+            lv=lv,
+            verbose=verbose,
+            print_every=print_every_inner,
+            flexible=flexible,
+            stabilize_every=stabilize_every,
+            res_scale=inner_res_0 / b_norm,
+            return_increment=True,
+        )
+        y *= inner_res_0
+        nmv += nmv_inner
+
+        # Inner loop tolerance control
+        ptol_max_factor = jnp.where(
+            pres > ptol,
+            jnp.minimum(1.0, 1.5 * ptol_max_factor),
+            jnp.maximum(eps, 0.25 * ptol_max_factor),
+        )
+
+        # -- GMRES terminated: eval solution
+        # dx = Z y; _fgmres returns it for the unscaled y.
+        dx = _mul(inner_res_0, dx)
+        # ax = V H y
+        ax = tree_map(lambda x: _dot(x, _dot(H.T, y)), V)
+
+        # -- Apply step
+        x1 = _add(x, dx)
+        r1 = _sub(b, matvec(x1))
+        nmv += 1
+        beta1 = _norm(r1)
+
+        def _refine(dx, ax, x, r, x1, r1, nmv, beta):
+            # if the inner solve suffers from roundoff error, u may not actually
+            # decrease the residual. In that case we do a simple line search
+            # to damp the update and ensure the residual doesn't increase.
+            Adx = matvec(dx)
+            damp = jnp.linalg.lstsq(Adx[:, None], r)[0][0]
+            dx = damp * dx
+            ax = damp * ax
+            x = _add(x, dx)
+            r = _sub(b, matvec(x))
+            beta = _norm(r)
+            nmv += 1
+            return dx, ax, x, r, nmv, beta
+
+        def _norefine(dx, ax, x, r, x1, r1, nmv, beta):
+            return dx, ax, x1, r1, nmv, beta
+
+        dx, ax, x, r, nmv, beta = _cond_any(
+            refine & (beta1 > beta),
+            _refine,
+            _norefine,
+            dx,
+            ax,
+            x,
+            r,
+            x1,
+            r1,
+            nmv,
+            beta1,
+        )
+
+        # -- Store LGMRES augmentation vectors
+        nx = _norm(dx)
+        nxinv = safediv(jnp.array(1.0), nx)
+        outer_v = tree_map(_roll_prepend, outer_v, _mul(nxinv, dx))
+        outer_Av = tree_map(_roll_prepend, outer_Av, _mul(nxinv, ax))
+        lv = jnp.minimum(lv + 1, k)
+
+        if verbose:
+            _maybe_print(
+                jnp.logical_and(
+                    print_every < jnp.inf, jnp.mod(j_outer, print_every) == 0
+                ),
+                j_outer + 1,
+                safediv(beta, b_norm),
+                pre="LGMRES  ",
+            )
+
+        return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor
+
+    carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor)
+    carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
+    j_outer, nmv, x, r, beta, outer_v, outer_Av, _, _ = carry
+    success = beta <= tol
+
+    return x, (j_outer, nmv, beta, success, outer_v, outer_Av)

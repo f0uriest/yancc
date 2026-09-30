@@ -2,18 +2,18 @@
 Loading Magnetic Fields
 ============================
 
-Every yancc solve starts with a :class:`~yancc.field.Field` representing
+Every yancc solve starts with a :class:`~yancc.Field` representing
 :math:`B(\theta, \zeta)` on a single flux surface. The class has five
 constructors covering the equilibrium formats yancc supports:
 
 ================================================== ================================================================
 Constructor                                        Source
 ================================================== ================================================================
-:meth:`~yancc.field.Field.from_desc`               In-memory ``desc.equilibrium.Equilibrium`` object
-:meth:`~yancc.field.Field.from_vmec`               VMEC ``wout`` netCDF file
-:meth:`~yancc.field.Field.from_booz_xform`         BOOZ_XFORM ``boozmn`` netCDF file
-:meth:`~yancc.field.Field.from_ipp_bc`             IPP ``.bc`` (Boozer coordinate) file
-:meth:`~yancc.field.Field.from_boozer`             Raw Boozer-coordinate data, no file
+:meth:`~yancc.Field.from_desc`                     In-memory ``desc.equilibrium.Equilibrium`` object
+:meth:`~yancc.Field.from_vmec`                     VMEC ``wout`` netCDF file
+:meth:`~yancc.Field.from_booz_xform`               BOOZ_XFORM ``boozmn`` netCDF file
+:meth:`~yancc.Field.from_ipp_bc`                   IPP ``.bc`` (Boozer coordinate) file
+:meth:`~yancc.Field.from_boozer`                   Raw Boozer-coordinate data, no file
 ================================================== ================================================================
 
 The shared invocation is::
@@ -35,7 +35,7 @@ flux:
 
 If your input is :math:`s`, pass ``rho = np.sqrt(s)``. If it is the
 dimensional minor radius :math:`r`, pass ``rho = r / a_minor``. yancc never
-takes :math:`s` or :math:`r` directly. See :ref:`radial-coordinate` for
+takes :math:`s` or :math:`r` directly. See :ref:`/quickstart.ipynb#radial-coordinate-convention` for
 why this matters for gradients as well.
 
 Surface resolution
@@ -77,7 +77,7 @@ The most direct path if your equilibrium is already in DESC:
 .. code-block:: python
 
     import desc
-    from yancc.field import Field
+    from yancc import Field
 
     eq = desc.examples.get("NCSX")
     field = Field.from_desc(eq, rho=0.5, ntheta=17, nzeta=37)
@@ -134,7 +134,7 @@ Direct Boozer construction (``from_boozer``)
 --------------------------------------------
 
 If your data is already in Boozer coordinates but not in a format yancc
-reads, use :meth:`~yancc.field.Field.from_boozer` directly:
+reads, use :meth:`~yancc.Field.from_boozer` directly:
 
 .. code-block:: python
 
@@ -166,6 +166,6 @@ Tips
 - **Multi-surface scans.** Call the constructor once per surface; there is
   no built-in iterator. Cost per Field is small, so caching all surfaces
   upfront is fine.
-- **Resampling.** :meth:`~yancc.field.Field.resample` returns a new Field
+- **Resampling.** :meth:`~yancc.Field.resample` returns a new Field
   on a different ``ntheta, nzeta`` without re-reading the source file —
   use this for spatial-grid convergence studies.

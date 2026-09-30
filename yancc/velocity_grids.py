@@ -20,7 +20,7 @@ def _default_weight(x: jax.Array):
     return jnp.exp(-(x**2))
 
 
-default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
+_default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
     weight=_default_weight,
     domain=(0, jnp.inf),
     ak=jnp.array(
@@ -126,7 +126,7 @@ default_xrec = orthax.recurrence.TabulatedRecurrenceRelation(
 )
 
 
-class AbstractSpeedGrid(eqx.Module):
+class _AbstractSpeedGrid(eqx.Module):
     """Abstract base class for speed grids."""
 
     nx: int = eqx.field(static=True)
@@ -140,7 +140,7 @@ class AbstractSpeedGrid(eqx.Module):
     gauge_idx: jax.Array
 
 
-class MonoenergeticSpeedGrid(AbstractSpeedGrid):
+class _MonoenergeticSpeedGrid(_AbstractSpeedGrid):
     """Speed grid for monoenergetic problem, ie single speed.
 
     Parameters
@@ -149,7 +149,7 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
         Normalized speed being considered.
     """
 
-    def __init__(self, x: jax.Array):
+    def __init__(self, x: ArrayLike):
         x = jnp.asarray(x)
         assert x.size == 1
         self.nx = 1
@@ -163,20 +163,16 @@ class MonoenergeticSpeedGrid(AbstractSpeedGrid):
         self.gauge_idx = jnp.array([0])
 
 
-class MaxwellSpeedGrid(AbstractSpeedGrid):
+class MaxwellSpeedGrid(_AbstractSpeedGrid):
     r"""Grid for speed variable :math:`x = v/v_{th}`.
 
-    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, x_{max}]` with the
-    weight function :math:`x^k \exp(-x^2)`
+    Uses Maxwell Polynomials, which are orthogonal on :math:`[0, \infty)` with the
+    weight function :math:`\exp(-x^2)`
 
     Parameters
     ----------
     nx : int
         Number of grid points.
-    k : int, optional
-        Power of x in weight function
-    xmax : float, optional
-        Upper bound for orthogonality inner product.
 
     """
 
@@ -192,11 +188,11 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
     D2x_pseudospectral: jax.Array
     gauge_idx: jax.Array
 
-    def __init__(self, nx, **kwargs):
+    def __init__(self, nx: int):
         assert nx >= 2, "MaxwellSpeedGrid requires nx >= 2"
         self.nx = nx
         if nx < 20:
-            self.xrec = default_xrec
+            self.xrec = _default_xrec
         else:
             self.xrec = orthax.recurrence.generate_recurrence(
                 weight=_default_weight,
@@ -253,12 +249,11 @@ class MaxwellSpeedGrid(AbstractSpeedGrid):
         self.D2x = jax.jacfwd(_d2xfun)(self.x)
         self.D2x_pseudospectral = self.xvander @ self.D2x @ self.xvander_inv
 
-        gauge_idx = kwargs.get("gauge_idx", None)
-        if gauge_idx is None:
-            gauge_idx = jnp.atleast_1d(jnp.argsort(jnp.abs(x - 1))[:2])
-        self.gauge_idx = jnp.sort(gauge_idx)
+        # the equations at these points are replaced to fix the gauge freedom in
+        # density and energy
+        self.gauge_idx = jnp.sort(jnp.argsort(jnp.abs(x - 1))[:2])
 
-    def resample(self, nx):
+    def resample(self, nx: int) -> "MaxwellSpeedGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nx)
 
@@ -292,12 +287,12 @@ class AbstractPitchAngleGrid(ABC, eqx.Module):
     wxi: jax.Array
 
     @abstractmethod
-    def resample(self, nalpha) -> "AbstractPitchAngleGrid":
+    def resample(self, nalpha: int) -> "AbstractPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
 
 
-class LegendrePitchAngleGrid(AbstractPitchAngleGrid):
-    """Grid for pitch angle variable xi=v||/v.
+class _LegendrePitchAngleGrid(AbstractPitchAngleGrid):
+    r"""Grid for pitch angle variable :math:`\xi = v_{||} / v`.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
     function 1.
@@ -311,13 +306,13 @@ class LegendrePitchAngleGrid(AbstractPitchAngleGrid):
 
     xirec: orthax.recurrence.AbstractRecurrenceRelation
 
-    def __init__(self, nalpha):
+    def __init__(self, nalpha: int):
         self.nalpha = nalpha
         self.xirec = orthax.recurrence.Legendre()
         self.xi, self.wxi = orthax.orthgauss(nalpha, self.xirec)
         self.alpha = -jnp.acos(self.xi)
 
-    def resample(self, nalpha):
+    def resample(self, nalpha: int) -> "_LegendrePitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
 
@@ -339,17 +334,16 @@ class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
 
     map_func: _MapFunction
 
-    def __init__(self, nalpha, map_func):
-        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
+    def __init__(self, nalpha: int, map_func: Callable):
         self.nalpha = nalpha
         alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
         self.map_func = _MapFunction(map_func)
 
         self.alpha = self.map_func(alpha)
         self.xi = -jnp.cos(self.alpha)
-        self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 
-    def resample(self, nalpha):
+    def resample(self, nalpha: int) -> "NonUniformPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha, self.map_func.f)
 
@@ -370,13 +364,13 @@ class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
 
     """
 
-    def __init__(self, nalpha):
+    def __init__(self, nalpha: int):
         super().__init__(nalpha, _linear_map)
         # uniform in a means chebyshev nodes in xi, so we can do better than
         # newton-cotes: fejer type 1 quadrature
-        self.wxi = fejer_type_1_weights(nalpha)
+        self.wxi = _fejer_type_1_weights(nalpha)
 
-    def resample(self, nalpha):
+    def resample(self, nalpha: int) -> "UniformPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
 
@@ -406,7 +400,6 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
     c: jax.Array
 
     def __init__(self, nalpha: int, c: Float[ArrayLike, ""]):
-        nalpha = eqx.error_if(nalpha, nalpha % 2 == 0, "nalpha must be odd")
         c = jnp.asarray(c)
         c = eqx.error_if(c, jnp.logical_or(c > 1, c < 0), "c must be between [0,1]")
         # error_if loses the static type, so reassert it (c is an array post-asarray)
@@ -419,14 +412,14 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
 
         self.alpha = self.map_func(alpha)
         self.xi = -jnp.cos(self.alpha)
-        self.wxi = composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 
-    def resample(self, nalpha):
+    def resample(self, nalpha: int) -> "QuadraticPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha, self.c)
 
 
-def composite_newton_cotes_weights(
+def _composite_newton_cotes_weights(
     x: jax.Array, order: int, global_limits: tuple | None = None
 ):
     """Computes composite quadrature weights.
@@ -499,7 +492,7 @@ def composite_newton_cotes_weights(
     return jnp.concatenate(weights)
 
 
-def fejer_type_1_weights(n):
+def _fejer_type_1_weights(n):
     """Fejer (chebyshev) type 1 quadrature."""
     length = n // 2
     r = n - length

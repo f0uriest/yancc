@@ -1,6 +1,5 @@
 """Tests for computing Rosenbluth potentials."""
 
-import jax
 import jax.numpy as jnp
 import mpmath
 import numpy as np
@@ -8,7 +7,6 @@ import orthax
 import pytest
 import sympy
 
-from yancc.utils import Gammainc, Gammaincc, lGammainc, lGammaincc
 from yancc.velocity_grids import UniformPitchAngleGrid
 
 from .conftest import (
@@ -73,10 +71,10 @@ def test_rosenbluth_derivatives(potential_quad, l, k):
     np.testing.assert_allclose(d2Gfd, d2Gan, rtol=1e-2)
 
 
-def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
-    """Test for potentials using incomplete gamma functions."""
+def test_rosenbluth_quad_vs_gauss_legendre(potential_quad, potential_gauss_legendre):
+    """Test fixed Gauss-Legendre potentials against adaptive quadrature."""
     R1 = potential_quad
-    R2 = potential_gamma
+    R2 = potential_gauss_legendre
     # a,a
     np.testing.assert_allclose(
         R1.Hxlk[0, 0],
@@ -155,161 +153,9 @@ def test_rosenbluth_quad_vs_gamma(potential_quad, potential_gamma):
     )
 
 
-@np.vectorize
-def mplGammainc(s, x, cast=True):
-    f = mpmath.gammainc(s, 0, x)
-    s = mpmath.sign(f)
-    lf = mpmath.log(mpmath.fabs(f))
-    if cast:
-        return int(s), float(lf)
-    return s, lf
-
-
-@np.vectorize
-def mplGammaincc(s, x, cast=True):
-    f = mpmath.gammainc(s, x, mpmath.inf)
-    s = mpmath.sign(f)
-    lf = mpmath.log(mpmath.fabs(f))
-    if cast:
-        return int(s), float(lf)
-    return s, lf
-
-
-@np.vectorize
-def mpdlGammainc(s, x):
-    h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
-    f1 = mplGammainc(s, x + h, False)[1]
-    f2 = mplGammainc(s, x - h, False)[1]
-    return 0, float((f1 - f2) / h / 2)
-
-
-@np.vectorize
-def mpdlGammaincc(s, x):
-    h = mpmath.mpf(1e-16)  # can use super small values here in extended precision
-    f1 = mplGammaincc(s, x + h, False)[1]
-    f2 = mplGammaincc(s, x - h, False)[1]
-    return 0, float((f1 - f2) / h / 2)
-
-
-def test_lower_Gamma():
-    """Test for lower incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = l / 2 + k / 2 + 5 / 2  # for I_4
-
-    s1, f1 = lGammainc(s, x0**2)
-    s2, f2 = mplGammainc(s, x0**2)
-    rtol = 1e-12
-    atol = 1e-12
-    mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
-    )
-    assert np.all(s1 == s2)
-
-
-def test_lower_Gamma_derivative():
-    """Test derivative rule for lower incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = l / 2 + k / 2 + 5 / 2  # for I_4
-
-    s, x0 = np.broadcast_arrays(s, x0)
-
-    sf, ff = jnp.vectorize(jax.jacfwd(lGammainc, 1))(s, x0**2)
-    sr, fr = jnp.vectorize(jax.jacrev(lGammainc, 1))(s, x0**2)
-    s2, f2 = mpdlGammainc(s, x0**2)
-    rtol = 1e-12
-    atol = 1e-12
-    mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
-    )
-    mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
-    )
-    assert np.all(sf == s2)
-    assert np.all(sr == s2)
-
-
-def test_upper_Gamma():
-    """Test for upper incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = -l / 2 + k / 2 + 1  # for I_1
-
-    s, x0 = np.broadcast_arrays(s, x0)
-
-    s1, f1 = lGammaincc(s, x0**2)
-    s2, f2 = mplGammaincc(s, x0**2)
-    rtol = 5e-8
-    atol = 5e-8
-    mask = np.where(~np.isclose(f1, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        f1, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
-    )
-    assert np.all(s1 == s2)
-
-
-def test_upper_Gamma_derivative():
-    """Test derivative rule for upper incomplete gamma."""
-    l = np.arange(7)[:, None, None]
-    k = np.arange(11)[None, :, None]
-    x0 = np.logspace(-4, 3, 50)[None, None, :]
-    s = -l / 2 + k / 2 + 1  # for I_1
-
-    s, x0 = np.broadcast_arrays(s, x0)
-
-    sf, ff = jnp.vectorize(jax.jacfwd(lGammaincc, 1))(s, x0**2)
-    sr, fr = jnp.vectorize(jax.jacrev(lGammaincc, 1))(s, x0**2)
-    s2, f2 = mpdlGammaincc(s, x0**2)
-    rtol = 5e-7
-    atol = 5e-7
-    mask = np.where(~np.isclose(ff, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        ff, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
-    )
-    mask = np.where(~np.isclose(fr, f2, rtol=rtol, atol=atol))
-    np.testing.assert_allclose(
-        fr, f2, rtol=rtol, atol=atol, err_msg=f"s {s[mask]}, x={x0[mask] ** 2}"
-    )
-    assert np.all(sf == s2)
-    assert np.all(sr == s2)
-
-
-@np.vectorize
-def mpGammainc(s, x):
-    return float(mpmath.gammainc(s, 0, x))
-
-
-@np.vectorize
-def mpGammaincc(s, x):
-    return float(mpmath.gammainc(s, x, mpmath.inf))
-
-
-def test_Gammainc_Gammaincc_values():
-    """The non-log wrappers Gammainc/Gammaincc (sgn * exp(lGamma))
-    must reproduce the actual incomplete-gamma values from mpmath, including
-    negative s. Range kept moderate so values don't under/overflow.
-    """
-    s = np.array([-1.5, -0.5, 0.5, 1.0, 2.5, 5.0])[:, None]
-    x = np.array([0.1, 0.7, 1.3, 5.0, 30.0])[None, :]
-
-    np.testing.assert_allclose(
-        np.asarray(Gammainc(s, x)), mpGammainc(s, x), rtol=1e-10, atol=1e-300
-    )
-    np.testing.assert_allclose(
-        np.asarray(Gammaincc(s, x)), mpGammaincc(s, x), rtol=1e-7, atol=1e-300
-    )
-
-
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_single_species_potentials_vs_sympy(l, potential_gamma):
-    potentials = potential_gamma
+def test_single_species_potentials_vs_sympy(l, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     speedgrid = potentials.speedgrid
     pitchgrid = UniformPitchAngleGrid(41)
 
@@ -364,8 +210,8 @@ def test_single_species_potentials_vs_sympy(l, potential_gamma):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_2_species_potentials_vs_sympy(l, potential_gamma):
-    potentials = potential_gamma
+def test_2_species_potentials_vs_sympy(l, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     speedgrid = potentials.speedgrid
     species = potentials.species
     pitchgrid = UniformPitchAngleGrid(41)

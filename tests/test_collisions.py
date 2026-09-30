@@ -6,7 +6,7 @@ import orthax
 import pytest
 import sympy
 
-from yancc.collisions import (
+from yancc._collisions import (
     EnergyScattering,
     FieldPartCD,
     FieldPartCG,
@@ -17,7 +17,7 @@ from yancc.collisions import (
     PitchAngleScattering,
     RosenbluthPotentials,
 )
-from yancc.species import JOULE_PER_EV, GlobalMaxwellian, Hydrogen, gamma_ab
+from yancc.species import _JOULE_PER_EV, GlobalMaxwellian, Hydrogen, _gamma_ab
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 from .conftest import (
@@ -29,6 +29,26 @@ from .conftest import (
     _eval_f_sampled,
     _speed_subset,
 )
+
+
+def _CE_flux_form_nodal(CE, speedgrid, f):
+    """Pointwise C_E f from the operator's flux-form coefficients, shape (ns, nx).
+
+    The sign is that of the physical operator; ``mv`` returns its negative, as the
+    collision operator enters the DKE with a minus sign.
+
+    EnergyScattering is assembled in weak form, so its action is the projection of
+    C_E f onto the speed basis rather than C_E f at the nodes. Its coefficients are the
+    exact continuum ones, so they are checked against the analytic operator by applying
+    them pointwise with the grid's spectral derivatives, which are exact for f in the
+    speed basis.
+    """
+    f = np.atleast_2d(f)
+    return (
+        CE.coeff2 * (f @ speedgrid.D2x_pseudospectral.T)
+        + CE.coeff1 * (f @ speedgrid.Dx_pseudospectral.T)
+        + CE.coeff0 * f
+    )
 
 
 def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
@@ -46,7 +66,7 @@ def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
     CEaa = _compute_CEab_sympy(Fa, fa, v, va, va, ma, ma, na, Gamma_aa)
 
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
 
     subs = {
         va: species[0].v_thermal,
@@ -58,12 +78,7 @@ def test_CE_single_species_vs_sympy(dummy_field, xigrid, xgrid, species1):
     CEsympy = _eval_f(CEaa, v, speedgrid.x * species[0].v_thermal, subs)
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
 
-    f = np.ones((1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
-    f[0] *= ffa[:, None, None, None]
-
-    CEjax = -CE.mv(f)[
-        0, :, 0, 0, 0
-    ]  # collision operator has a minus sign in overall DKE
+    CEjax = _CE_flux_form_nodal(CE, speedgrid, ffa)[0]
 
     np.testing.assert_allclose(CEjax, CEsympy)
 
@@ -100,18 +115,18 @@ def test_CE_2_species_vs_sympy(dummy_field, xigrid, xgrid, species2):
     CEbb = _compute_CEab_sympy(Fb, fb, v, vtb, vtb, mb, mb, nb, Gamma_bb)
 
     CE = EnergyScattering(field, pitchgrid, speedgrid, species)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
 
     subs = {
         na: species[0].density,
         nb: species[1].density,
         ma: species[0].species.mass,
         mb: species[1].species.mass,
-        Ta: species[0].temperature * JOULE_PER_EV,
-        Tb: species[1].temperature * JOULE_PER_EV,
+        Ta: species[0].temperature * _JOULE_PER_EV,
+        Tb: species[1].temperature * _JOULE_PER_EV,
         Gamma_aa: gamma_aa_jax,
         Gamma_ab: gamma_ab_jax,
         Gamma_ba: gamma_ba_jax,
@@ -128,12 +143,9 @@ def test_CE_2_species_vs_sympy(dummy_field, xigrid, xgrid, species2):
 
     ffa = _eval_f(fa, v, speedgrid.x * species[0].v_thermal, subs)
     ffb = _eval_f(fb, v, speedgrid.x * species[1].v_thermal, subs)
-    f = np.ones((2, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta))
-    f[0] *= ffa[:, None, None, None]
-    f[1] *= ffb[:, None, None, None]
-    CE_jax = -CE.mv(f)
-    CEa_jax = CE_jax[0, :, 0, 0, 0]
-    CEb_jax = CE_jax[1, :, 0, 0, 0]
+    CE_jax = _CE_flux_form_nodal(CE, speedgrid, np.stack([ffa, ffb]))
+    CEa_jax = CE_jax[0]
+    CEb_jax = CE_jax[1]
 
     np.testing.assert_allclose(CEa_jax, CEa_sympy, rtol=1e-10)
     np.testing.assert_allclose(CEb_jax, CEb_sympy, rtol=1e-10)
@@ -154,7 +166,7 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     fa = (1 + x) * sympy.exp(-(x**2))
     CDaa = _compute_CDab_sympy(Fa, fa, ma, ma, Gamma_aa)
 
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
         pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
@@ -191,8 +203,8 @@ def test_CD_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 
 
 @pytest.mark.parametrize("l", [0, 1, 2, 3])
-def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -216,17 +228,17 @@ def test_CD_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
 
     CD = FieldPartCD(field, pitchgrid, speedgrid, species, potentials)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
     subs = {
         na: float(species[0].density),
         nb: float(species[1].density),
         ma: float(species[0].species.mass),
         mb: float(species[1].species.mass),
-        Ta: float(species[0].temperature * JOULE_PER_EV),
-        Tb: float(species[1].temperature * JOULE_PER_EV),
+        Ta: float(species[0].temperature * _JOULE_PER_EV),
+        Tb: float(species[1].temperature * _JOULE_PER_EV),
         Gamma_aa: float(gamma_aa_jax),
         Gamma_ab: float(gamma_ab_jax),
         Gamma_ba: float(gamma_ba_jax),
@@ -282,7 +294,7 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     fa = (1 + x) * sympy.exp(-(x**2))
     CHaa = _compute_CHab_sympy(Fa, fa, l, v, va, va, ma, ma, Gamma_aa)
 
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
     CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
         pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
@@ -321,8 +333,8 @@ def test_CH_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -346,17 +358,17 @@ def test_CH_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
 
     CH = FieldPartCH(field, pitchgrid, speedgrid, species, potentials)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
     subs = {
         na: float(species[0].density),
         nb: float(species[1].density),
         ma: float(species[0].species.mass),
         mb: float(species[1].species.mass),
-        Ta: float(species[0].temperature * JOULE_PER_EV),
-        Tb: float(species[1].temperature * JOULE_PER_EV),
+        Ta: float(species[0].temperature * _JOULE_PER_EV),
+        Tb: float(species[1].temperature * _JOULE_PER_EV),
         Gamma_aa: float(gamma_aa_jax),
         Gamma_ab: float(gamma_ab_jax),
         Gamma_ba: float(gamma_ba_jax),
@@ -412,7 +424,7 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
     fa = (1 + x) * sympy.exp(-(x**2))
     CGaa = _compute_CGab_sympy(Fa, fa, l, v, va, va, Gamma_aa)
 
-    gamma_aa_jax = gamma_ab(species[0], species[0])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
     CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
     Txi = orthax.orthvander(
         pitchgrid.xi, potentials.legendregrid.nalpha - 1, potentials.legendregrid.xirec
@@ -450,8 +462,8 @@ def test_CG_single_species_vs_sympy(l, dummy_field, xigrid, potentials1):
 # Subset of l values: single-species variant exercises l=[0,1,2,3];
 # the 2-species version only needs to verify cross-species coupling.
 @pytest.mark.parametrize("l", [0, 2])
-def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
-    potentials = potential_gamma
+def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gauss_legendre):
+    potentials = potential_gauss_legendre
     field = dummy_field
     speedgrid = potentials.speedgrid
     pitchgrid = xigrid
@@ -475,17 +487,17 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
     fb = (4 + xb - 2 * xb**2) * sympy.exp(-(xb**2))
 
     CG = FieldPartCG(field, pitchgrid, speedgrid, species, potentials)
-    gamma_aa_jax = gamma_ab(species[0], species[0])
-    gamma_ab_jax = gamma_ab(species[0], species[1])
-    gamma_ba_jax = gamma_ab(species[1], species[0])
-    gamma_bb_jax = gamma_ab(species[1], species[1])
+    gamma_aa_jax = _gamma_ab(species[0], species[0])
+    gamma_ab_jax = _gamma_ab(species[0], species[1])
+    gamma_ba_jax = _gamma_ab(species[1], species[0])
+    gamma_bb_jax = _gamma_ab(species[1], species[1])
     subs = {
         na: float(species[0].density),
         nb: float(species[1].density),
         ma: float(species[0].species.mass),
         mb: float(species[1].species.mass),
-        Ta: float(species[0].temperature * JOULE_PER_EV),
-        Tb: float(species[1].temperature * JOULE_PER_EV),
+        Ta: float(species[0].temperature * _JOULE_PER_EV),
+        Tb: float(species[1].temperature * _JOULE_PER_EV),
         Gamma_aa: float(gamma_aa_jax),
         Gamma_ab: float(gamma_ab_jax),
         Gamma_ba: float(gamma_ba_jax),
@@ -528,7 +540,11 @@ def test_CG_2_species_vs_sympy(l, dummy_field, xigrid, potential_gamma):
 
 def test_verify_collision_null_single_species(dummy_field):
     """Check the null space of single species collision operator."""
-    speedgrid = MaxwellSpeedGrid(5)
+    # C_E is assembled in weak form, so its cancellation against C_L and C_F on the
+    # momentum and energy invariants holds only to the speed resolution. The speed grid
+    # is fine enough here for that residual to be small relative to the terms that
+    # cancel and for the three null modes to be resolved in the spectrum.
+    speedgrid = MaxwellSpeedGrid(15)
     pitchgrid = UniformPitchAngleGrid(129)
     field = dummy_field
     nt, nz = field.ntheta, field.nzeta
@@ -543,6 +559,11 @@ def test_verify_collision_null_single_species(dummy_field):
     C = FokkerPlanckLandau(field, pitchgrid, speedgrid, [ions1], potentials=R)
     shape = (1, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
     x = speedgrid.x
+
+    def term_scale(f):
+        """Largest magnitude among the collision terms that must cancel on f."""
+        return max(float(np.abs(op.mv(f.flatten())).max()) for op in (C.CL, C.CE, C.CF))
+
     xi = pitchgrid.xi
 
     # C acting on maxwellian = 0
@@ -557,9 +578,9 @@ def test_verify_collision_null_single_species(dummy_field):
     ]
     f = np.ones(shape) * ff
     cf = C.mv(f.flatten()).reshape(f.shape)
-    # need looser tolerance here bc finite differences in pitch angle are less
-    # accurate than spectral derivatives in speed
-    np.testing.assert_allclose(cf, 0, atol=1e-3)
+    # relative to the cancelling terms: the weak-form speed operator and finite
+    # differences in pitch angle both leave a resolution-dependent residual
+    np.testing.assert_allclose(cf, 0, atol=1e-4 * term_scale(f))
 
     # C acting on v^2*maxwellian = 0
     ff = x**2 * np.exp(-(x**2))
@@ -568,13 +589,13 @@ def test_verify_collision_null_single_species(dummy_field):
         * ff[None, :, None, None, None]
     )
     cf = C.mv(f.flatten()).reshape(f.shape)
-    np.testing.assert_allclose(cf, 0, atol=1e-7)
+    np.testing.assert_allclose(cf, 0, atol=1e-2 * term_scale(f))
 
     es = np.linalg.eigvals(C.as_matrix())
     # should have purely real eigvals
-    np.testing.assert_allclose(es.imag, 0, atol=1e-7)
+    np.testing.assert_allclose(np.imag(es), 0, atol=1e-7)
     # should all be positive, within fudge factor for zeros
-    np.testing.assert_array_less(-1e-14 * es.real.max(), es.real)
+    np.testing.assert_array_less(-1e-14 * np.real(es).max(), np.real(es))
     # should have a null space of dimension 3*nt*nz
     # maxwellian, v*maxwellian, v^2*maxwellian
     assert sum(np.abs(es) < 1e-14 * np.max(np.abs(es))) == 3 * nt * nz

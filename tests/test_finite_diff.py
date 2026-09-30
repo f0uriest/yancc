@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from yancc.finite_diff import (
+from yancc._finite_diff import (
     build_advection_matrix,
     build_lorentz_matrix,
     fd2,

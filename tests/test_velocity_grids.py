@@ -8,14 +8,14 @@ import pytest
 import quadax
 import scipy.integrate
 
-from yancc.misc import _d3v
+from yancc._misc import _d3v
 from yancc.velocity_grids import (
-    LegendrePitchAngleGrid,
     MaxwellSpeedGrid,
     NonUniformPitchAngleGrid,
     QuadraticPitchAngleGrid,
     UniformPitchAngleGrid,
-    composite_newton_cotes_weights,
+    _composite_newton_cotes_weights,
+    _LegendrePitchAngleGrid,
 )
 
 
@@ -122,9 +122,7 @@ def test_quadratic_pitch_node_packing(c):
 
 
 def test_quadratic_pitch_validation():
-    """Even na and out-of-range c should raise."""
-    with pytest.raises(Exception, match="nalpha must be odd"):
-        QuadraticPitchAngleGrid(30, 0.5)
+    """Out-of-range c should raise."""
     with pytest.raises(Exception, match="c must be between"):
         QuadraticPitchAngleGrid(31, 1.5)
     with pytest.raises(Exception, match="c must be between"):
@@ -190,13 +188,13 @@ def test_maxwell_speed_grid_resample():
 
 
 def test_legendre_pitch_grid_resample():
-    """LegendrePitchAngleGrid.resample returns a fresh grid of the
+    """_LegendrePitchAngleGrid.resample returns a fresh grid of the
     requested size.
     """
-    g = LegendrePitchAngleGrid(6)
+    g = _LegendrePitchAngleGrid(6)
     assert g.nalpha == 6
     g2 = g.resample(10)
-    assert isinstance(g2, LegendrePitchAngleGrid)
+    assert isinstance(g2, _LegendrePitchAngleGrid)
     assert g2.nalpha == 10
     assert g2.xi.shape == (10,)
 
@@ -240,10 +238,10 @@ def test_newton_cotes(order):
 
         f_uni = fun(xi_uni)
         f_non = fun(xi_non)
-        w_uni = composite_newton_cotes_weights(
+        w_uni = _composite_newton_cotes_weights(
             xi_uni, order=order, global_limits=(domain_xi[0], domain_xi[1])
         )
-        w_non = composite_newton_cotes_weights(
+        w_non = _composite_newton_cotes_weights(
             xi_non, order=order, global_limits=(domain_xi[0], domain_xi[1])
         )
         integral_uni = jnp.sum(f_uni * w_uni)
@@ -260,8 +258,10 @@ def test_newton_cotes(order):
 def test_composite_newton_cotes_default_limits():
     """Omitting global_limits uses the first/last sample points as the domain."""
     x = jnp.linspace(-1.0, 1.0, 13)
-    w_default = composite_newton_cotes_weights(x, order=2)
-    w_explicit = composite_newton_cotes_weights(x, order=2, global_limits=(x[0], x[-1]))
+    w_default = _composite_newton_cotes_weights(x, order=2)
+    w_explicit = _composite_newton_cotes_weights(
+        x, order=2, global_limits=(x[0], x[-1])
+    )
     np.testing.assert_allclose(w_default, w_explicit, atol=1e-12)
     # weights of a quadrature rule on [-1, 1] sum to the interval length.
     np.testing.assert_allclose(jnp.sum(w_default), 2.0, atol=1e-12)

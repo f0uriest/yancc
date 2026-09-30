@@ -21,7 +21,7 @@ magnetic equilibrium:
   more recently, MONKES [5]_;
 
 Both problems are linear and time-independent: each call to
-:func:`~yancc.solve.solve_dke` or :func:`~yancc.solve.solve_mdke` is a single
+:func:`~yancc.solve_dke` or :func:`~yancc.solve_mdke` is a single
 sparse linear solve.
 
 Coordinates
@@ -38,11 +38,11 @@ A flux surface is parameterized by arbitrary poloidal and toroidal angles
     \rho = \sqrt{\psi_t / \psi_{t,\mathrm{LCFS}}},
 
 i.e. the square root of normalized toroidal flux. **Every** radial input and
-output in yancc is in :math:`\rho` (see :ref:`radial-coordinate` in the
+output in yancc is in :math:`\rho` (see :ref:`/quickstart.ipynb#radial-coordinate-convention` in the
 quickstart for conversions from :math:`s` or :math:`r`).
 
 The on-surface grid sizes are ``ntheta`` and ``nzeta``, set when the
-:class:`~yancc.field.Field` is constructed.
+:class:`~yancc.Field` is constructed.
 
 Velocity space
 --------------
@@ -70,11 +70,11 @@ With these conventions the local Maxwellian for species :math:`s` is
                         e^{-x_s^2}.
 
 The pitch-angle grid has ``nalpha`` points on :math:`\alpha \in [0, \pi]`, either
-uniformly spaced (:class:`~yancc.velocity_grids.UniformPitchAngleGrid`) or
+uniformly spaced (:class:`~yancc.UniformPitchAngleGrid`) or
 concentrated near :math:`v_\parallel = 0` to resolve low-collisionality
-boundary layers (:class:`~yancc.velocity_grids.QuadraticPitchAngleGrid` and
-:class:`~yancc.velocity_grids.NonUniformPitchAngleGrid`). The speed
-grid (:class:`~yancc.velocity_grids.MaxwellSpeedGrid`) has ``nx`` collocation
+boundary layers (:class:`~yancc.QuadraticPitchAngleGrid` and
+:class:`~yancc.NonUniformPitchAngleGrid`). The speed
+grid (:class:`~yancc.MaxwellSpeedGrid`) has ``nx`` collocation
 nodes chosen as the roots of polynomials orthogonal under the Maxwellian
 weight :math:`e^{-x^2}` on :math:`[0, \infty)`; this is what makes a small
 ``nx`` (typically 5–8) sufficient to resolve thermal moments.
@@ -102,7 +102,7 @@ where :math:`\mathbf{b} = \mathbf{B}/B`, :math:`\mathbf{v}_E` is the
 flux-surface :math:`\mathbf{E} \times \mathbf{B}` drift driven by
 :math:`E_\rho`, and :math:`C_s` is the linearized Fokker–Planck collision
 operator including both test-particle and field-particle pieces, summed over
-all kinetic species and any additional :class:`~yancc.species.LocalMaxwellian`
+all kinetic species and any additional :class:`~yancc.LocalMaxwellian`
 ``background`` species.
 
 In terms of our chosen coordinates and field components this takes the form
@@ -122,7 +122,7 @@ Where the particle trajectories are given by:
 .. math::
     :label: sfincs_trajectories
 
-    \begin{align}
+    \begin{aligned}
     \dot{\theta} &= -\frac{v_{th,s} x_s \cos{(\alpha)} B^\theta}{B} + \frac{B_\zeta}{B^2\sqrt{g}}E_\rho \\
     \dot{\zeta} &= -\frac{v_{th,s} x_s \cos{(\alpha)} B^\zeta}{B} - \frac{B_\theta}{B^2\sqrt{g}}E_\rho \\
     \dot{\alpha} &= - \frac{\sin{(\alpha)}}{2 B^2} v_{th,s} x_s \Bigg( B^\theta \frac{\partial B}{\partial \theta}
@@ -130,32 +130,32 @@ Where the particle trajectories are given by:
     + \cos{(\alpha)} \sin{(\alpha)} \frac{1}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta}
     - B_\theta \frac{\partial B}{\partial \zeta} \Bigg) \\
     \dot{x}_s &= (1 + \cos^2{\alpha}) \frac{x_s}{2B^3 \sqrt{g}} E_\rho \Bigg( B_\zeta \frac{\partial B}{\partial \theta} - B_\theta \frac{\partial B}{\partial \zeta} \Bigg)
-    \end{align}
+    \end{aligned}
 
 And the collision operator terms are:
 
 .. math::
     :label: fp_collision_operator
 
-    \begin{align}
+    \begin{aligned}
     C_{L,ss'} &= \frac{\nu_{D,ss'}}{2 \sin \alpha} \frac{\partial}{\partial \alpha} \Bigg[\sin{\alpha} \frac{\partial f_{1,s}}{\partial \alpha}\Bigg] \\
     C_{E,ss'} &= \nu_{||,ss'}\Big[ \frac{v^2}{2} \frac{\partial^2 f_{1,s}}{\partial v^2} - \frac{v^2}{v_{th,s'}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) v \frac{\partial f_{1,s}}{\partial v}\Big] + \nu_{D,ss'} v \frac{\partial f_{1,s}}{\partial v} + 4\pi \Gamma_{ss'}\frac{m_s}{m_s'} F_{M,s'} f_{1,s} \\
     C_{F,ss'} &= \Gamma_{ss'} F_{M,s} \Big[\frac{2v^2}{v_{th,s}^4} \frac{\partial^2 G_{s'}}{\partial v^2} - \frac{2v}{v_{th,s}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) \frac{\partial H_{s'}}{\partial v} - \frac{2}{v_{th,s}^2} H_{s'} + 4\pi \frac{m_s}{m_{s'}} f_{1,s'} \Big] \\
     \nabla^2_v H_{s'} &= -4 \pi f_{s'} \\
     \nabla^2_v G_{s'} &= 2 H_{s'} \\
-    \end{align}
+    \end{aligned}
 
 The collision frequencies are given by:
 
 .. math::
     :label: collisionalities
 
-    \begin{align}
+    \begin{aligned}
     \nu_{D,ss'} &= \frac{\Gamma_{ss'} n_{s'}}{v^3} [\mathrm{erf}(v/v_{th,s'}) - \Psi(v/v_{th,s'})] \\
     \nu_{||,ss'} &= 2 \frac{\Gamma_{ss'} n_{s'}}{v^3} \Psi(v/v_{th,s'}) \\
     \Gamma_{ss'} &= \frac{4\pi q_s^2 q_{s'}^2 \ln \Lambda_{ss'}}{(4\pi \epsilon_0)^2 m_s^2} \\
     \Psi(x) &= \frac{1}{2x^2}\Big[\mathrm{erf}(x) - \frac{2x}{\sqrt{\pi}} \exp(-x^2) \Big]
-    \end{align}
+    \end{aligned}
 
 where :math:`\ln \Lambda_{ss'}` is the Coulomb logarithm.
 
@@ -192,7 +192,7 @@ parallel electric field (usually zero in stellarators).
 Mapping onto the API
 --------------------
 
-The public inputs to :func:`~yancc.solve.solve_dke` correspond to
+The public inputs to :func:`~yancc.solve_dke` correspond to
 equation :eq:`dke` and :eq:`forces` as follows:
 
 ================================================ ==============================================================
@@ -207,7 +207,7 @@ API input                                        Term in the equations
 ``field``                                        :math:`B,\, \mathbf{b},\, \mathbf{v}_{m,s},\, \mathbf{v}_E`
 ================================================ ==============================================================
 
-The returned :class:`~yancc.solution.DKESolution` stores
+The returned :class:`~yancc.DKESolution` stores
 :math:`f_{1,s}` on the full ``(ns, nx, na, nt, nz)`` grid; flux-surface
 moments are computed on demand via ``sol.get(name)``.
 
@@ -239,7 +239,7 @@ After dividing through by :math:`v`, only two scalar parameters remain:
     \quad [\mathrm{m^{-1}}],
 
 passed as ``erhohat`` and ``nuhat`` to
-:func:`~yancc.solve.solve_mdke`. yancc solves :eq:`mdke` two times - once
+:func:`~yancc.solve_mdke`. yancc solves :eq:`mdke` two times - once
 per unique drive (the first and second are the same when speed is ignored) - and
 assembles the 3×3 monoenergetic transport matrix
 

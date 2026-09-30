@@ -1,0 +1,91 @@
+! Input file for SFINCS version 3.
+! See the user manual for documentation of the parameters in this file.
+!----------------------------------------------------------------------
+
+!ss scanType = 21
+
+! Parameters specific to scanType = 2:
+!ss NErs = 33
+! !ss NErs = 2
+!ss ErMin = -8.0d+0
+!ss ErMax =  8.0d+0
+
+! Parameters specific to scanType = 3:
+!ss scanVariable = preconditioner_x_min_L
+!ss scanVariableMin = 0
+!ss scanVariableMax = 2
+!ss scanVariableN = 3
+!ss scanVariableScale = linear
+
+&general
+/
+
+&geometryParameters
+  geometryScheme = 5
+
+  inputRadialCoordinate = 3  ! rN
+  inputRadialCoordinateForGradients = 4
+  rN_wish = 0.5
+
+  equilibriumFile = "/pscratch/sd/l/landrema/20251212-01-sfincs_for_yancc_benchmarks//wout_NCSX.nc"
+/
+
+&speciesParameters
+  Zs = 1
+  mHats = 1
+  THats = 0.8d+0
+  dTHatdrHats = -2.0
+  nHats = 23.77339788691668 ! Set by sfincsScan.
+  dNHatdrHats = -6.339572769844447 ! Set by sfincsScan.
+/
+
+&physicsParameters
+  Delta = 4.5694d-3
+  alpha = 1d+0
+  nu_n = 0.008330d+0
+
+  Er = -1.0
+
+  collisionOperator = 0
+  includeXDotTerm = .true.
+  includeElectricFieldTermInXiDot = .true.
+  useDKESExBDrift = .false.
+
+  includePhi1 = .false.
+/
+
+&resolutionParameters
+  Ntheta = 25
+!ss NthetaMinFactor = 1
+!ss NthetaMaxFactor = 2
+!ss NthetaNumRuns = 5
+
+  Nzeta = 81
+!ss NzetaMinFactor = 1
+!ss NzetaMaxFactor = 2
+!ss NzetaNumRuns = 4
+
+  Nxi = 140
+!ss NxiMinFactor = 1.009
+!ss NxiMaxFactor = 2
+!ss NxiNumRuns = 4
+
+  Nx = 7
+!ss NxMinFactor = 1
+!ss NxMaxFactor = 2
+!ss NxNumRuns = 3
+
+  solverTolerance = 1d-7
+!ss solverToleranceMinFactor = 0.1
+!ss solverToleranceMaxFactor = 10
+!ss solverToleranceNumRuns = 0
+/
+
+&otherNumericalParameters
+/
+
+&preconditionerOptions
+/
+
+&export_f
+/
