@@ -437,6 +437,32 @@ def _dke_heat_flux(sol, **kwargs):
 
 
 @_register_dke_output(
+    name="<momentum_flux>",
+    label="\\langle \\int d^3v m_s v_{||} B f_s \\mathbf{v}_m \\cdot "
+    "\\nabla \\rho \\rangle",
+    units="kg \\cdot T \\cdot m^{-2} \\cdot s^{-2}",
+    description="Flux of parallel momentum times field strength for each species",
+    dim=("ns",),
+)
+def _dke_momentum_flux(sol, **kwargs):
+    vth = jnp.array([sp.v_thermal for sp in sol.species])[:, None, None, None, None]
+    ms = jnp.array([sp.species.mass for sp in sol.species])[:, None, None, None, None]
+    xi = sol.pitchgrid.xi[None, None, :, None, None]
+    x = sol.speedgrid.x[None, :, None, None, None]
+    vpar = x * vth * xi
+    d3v = _d3v(sol.speedgrid, sol.pitchgrid, sol.species)[..., None, None]
+    dr = _dr(sol.field)[None, None, None]
+    dr = dr / dr.sum()
+
+    radial_drift = radial_magnetic_drift(
+        sol.field, sol.speedgrid, sol.pitchgrid, sol.species
+    )
+    momentum_flux = ms * vpar * sol.field.Bmag * sol.f * radial_drift * d3v * dr
+    momentum_flux = momentum_flux.sum(axis=(-4, -3, -2, -1))
+    return momentum_flux
+
+
+@_register_dke_output(
     name="V||",
     label="V_{||} = 1/n_s \\int d^3v v_{||} f_s",
     units="m \\cdot s^{-1}",
