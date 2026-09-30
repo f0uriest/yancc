@@ -18,7 +18,7 @@ from ._smoothers import (
 )
 from ._trajectories import DKE, MDKE
 from .field import Field
-from .velocity_grids import UniformPitchAngleGrid
+from .velocity_grids import AbstractPitchAngleGrid
 
 
 @functools.partial(jax.jit, static_argnames=["p1", "p2"])
@@ -330,7 +330,7 @@ def get_prolongations(fields, pitchgrids, prefix_size=1, method="linear"):
     ----------
     fields : list[Field]
         Fields at each level, ordered coarse to fine.
-    pitchgrids : list[UniformPitchAngleGrid]
+    pitchgrids : list[AbstractPitchAngleGrid]
         Pitch angle grids at each level, ordered coarse to fine.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
@@ -366,7 +366,7 @@ def get_restrictions(fields, pitchgrids, prefix_size=1, method="linear"):
     ----------
     fields : list[Field]
         Fields at each level, ordered coarse to fine.
-    pitchgrids : list[UniformPitchAngleGrid]
+    pitchgrids : list[AbstractPitchAngleGrid]
         Pitch angle grids at each level, ordered coarse to fine.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
@@ -740,8 +740,8 @@ class Prolongation(AbstractYanccOperator):
     ----------
     field_coarse, field_fine : Field
         Magnetic field data at the coarse and fine theta/zeta resolutions.
-    pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
-        Pitch angle grids at the coarse and fine alpha resolutions.
+    pitchgrid_coarse, pitchgrid_fine : AbstractPitchAngleGrid
+        Pitch angle grids at the coarse and fine nalpha resolutions.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
@@ -751,8 +751,8 @@ class Prolongation(AbstractYanccOperator):
 
     field_coarse: Field
     field_fine: Field
-    pitchgrid_coarse: UniformPitchAngleGrid
-    pitchgrid_fine: UniformPitchAngleGrid
+    pitchgrid_coarse: AbstractPitchAngleGrid
+    pitchgrid_fine: AbstractPitchAngleGrid
     prefix_size: int = eqx.field(static=True)
     method: str = eqx.field(static=True)
     P_xi: jax.Array
@@ -763,8 +763,8 @@ class Prolongation(AbstractYanccOperator):
         self,
         field_coarse: Field,
         field_fine: Field,
-        pitchgrid_coarse: UniformPitchAngleGrid,
-        pitchgrid_fine: UniformPitchAngleGrid,
+        pitchgrid_coarse: AbstractPitchAngleGrid,
+        pitchgrid_fine: AbstractPitchAngleGrid,
         prefix_size: int = 1,
         method: str = "linear",
     ):
@@ -839,8 +839,8 @@ class Restriction(AbstractYanccOperator):
     ----------
     field_coarse, field_fine : Field
         Magnetic field data at the coarse and fine theta/zeta resolutions.
-    pitchgrid_coarse, pitchgrid_fine : UniformPitchAngleGrid
-        Pitch angle grids at the coarse and fine alpha resolutions.
+    pitchgrid_coarse, pitchgrid_fine : AbstractPitchAngleGrid
+        Pitch angle grids at the coarse and fine nalpha resolutions.
     prefix_size : int
         Product of leading axes that don't change between levels (e.g.
         ``len(species) * speedgrid.nx``). Defaults to 1.
@@ -850,8 +850,8 @@ class Restriction(AbstractYanccOperator):
 
     field_coarse: Field
     field_fine: Field
-    pitchgrid_coarse: UniformPitchAngleGrid
-    pitchgrid_fine: UniformPitchAngleGrid
+    pitchgrid_coarse: AbstractPitchAngleGrid
+    pitchgrid_fine: AbstractPitchAngleGrid
     prefix_size: int = eqx.field(static=True)
     method: str = eqx.field(static=True)
     P_xi: jax.Array
@@ -863,8 +863,8 @@ class Restriction(AbstractYanccOperator):
         self,
         field_coarse: Field,
         field_fine: Field,
-        pitchgrid_coarse: UniformPitchAngleGrid,
-        pitchgrid_fine: UniformPitchAngleGrid,
+        pitchgrid_coarse: AbstractPitchAngleGrid,
+        pitchgrid_fine: AbstractPitchAngleGrid,
         prefix_size: int = 1,
         method: str = "linear",
     ):

@@ -13,7 +13,7 @@ from ._collisions import (
     MDKEPitchAngleScattering,
     RosenbluthPotentials,
 )
-from ._finite_diff import fd_coeffs, fdbwd, fdfwd
+from ._finite_diff import build_advection_matrix, fd_coeffs, fd_kwargs
 from ._linalg import (
     AbstractDKEOperator,
     banded_mm,
@@ -24,15 +24,32 @@ from ._utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
 from .field import Field
 from .species import LocalMaxwellian
 from .velocity_grids import (
+    AbstractPitchAngleGrid,
     MaxwellSpeedGrid,
-    UniformPitchAngleGrid,
     _AbstractSpeedGrid,
     _MonoenergeticSpeedGrid,
 )
 
 
+def _advection_matrices(x, p, bc_type, domain):
+    """Forward/backward advection matrices for stencil id ``p``.
+
+    Builds the matrices from the actual node coordinates ``x`` (so non-uniform
+    spacing is handled correctly), reproducing the uniform stencil ``p`` via the
+    ``fd_kwargs`` lookup.
+    """
+    kwargs = fd_kwargs[p]
+    fd = build_advection_matrix(
+        x, direction="fwd", bc_type=bc_type, domain=domain, **kwargs
+    )
+    bd = build_advection_matrix(
+        x, direction="bwd", bc_type=bc_type, domain=domain, **kwargs
+    )
+    return fd, bd
+
+
 def dkes_w_theta(
-    field: Field, pitchgrid: UniformPitchAngleGrid, erhohat: Float[Array, ""]
+    field: Field, pitchgrid: AbstractPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in theta direction for MDKE."""
     w = (
@@ -43,7 +60,7 @@ def dkes_w_theta(
 
 
 def dkes_w_zeta(
-    field: Field, pitchgrid: UniformPitchAngleGrid, erhohat: Float[Array, ""]
+    field: Field, pitchgrid: AbstractPitchAngleGrid, erhohat: Float[Array, ""]
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in zeta direction for MDKE."""
     w = (
@@ -54,7 +71,7 @@ def dkes_w_zeta(
 
 
 def dkes_w_pitch(
-    field: Field, pitchgrid: UniformPitchAngleGrid
+    field: Field, pitchgrid: AbstractPitchAngleGrid
 ) -> Float[Array, "nalpha ntheta nzeta"]:
     """Wind in xi/pitch direction for MDKE."""
     sina = jnp.sqrt(1 - pitchgrid.xi**2)
@@ -74,7 +91,7 @@ class MDKETheta(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -92,7 +109,7 @@ class MDKETheta(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -107,7 +124,7 @@ class MDKETheta(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -124,9 +141,9 @@ class MDKETheta(AbstractDKEOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
-        f1 = jnp.ones(field.ntheta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.theta, p1, bc_type="periodic", domain=(0, 2 * np.pi)
+        )
         self._w = dkes_w_theta(field, pitchgrid, self.erhohat)
         # upwind sign mask, stored in the convolved-axis-last layout used in mv
         self._wpos = jnp.moveaxis(self._w > 0, 1, -1)
@@ -248,7 +265,7 @@ class MDKEZeta(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -266,7 +283,7 @@ class MDKEZeta(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -281,7 +298,7 @@ class MDKEZeta(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -296,12 +313,12 @@ class MDKEZeta(AbstractDKEOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        f1 = jnp.ones(field.nzeta)
         if field.nzeta > 1:
             assert field.nzeta > fd_coeffs[1][p1].size // 2
             assert field.nzeta > fd_coeffs[2][p2].size // 2
-            self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-            self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
         else:  # axisymmetric (tokamak): d/dzeta == 0
             self._fd = self._bd = jnp.zeros((1, 1))
         self._w = dkes_w_zeta(field, pitchgrid, self.erhohat)
@@ -421,7 +438,7 @@ class MDKEPitch(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -439,7 +456,7 @@ class MDKEPitch(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     erhohat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -454,7 +471,7 @@ class MDKEPitch(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -471,9 +488,9 @@ class MDKEPitch(AbstractDKEOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.nalpha
-        f1 = jnp.ones(pitchgrid.nalpha)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="symmetric")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
+        self._fd, self._bd = _advection_matrices(
+            pitchgrid.alpha, p1, bc_type="symmetric", domain=(0, np.pi)
+        )
         self._w = dkes_w_pitch(field, pitchgrid)
         # upwind sign mask, stored in the convolved-axis-last layout used in mv
         self._wpos = jnp.moveaxis(self._w > 0, 0, -1)
@@ -595,7 +612,7 @@ class MDKE(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v in units of V*s/m
@@ -613,7 +630,7 @@ class MDKE(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     erhohat: Float[Array, ""]
     nuhat: Float[Array, ""]
@@ -629,7 +646,7 @@ class MDKE(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         erhohat: Float[ArrayLike, ""],
         nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
@@ -723,7 +740,7 @@ class MDKE(AbstractDKEOperator):
 
 def sfincs_w_theta(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -740,7 +757,7 @@ def sfincs_w_theta(
 
 def sfincs_w_zeta(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -757,7 +774,7 @@ def sfincs_w_zeta(
 
 def sfincs_w_pitch(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -774,7 +791,7 @@ def sfincs_w_pitch(
 
 def sfincs_w_speed(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     Erho: Float[Array, ""],
     x: Float[Array, "ns nx"],
 ) -> Float[Array, "ns nx na nt nz"]:
@@ -792,7 +809,7 @@ class DKETheta(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -812,7 +829,7 @@ class DKETheta(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -830,7 +847,7 @@ class DKETheta(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -852,9 +869,9 @@ class DKETheta(AbstractDKEOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
-        f1 = jnp.ones(field.ntheta)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+        self._fd, self._bd = _advection_matrices(
+            field.theta, p1, bc_type="periodic", domain=(0, 2 * np.pi)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_theta(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
@@ -1029,7 +1046,7 @@ class DKEZeta(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1049,7 +1066,7 @@ class DKEZeta(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1067,7 +1084,7 @@ class DKEZeta(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1087,12 +1104,12 @@ class DKEZeta(AbstractDKEOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
-        f1 = jnp.ones(field.nzeta)
         if field.nzeta > 1:
             assert field.nzeta > fd_coeffs[1][p1].size // 2
             assert field.nzeta > fd_coeffs[2][p2].size // 2
-            self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="periodic")
-            self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="periodic")
+            self._fd, self._bd = _advection_matrices(
+                field.zeta, p1, bc_type="periodic", domain=(0, 2 * np.pi / field.NFP)
+            )
         else:  # axisymmetric (tokamak): d/dzeta == 0
             self._fd = self._bd = jnp.zeros((1, 1))
         vth = jnp.array([s.v_thermal for s in species])
@@ -1265,7 +1282,7 @@ class DKEPitch(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1285,7 +1302,7 @@ class DKEPitch(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1303,7 +1320,7 @@ class DKEPitch(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1325,9 +1342,9 @@ class DKEPitch(AbstractDKEOperator):
         self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.nalpha
-        f1 = jnp.ones(pitchgrid.nalpha)
-        self._fd = jax.jacfwd(fdfwd)(f1, p1, h=h, bc="symmetric")
-        self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
+        self._fd, self._bd = _advection_matrices(
+            pitchgrid.alpha, p1, bc_type="symmetric", domain=(0, np.pi)
+        )
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_pitch(
             field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
@@ -1494,7 +1511,7 @@ class DKESpeed(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -1507,7 +1524,7 @@ class DKESpeed(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
@@ -1519,7 +1536,7 @@ class DKESpeed(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
@@ -1718,7 +1735,7 @@ class DKE(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
@@ -1740,7 +1757,7 @@ class DKE(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1760,7 +1777,7 @@ class DKE(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
