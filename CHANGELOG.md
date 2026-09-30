@@ -1,6 +1,23 @@
 Changelog
 =========
 
+- ``Field`` has a new optional attribute ``g_sup_rr``, the radial metric element
+  ``|grad(rho)|^2``. It is computed automatically when loading from DESC, VMEC,
+  ``booz_xform`` and IPP ``.bc`` files, and can be passed to ``Field`` and
+  ``Field.from_boozer`` directly.
+- New ``DKESolution`` outputs:
+    - ``"<momentum_flux>"``: radial flux of parallel momentum times field strength.
+    - ``"Phi_1"``: variation of the electrostatic potential on the surface from
+      quasi-neutrality.
+    - ``"n1"``, ``"n"``, ``"p1"``, ``"p"``: density and pressure perturbations and
+      totals on the surface, with the totals including the Boltzmann response to
+      ``Phi_1``.
+    - ``"<classical_particle_flux>"`` and ``"<classical_heat_flux>"``: classical
+      transport fluxes, including the effect of ``Phi_1``. The Coulomb logarithm can
+      be overridden with the ``coulomb_log`` keyword.
+    - ``"Vperp"``, ``"V^theta"``, ``"V^zeta"``: perpendicular (diamagnetic and ExB)
+      flow, and the contravariant poloidal and toroidal components of the total flow.
+  ``Vperp`` and the classical fluxes require ``Field.g_sup_rr``.
 
 v0.0.2
 ------
