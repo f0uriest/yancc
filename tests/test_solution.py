@@ -213,8 +213,8 @@ def test_dkesolution_density_pressure_Phi1(species2):
     np.testing.assert_allclose(total_charge - fsa(total_charge), 0, atol=second_order)
 
 
-def _classical_fluxes(field, species, f1=None, Phi1_max=None):
-    """Classical (particle, conductive heat) fluxes, optionally with Phi_1 from f1.
+def _solution_with_Phi1(field, species, f1=None, Phi1_max=None, Erho=0.0):
+    """DKESolution with F0 = 0, optionally with Phi_1 from f1.
 
     f1 is rescaled so that max|Phi_1| = Phi1_max.
     """
@@ -229,24 +229,34 @@ def _classical_fluxes(field, species, f1=None, Phi1_max=None):
         pitchgrid=pitchgrid,
         speedgrid=speedgrid,
         species=species,
-        Erho=jnp.array(0.0),
+        Erho=jnp.array(Erho),
         EparB=jnp.array(0.0),
         background=[],
     )
     if f1 is not None:
         Phi1 = DKESolution(field=field, **{**kwargs, "f1": f1}).get("Phi_1")
         kwargs["f1"] = f1 * Phi1_max / np.abs(Phi1).max()
-    sol = DKESolution(field=field, **kwargs)
+    return DKESolution(field=field, **kwargs)
+
+
+def _classical_fluxes(field, species, f1=None, Phi1_max=None, Erho=0.0):
+    """Classical (particle, conductive heat) fluxes, and the solution."""
+    sol = _solution_with_Phi1(field, species, f1, Phi1_max, Erho)
     T = np.array([sp.temperature for sp in species]) * _JOULE_PER_EV
     Gamma = np.asarray(sol.get("<classical_particle_flux>", coulomb_log=17.0))
     Q = np.asarray(sol.get("<classical_heat_flux>", coulomb_log=17.0))
     return Gamma, Q - 2.5 * T * Gamma, sol
 
 
-def test_dkesolution_classical_fluxes(dummy_field, species2):
-    """Classical fluxes satisfy conservation laws, symmetries and known limits."""
+def test_dkesolution_classical_fluxes_and_flows(dummy_field, species2):
+    """Classical fluxes and perpendicular flows satisfy conservation laws,
+    symmetries and known limits.
+    """
+    sol = _solution_with_Phi1(dummy_field, species2)
     with pytest.raises(ValueError, match="g_sup_rr"):
-        _classical_fluxes(dummy_field, species2)
+        sol.get("<classical_particle_flux>")
+    with pytest.raises(ValueError, match="g_sup_rr"):
+        sol.get("Vperp")
 
     rng = np.random.default_rng(0)
     nt = nz = 3
@@ -272,7 +282,8 @@ def test_dkesolution_classical_fluxes(dummy_field, species2):
         LocalMaxwellian(Carbon6, 4e3, 5e18, -1e3, 2e18),
     ]
     N = len(species) * 3 * 5 * nt * nz
-    Gamma, q, sol = _classical_fluxes(field, species, rng.standard_normal(N), 1e3)
+    Erho = 2e3
+    Gamma, q, sol = _classical_fluxes(field, species, rng.standard_normal(N), 1e3, Erho)
     Phi1 = np.asarray(sol.get("Phi_1"))
     T = np.array([sp.temperature for sp in species]) * _JOULE_PER_EV
     Z = np.array([sp.species.charge for sp in species])
@@ -285,7 +296,16 @@ def test_dkesolution_classical_fluxes(dummy_field, species2):
     # with pseudo-densities, the fluxes are the surface average of the Phi_1 = 0
     # fluxes with the local density and its radial derivative at fixed Phi_1. The
     # radial derivative of Phi_1 is the same for all species, so like E_r it
-    # does not drive classical transport.
+    # does not drive classical transport. Likewise the perpendicular flows are
+    # the Phi_1 = 0 flows with the local density and gradient, as the radial
+    # derivative of Phi_1 cancels between the Boltzmann factor and the ExB drift.
+    Vpar = np.asarray(sol.get("V||"))
+    Vperp = np.asarray(sol.get("Vperp"))
+    Vperp_theta = sol.get("V^theta") - Vpar * field.B_sup_t / field.Bmag
+    Vperp_zeta = sol.get("V^zeta") - Vpar * field.B_sup_z / field.Bmag
+    Vperp_local = np.zeros((len(species), nt, nz))
+    Vperp_theta_local = np.zeros((len(species), nt, nz))
+    Vperp_zeta_local = np.zeros((len(species), nt, nz))
     Gamma_local = np.zeros((len(species), nt, nz))
     q_local = np.zeros((len(species), nt, nz))
     for i in range(nt):
@@ -315,13 +335,33 @@ def test_dkesolution_classical_fluxes(dummy_field, species2):
                         sp.density * boltzmann * dlnn,
                     )
                 )
-            G_ij, q_ij, _ = _classical_fluxes(local_field, local_species)
+            G_ij, q_ij, sol_ij = _classical_fluxes(
+                local_field, local_species, Erho=Erho
+            )
             Gamma_local[:, i, j] = G_ij
             q_local[:, i, j] = q_ij
+            Vperp_local[:, i, j] = sol_ij.get("Vperp")[:, 0, 0]
+            Vperp_theta_local[:, i, j] = sol_ij.get("V^theta")[:, 0, 0]
+            Vperp_zeta_local[:, i, j] = sol_ij.get("V^zeta")[:, 0, 0]
     np.testing.assert_allclose(
         Gamma, field.flux_surface_average(Gamma_local), rtol=1e-10
     )
     np.testing.assert_allclose(q, field.flux_surface_average(q_local), rtol=1e-10)
+    np.testing.assert_allclose(Vperp, Vperp_local, rtol=1e-10)
+    np.testing.assert_allclose(Vperp_theta, Vperp_theta_local, rtol=1e-10)
+    np.testing.assert_allclose(Vperp_zeta, Vperp_zeta_local, rtol=1e-10)
+    # without Phi_1, the diamagnetic and ExB flow along b x grad(rho)
+    sol0 = _solution_with_Phi1(field, species, Erho=Erho)
+    dp = np.array(
+        [sp.dndrho * sp.temperature + sp.density * sp.dTdrho for sp in species]
+    )
+    n0 = np.array([sp.density for sp in species])
+    omega = (dp * _JOULE_PER_EV / (Z * n0) - Erho)[:, None, None]
+    np.testing.assert_allclose(
+        sol0.get("Vperp"),
+        np.sqrt(field.g_sup_rr) / field.Bmag * omega,
+        rtol=1e-10,
+    )
 
     # Onsager symmetry at equal temperatures, for fluxes (Gamma_a, q_a/T)
     # conjugate to forces (p_a'/n_a, T_a')

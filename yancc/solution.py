@@ -505,6 +505,77 @@ def _dke_VparB(sol, **kwargs):
     return BVpar
 
 
+def _perpendicular_rotation(sol):
+    """Coefficient of B x grad(rho) / B^2 in the perpendicular flow, shape (ns, nt, nz).
+
+    The perpendicular (diamagnetic and ExB) flow is
+    V_perp = B x grad(rho) / B^2 * (1/(q n) dp/drho + dPhi/drho).
+    """
+    # The density is a pseudo-density times the Boltzmann factor in Phi_1. The
+    # radial derivative of Phi_1 enters both the Boltzmann factor and the ExB
+    # drift, and cancels between them.
+    qs = jnp.array([sp.species.charge for sp in sol.species])[:, None, None]
+    Ts = jnp.array([sp.temperature for sp in sol.species])[:, None, None]
+    dTs = jnp.array([sp.dTdrho for sp in sol.species])[:, None, None]
+    ns = jnp.array([sp.density for sp in sol.species])[:, None, None]
+    dns = jnp.array([sp.dndrho for sp in sol.species])[:, None, None]
+    Ts, dTs = Ts * _JOULE_PER_EV, dTs * _JOULE_PER_EV
+    Phi1 = sol.get("Phi_1")
+    return Ts / qs * dns / ns + (1 + qs * Phi1 / Ts) * dTs / qs - sol.Erho
+
+
+@_register_dke_output(
+    name="Vperp",
+    label="V_{\\perp} = \\frac{|\\nabla \\rho|}{B} \\left(\\frac{1}{q_s n_s} "
+    "\\frac{\\partial p_s}{\\partial \\rho} + \\frac{\\partial \\Phi}"
+    "{\\partial \\rho}\\right)",
+    units="m \\cdot s^{-1}",
+    description="Perpendicular (diamagnetic and ExB) flow on surface for each "
+    "species, along b x grad(rho), including Phi_1. Requires Field.g_sup_rr.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_Vperp(sol, **kwargs):
+    if sol.field.g_sup_rr is None:
+        raise ValueError(
+            "Vperp requires Field.g_sup_rr, which is not available for this field."
+        )
+    return jnp.sqrt(sol.field.g_sup_rr) / sol.field.Bmag * _perpendicular_rotation(sol)
+
+
+@_register_dke_output(
+    name="V^theta",
+    label="V^{\\theta} = V_{||} B^{\\theta} / B + \\mathbf{V}_{\\perp} \\cdot "
+    "\\nabla \\theta",
+    units="s^{-1}",
+    description="Contravariant poloidal component of the total flow for each "
+    "species, including Phi_1.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_V_theta(sol, **kwargs):
+    field = sol.field
+    # (B x grad(rho)) . grad(theta) = B_zeta / sqrt(g)
+    Vperp = field.B_sub_z / (field.Bmag**2 * field.sqrtg) * _perpendicular_rotation(sol)
+    return sol.get("V||") * field.B_sup_t / field.Bmag + Vperp
+
+
+@_register_dke_output(
+    name="V^zeta",
+    label="V^{\\zeta} = V_{||} B^{\\zeta} / B + \\mathbf{V}_{\\perp} \\cdot "
+    "\\nabla \\zeta",
+    units="s^{-1}",
+    description="Contravariant toroidal component of the total flow for each "
+    "species, including Phi_1.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_V_zeta(sol, **kwargs):
+    field = sol.field
+    # (B x grad(rho)) . grad(zeta) = -B_theta / sqrt(g)
+    Vperp = (
+        -field.B_sub_t / (field.Bmag**2 * field.sqrtg) * _perpendicular_rotation(sol)
+    )
+    return sol.get("V||") * field.B_sup_z / field.Bmag + Vperp
+
+
 @_register_dke_output(
     name="<J||B>",
     label="J_{||}B = \\sum_s q_s/n_s \\langle B \\int d^3v v_{||} f_s \\rangle",
