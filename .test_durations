@@ -792,6 +792,8 @@
     "tests/test_smoothers.py::test_smoothing_dke[standard_smooth-1e+22-3]": 0.32259630504995584,
     "tests/test_solution.py::test_clean_units_empty_and_none": 0.00042213592678308487,
     "tests/test_solution.py::test_clean_units_renders_latex_to_unicode": 0.0003695148043334484,
+    "tests/test_solution.py::test_dkesolution_classical_fluxes": 10.36,
+    "tests/test_solution.py::test_dkesolution_density_pressure_Phi1": 4.14,
     "tests/test_solution.py::test_dkesolution_f1_size_N_has_nan_sources": 0.05362161691300571,
     "tests/test_solution.py::test_dkesolution_f1_with_sources_roundtrips": 0.14729229197837412,
     "tests/test_solution.py::test_dkesolution_qtys_list": 0.026836556615307927,
