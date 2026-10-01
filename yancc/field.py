@@ -69,7 +69,7 @@ class Field(eqx.Module):
     B0 : float, optional
         Characteristic scale for magnetic field. Default is surface average of B.
     g_sup_rr : jax.Array, shape(ntheta, nzeta), optional
-        Contravariant radial metric element g^rr = |grad(rho)|^2, in units of
+        Contravariant radial metric element g^rr = grad(rho)·grad(rho), in units of
         1/m^2. Only needed for outputs that depend on the real space geometry of
         the surface, such as classical transport.
     """
@@ -639,7 +639,7 @@ class Field(eqx.Module):
         B0 : float, optional
             Characteristic scale for magnetic field. Default is surface average of B.
         g_sup_rr : jax.Array, shape(ntheta, nzeta), optional
-            Contravariant radial metric element g^rr = |grad(rho)|^2, in units of
+            Contravariant radial metric element g^rr = grad(rho)·grad(rho), in units of
             1/m^2.
         """
         data = {}
