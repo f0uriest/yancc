@@ -76,13 +76,17 @@ def get_dke_operators(
     return operators
 
 
-# Axorder for each DKE line smoother; the last axis is the relaxed direction.
+# Axorder for each DKE line smoother; the last axis is the relaxed direction. The
+# lines are solved independently so the order of the batch axes doesn't change the
+# result, but keeping species and speed leading (where possible) keeps the stored
+# factors and the state vector aligned when the batch is split across devices by
+# species and speed.
 _DKE_LINE_AXORDERS = {
-    "x": "atzsx",
-    "a": "tzsxa",
+    "x": "satzx",
+    "a": "sxtza",
     "s": "xatzs",
     "z": "sxatz",
-    "t": "zsxat",
+    "t": "sxazt",
 }
 _DKE_SMOOTHER_TOKENS = (*_DKE_LINE_AXORDERS, "plane", "l01t", "l01z")
 

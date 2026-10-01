@@ -56,7 +56,7 @@ def test_permutations_mdke(field, pitchgrid):
         np.testing.assert_allclose(op.block_diagonal(axorder=axorder), blocks)
 
 
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_dke_banded_vs_dense_smoother(
     pitchgrid, speedgrid, species2, field, potentials2, axorder
 ):
@@ -314,7 +314,7 @@ def test_get_smoothers_order_and_shared_operator(
         DKEJacobiSmoother,
         DKEL01LineSmoother,
     ]
-    assert group[2].axorder == "atzsx"
+    assert group[2].axorder == "satzx"
     assert [group[0].line, group[3].line] == ["t", "z"]
     # each smoother built on its own, with no shared operator
     kw: dict[str, Any] = dict(
@@ -333,7 +333,7 @@ def test_get_smoothers_order_and_shared_operator(
     direct = [
         DKEL01LineSmoother(**kw, line="t", weight=0.5),
         DKEFrozenPlaneSmoother(**kw),
-        DKEJacobiSmoother(**kw, axorder="atzsx", weight=0.3),
+        DKEJacobiSmoother(**kw, axorder="satzx", weight=0.3),
         DKEL01LineSmoother(**kw, line="z"),
     ]
     _assert_arrays_close(direct, group)
