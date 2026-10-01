@@ -525,7 +525,8 @@ def test_solve_dke_multispecies_warm_start(field, species2):
     f1 = np.asarray(sol.f1).reshape(-1)
     assert f1.size == size
     U = info["U"]
-    assert U.shape[0] == size + 2 * len(species2)
+    assert U[0].shape[0] == size
+    assert U[1].shape[0] == 2 * len(species2)
 
     # warm-start: feed back the recycled Krylov subspace U and the previous iterate.
     sol2, info2 = solve_dke(
@@ -537,7 +538,7 @@ def test_solve_dke_multispecies_warm_start(field, species2):
         maxiter=2,
         rtol=1e-12,
         verbose=2,
-        U=U,
+        U=jnp.concatenate(U),
         f1=sol.f1_krylov,
     )
     np.testing.assert_allclose(sol.f1, sol2.f1, atol=1e-12, rtol=1e-8)

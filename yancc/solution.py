@@ -157,9 +157,10 @@ class DKESolution(eqx.Module):
         solving for df.
     f : jax.Array, shape (ns, nx, na, nt, nz)
         Full distribution function ``F0 + f1``. Computed on access.
-    f1_krylov : jax.Array
-        Distribution function including source terms, as seen by the Krylov solver.
-        Computed on access.
+    f1_krylov : tuple of jax.Array
+        Distribution function and source terms as seen by the Krylov solver, as a
+        tuple of ``f1`` flattened, shape (ns*nx*na*nt*nz,), and the (particle, heat)
+        source of each species, shape (2*ns,). Computed on access.
     """
 
     F0: jax.Array
@@ -191,19 +192,24 @@ class DKESolution(eqx.Module):
         ns = len(species)
         shape = (ns, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
         N = np.prod(shape)
-        f1 = f1.flatten()
-        if f1.size == N:
-            f1 = f1.reshape(shape)
+        if isinstance(f1, (tuple, list)):
+            # (f1, sources) parts, as used by the Krylov solver
+            f1, sources = f1
+        else:
+            f1 = f1.flatten()
+            sources = f1[N:] if f1.size == N + 2 * ns else None
+            f1 = f1[:N] if f1.size == N + 2 * ns else f1
+        if f1.size != N or (sources is not None and sources.size != 2 * ns):
+            raise ValueError("got wrong size for f1")
+        f1 = f1.reshape(shape)
+        if sources is None:
             particle_source = jnp.full(ns, jnp.nan)
             heat_source = jnp.full(ns, jnp.nan)
-        elif f1.size == N + 2 * ns:
+        else:
             # one (particle, heat) pair per species, matching DKESources columns
-            sources = f1[N:].reshape((ns, 2))
+            sources = sources.reshape((ns, 2))
             particle_source = sources[:, 0]
             heat_source = sources[:, 1]
-            f1 = f1[:N].reshape(shape)
-        else:
-            raise ValueError("got wrong size for f1")
 
         self.F0 = jnp.asarray(F0).reshape(ns, speedgrid.nx, 1, 1, 1)
         self.f1 = f1
@@ -224,12 +230,12 @@ class DKESolution(eqx.Module):
         return self.F0 + self.f1
 
     @property
-    def f1_krylov(self) -> jax.Array:
-        """Distribution function, including source terms, as seen by krylov solver."""
+    def f1_krylov(self) -> tuple[jax.Array, jax.Array]:
+        """Distribution function and source terms, as seen by krylov solver."""
         f1 = self.f1.flatten()
         sources = jnp.stack([self._particle_source, self._heat_source], axis=1)
         sources = jnp.nan_to_num(sources, nan=0.0).flatten()
-        return jnp.concatenate([f1, sources])
+        return (f1, sources)
 
     def get(self, qty: str, **kwargs) -> jax.Array:
         """Compute desired moments of the solution.

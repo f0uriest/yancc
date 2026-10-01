@@ -19,15 +19,14 @@ def test_dke_rhs_single_rhs_in_span_of_unit_drives(field, species2):
         speedgrid,
         species2,
         Erho=10.0,
-        include_constraints=True,
         single_rhs=False,
     )
-    assert unit.shape == (3 * ns, N + 2 * ns)
+    assert unit.shape == (3 * ns, N)
 
     combined = dke_rhs(
         field, pitchgrid, speedgrid, species2, Erho=10.0, single_rhs=True
     )
-    assert combined.shape == (N + 2 * ns,)
+    assert combined.shape == (N,)
 
     # the combined drive is a linear combination of the unit drives, so it must lie
     # in their row space: the least-squares fit should reproduce it exactly.

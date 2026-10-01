@@ -13,7 +13,7 @@ from scipy.constants import elementary_charge, proton_mass
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1A, DEFAULT_P2A
-from ._krylov import gcrotmk
+from ._krylov import _norm, gcrotmk
 from ._linalg import BorderedOperator, InverseBorderedOperator
 from ._misc import (
     DKEConstraint,
@@ -344,7 +344,10 @@ def solve_dke(  # noqa: C901
         for computing fluxes and other moments.
     info : dict
         Info about the solve, such as number of iterations, number of matrix-vector
-        products, final residual etc.
+        products, final residual etc. ``info["U"]`` and ``info["C"]`` are the
+        recycled Krylov subspace, as tuples of the parts for ``f1`` and for the source
+        terms, and ``info["U"]`` can be passed back as ``U`` to warm start another
+        solve.
 
     """
     # create a copy so we don't modify user input for repeated calls
@@ -433,28 +436,26 @@ def solve_dke(  # noqa: C901
     preconditioner = InverseBorderedOperator(M, B, C)
     flexible = not _preconditioner_is_linear(M)
 
-    rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
-    size = np.prod(shape)
+    size = int(np.prod(shape))
+    nsrc = 2 * len(species)
+    # the constraint equations have zero rhs
+    rhs = (dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB), jnp.zeros(nsrc))
+    # The bordered operators act on (f, sources) tuples, so f stays a separate array
+    # that can be split across devices along with the operators acting on it.
     if f1 is None:
-        f1 = jnp.zeros(size + 2 * len(species))
+        f1 = (jnp.zeros(size), jnp.zeros(nsrc))
     else:
-        f1 = f1.flatten()
-        assert (f1.shape[0] == size) or (f1.shape[0] == (size + 2 * len(species)))
-        # maybe pad with zeros for sources
-        f1 = jnp.pad(f1, [(0, size + 2 * len(species) - f1.shape[0])])
+        f1 = _krylov_parts(f1, size, nsrc, columns=False)
     if U is None:
-        U = jnp.zeros((size + 2 * len(species), k))
+        U = (jnp.zeros((size, k)), jnp.zeros((nsrc, k)))
     else:
-        assert (U.shape[0] == size) or (U.shape[0] == (size + 2 * len(species)))
-        U = U.reshape((U.shape[0], -1))
-        # maybe pad with zeros for sources
-        U = jnp.pad(U, [(0, size + 2 * len(species) - U.shape[0]), (0, 0)])
+        U = _krylov_parts(U, size, nsrc, columns=True)
 
     if entropy_norm:
         weights = _dke_entropy_weights(species, speedgrid, pitchgrid, field)
     else:
-        weights = jnp.ones_like(rhs)
+        weights = jax.tree.map(jnp.ones_like, rhs)
 
     f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
@@ -476,7 +477,7 @@ def solve_dke(  # noqa: C901
     info = {
         "niter": j1,
         "nmv": nmv1,
-        "res": res1 / jnp.linalg.norm(jnp.sqrt(weights) * rhs),
+        "res": res1 / _norm(jax.tree.map(lambda w, b: jnp.sqrt(w) * b, weights, rhs)),
         "success": success,
         "C": C1,
         "U": U1,
@@ -491,7 +492,7 @@ def solve_dke(  # noqa: C901
         )
 
     sol = _make_dke_solution(
-        f1, rhs, field, pitchgrid, speedgrid, species, Erho, EparB, background
+        f1, rhs[0], field, pitchgrid, speedgrid, species, Erho, EparB, background
     )
 
     if verbose:
@@ -503,8 +504,34 @@ def solve_dke(  # noqa: C901
     )
 
 
+def _krylov_parts(v, size, nsrc, columns):
+    """Split a vector or matrix of the bordered DKE system into (f, sources) parts.
+
+    ``v`` is either a tuple of the two parts, or a single array holding the parts
+    stacked along its first dim, in which case the sources may be left off and are
+    then taken to be zero. With ``columns=True``, ``v`` holds a matrix of vectors in
+    its trailing dim.
+    """
+    if isinstance(v, (tuple, list)):
+        f, sources = v
+    else:
+        v = jnp.asarray(v)
+        v = v.reshape((v.shape[0], -1)) if columns else v.flatten()
+        assert v.shape[0] in (size, size + nsrc)
+        f, sources = v[:size], v[size:]
+    tail = (-1,) if columns else ()
+    f = jnp.reshape(f, (size, *tail))
+    if sources.shape[0] == 0:
+        sources = jnp.zeros((nsrc, *f.shape[1:]), dtype=f.dtype)
+    sources = jnp.reshape(sources, (nsrc, *tail))
+    return f, sources
+
+
 def _dke_entropy_weights(species, speedgrid, pitchgrid, field):
-    """Residual weights for the bordered DKE system in the entropy norm."""
+    """Residual weights for the (f, sources) parts of the bordered DKE system.
+
+    The weights are those of the entropy norm.
+    """
     # The linearized collision operator is self-adjoint (and streaming/drifts are
     # anti-self-adjoint) in the inner product sum_s T_s int d^3v f_s g_s / F_Ms.
     # Keeping only the species-dependent constant of that weight, T_s vth_s^6 / n_s,
@@ -519,7 +546,7 @@ def _dke_entropy_weights(species, speedgrid, pitchgrid, field):
     ws = T * vth**6 / n
     ws = ws / ws.max()
     nf = speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
-    return jnp.concatenate([jnp.repeat(ws, nf), jnp.repeat(ws, 2)])
+    return jnp.repeat(ws, nf), jnp.repeat(ws, 2)
 
 
 # Loosest linear solve tolerance used while the radial current is far from zero, and
@@ -854,9 +881,10 @@ def solve_dke_ambipolar(  # noqa: C901
     )
 
     ns = len(species)
-    size = ns * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta + 2 * ns
-    f10 = jnp.zeros(size)
-    U0 = jnp.zeros((size, k))
+    size = ns * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
+    # (f, sources) parts, as solve_dke takes and returns them
+    f10 = (jnp.zeros(size), jnp.zeros(2 * ns))
+    U0 = (jnp.zeros((size, k)), jnp.zeros((2 * ns, k)))
     nmv0 = jnp.array(0)
     if scale0 is None:
         # The scale must be the same for every search, so an automatic scale has to be
@@ -898,8 +926,8 @@ def solve_dke_ambipolar(  # noqa: C901
 
     sols = []
     for j in range(num_roots):
-        rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erhos[j], EparB, True, True)
-        f1 = jnp.where(success[j], f1s[j], jnp.nan)
+        rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erhos[j], EparB)
+        f1 = jax.tree.map(lambda x: jnp.where(success[j], x[j], jnp.nan), f1s)
         sols.append(
             _make_dke_solution(
                 f1,

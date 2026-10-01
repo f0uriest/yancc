@@ -19,6 +19,10 @@ Unreleased
 - The multigrid option ``smooth_weights`` can now be a dict mapping entries of
   ``smooth_type`` to their relaxation weight, with the other smoothers using their
   defaults. A single value now applies to every smoother.
+- The recycled Krylov subspace ``info["U"]``, ``info["C"]`` returned by ``solve_dke``
+  and ``DKESolution.f1_krylov`` are now tuples of the parts for ``f1`` and for the
+  source terms, rather than single stacked arrays. The ``U`` and ``f1`` warm start
+  options of ``solve_dke`` accept either form.
 
 ### Performance improvements
 - The direct solve on the coarsest multigrid level now applies a step of iterative

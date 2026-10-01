@@ -153,7 +153,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         gauge=True,
         operator_weights=operator_weights,
     )
-    b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
+    b = dke_rhs(field, pitchgrid, speedgrid, species, Erho)
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
     smoothers = get_dke_smoothers(

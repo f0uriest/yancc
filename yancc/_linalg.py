@@ -6,6 +6,7 @@ from typing import cast
 
 import equinox as eqx
 import jax
+import jax.flatten_util
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
@@ -186,11 +187,31 @@ class AbstractDKEOperator(AbstractYanccOperator):
         """
 
 
+def _bordered_structure(n1, n2):
+    """Structure of a bordered vector, a tuple of parts of size n1 and n2."""
+    dtype = jnp.array(1.0).dtype
+    return (jax.ShapeDtypeStruct((n1,), dtype), jax.ShapeDtypeStruct((n2,), dtype))
+
+
+def _bordered_as_matrix(operator):
+    """Dense matrix of an operator on bordered vectors, parts concatenated in order."""
+    x = jax.tree.map(jnp.zeros_like, operator.in_structure())
+    unravel = jax.flatten_util.ravel_pytree(x)[1]
+
+    def mv(v):
+        return jax.flatten_util.ravel_pytree(operator.mv(unravel(v)))[0]
+
+    return jax.vmap(mv, out_axes=-1)(jnp.eye(operator.in_size()))
+
+
 class BorderedOperator(lx.AbstractLinearOperator):
     """Operator for a bordered matrix.
 
     [A B]
     [C 0]
+
+    Vectors are tuples ``(x1, x2)`` with ``x1`` in the space of ``A`` and ``x2`` of
+    size ``B.in_size()`` (input) or ``C.out_size()`` (output).
     """
 
     A: lx.AbstractLinearOperator
@@ -208,30 +229,25 @@ class BorderedOperator(lx.AbstractLinearOperator):
         """Matrix vector product."""
         # [A B] [X1] = [AX1 + BX2]
         # [C 0] [X2] = [CX1      ]
-        X1 = vector[: self.A.in_size()]
-        X2 = vector[self.A.in_size() :]
+        # The two parts are kept as separate arrays rather than one concatenated
+        # vector, so that when X1 is split across devices its shards stay aligned
+        # with those of the operators acting on it.
+        X1, X2 = vector
         Y1 = self.A.mv(X1) + self.B.mv(X2)
         Y2 = self.C.mv(X1)
-        return jnp.concatenate([Y1, Y2])
+        return (Y1, Y2)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.A.in_size() + self.B.in_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.A.in_size(), self.B.in_size())
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.A.out_size() + self.C.out_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.A.out_size(), self.C.out_size())
 
     def transpose(self):
         """Transpose of the operator."""
@@ -262,8 +278,7 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
 
     def mv(self, vector):
         """Matrix vector product."""
-        X1 = vector[: self.Ai.in_size()]
-        X2 = vector[self.Ai.in_size() :]
+        X1, X2 = vector
         cbic_x1 = self.CBi.mv(self.C.mv(X1))
         z11 = X1 - self.B.mv(cbic_x1)
         Az11 = self.Ai.mv(z11)
@@ -271,26 +286,19 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
         z12 = self.B.mv(self.CBi.mv(X2))
         Y1 = z11 + z12
         Y2 = cbic_x1
-        return jnp.concatenate([Y1, Y2])
+        return (Y1, Y2)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.Ai.in_size() + self.B.in_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.Ai.in_size(), self.B.in_size())
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.Ai.out_size() + self.C.out_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.Ai.out_size(), self.C.out_size())
 
     def transpose(self):
         """Transpose of the operator."""
