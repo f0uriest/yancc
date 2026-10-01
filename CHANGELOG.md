@@ -6,7 +6,7 @@ Unreleased
 ----------
 ### New features
 - New smoothers, including a theta/zeta plane smoother using surface averaged wind
-  and fast diagonalization via FFT, and theta/zeta line smoothers retaining coupling
+  and fast diagonalization via a 2d Fourier transform, and theta/zeta line smoothers retaining coupling
   between the L0 and L1 Legendre modes in pitch to damp errors that are not smoothed
   by collisions.
 - The multigrid option ``smooth_type`` is now a comma separated string listing the

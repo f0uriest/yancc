@@ -618,14 +618,15 @@ def test_frozen_plane_dke_default_args(
     assert np.all(np.isfinite(mat))
 
 
-def test_frozen_plane_mdke_matches_dense_block(pitchgrid):
+@pytest.mark.parametrize("nt, nz", [(5, 7), (6, 8)])
+def test_frozen_plane_mdke_matches_dense_block(pitchgrid, nt, nz):
     """On a constant-|B| field the winds are plane-constant so the frozen
     approximation is exact, and each pitch block of the smoother must be
     weight * inv of the true (theta, zeta) sub-block of the MDKE. Also confirms the
     smoother is block-diagonal in pitch and that the plane block has genuine
-    off-diagonal (streaming) coupling for the FFT solve to invert.
+    off-diagonal (streaming) coupling for the plane solve to invert. Even sizes
+    include the Nyquist frequency of the half spectrum.
     """
-    nt, nz = 5, 7
     cfield = _constant_boozer_field(nt, nz)
     erhohat, nuhat, weight = 1e-3, 1e-2, 0.6
     sm = MDKEFrozenPlaneSmoother(
