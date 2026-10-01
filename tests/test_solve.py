@@ -1,6 +1,9 @@
 """Regression tests comparing yancc to monkes/sfincs etc."""
 
+import json
 import os
+import subprocess
+import sys
 import time
 
 import interpax
@@ -528,7 +531,13 @@ def test_solve_dke_multispecies_warm_start(field, species2):
     assert U[0].shape[0] == size
     assert U[1].shape[0] == 2 * len(species2)
 
-    # warm-start: feed back the recycled Krylov subspace U and the previous iterate.
+    # warm-start: feed back the recycled Krylov subspace U and the previous iterate,
+    # U as a single stacked array as well as (f, sources) parts are accepted. Also
+    # split over a (single device) mesh, which applies all the sharding constraints
+    # without changing the result.
+    mesh = jax.make_mesh(
+        (1, 1), ("species", "speed"), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    )
     sol2, info2 = solve_dke(
         field,
         pitchgrid,
@@ -540,9 +549,116 @@ def test_solve_dke_multispecies_warm_start(field, species2):
         verbose=2,
         U=jnp.concatenate(U),
         f1=sol.f1_krylov,
+        mesh=mesh,
     )
     np.testing.assert_allclose(sol.f1, sol2.f1, atol=1e-12, rtol=1e-8)
     assert info2["nmv"] < info["nmv"]
+
+
+_MULTIDEVICE_SCRIPT = """
+import json, sys
+import jax
+jax.config.update("jax_num_cpu_devices", 4)
+jax.config.update("jax_enable_x64", True)
+import numpy as np
+sys.path.insert(0, sys.argv[1])
+import conftest
+from yancc import MaxwellSpeedGrid, UniformPitchAngleGrid, solve_dke
+
+field = conftest.field.__wrapped__()
+species = conftest.species2.__wrapped__()
+pitchgrid, speedgrid = UniformPitchAngleGrid(7), MaxwellSpeedGrid(2)
+mesh = jax.make_mesh(
+    (2, 2), ("species", "speed"), axis_types=(jax.sharding.AxisType.Auto,) * 2
+)
+sol0, info0 = solve_dke(field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10)
+sol1, info1 = solve_dke(
+    field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10, mesh=mesh
+)
+
+
+# per-device scratch memory, compiled but not run, at a resolution where the fine grids
+# rather than the replicated coarse direct solve dominate memory
+field = field.resample(13, 33)
+pitchgrid, speedgrid = UniformPitchAngleGrid(33), MaxwellSpeedGrid(4)
+
+
+def temp_bytes(mesh):
+    def f1():
+        sol, _ = solve_dke(
+            field, pitchgrid, speedgrid, species, 100.0, mesh=mesh,
+            multigrid_options={"coarse_N": 1000},
+        )
+        return sol.f1
+
+    return jax.jit(f1).lower().compile().memory_analysis().temp_size_in_bytes
+
+
+print(json.dumps({
+    "temp_ratio": temp_bytes(mesh) / temp_bytes(None),
+    "nmv": [int(info0["nmv"]), int(info1["nmv"])],
+    "f1_diff": float(np.abs(sol1.f1 - sol0.f1).max() / np.abs(sol0.f1).max()),
+    "ndevices": len(sol1.f1.sharding.device_set),
+    "f1_shard": sol1.f1.addressable_shards[0].data.size / sol1.f1.size,
+    "U_shard": info1["U"][0].addressable_shards[0].data.size / info1["U"][0].size,
+}))
+"""
+
+
+def test_solve_dke_mesh_multidevice():
+    """A solve split across 4 CPU devices matches the unsplit solve, in less memory.
+
+    The number of CPU devices is fixed when JAX starts, so this runs in a separate
+    process to leave the rest of the tests on a single device.
+    """
+    tests = os.path.dirname(os.path.abspath(__file__))
+    env = dict(os.environ)
+    # run against the same yancc as this process
+    root = os.path.dirname(os.path.dirname(os.path.abspath(yancc.__file__)))
+    env["PYTHONPATH"] = os.pathsep.join([root, env.get("PYTHONPATH", "")])
+    out = subprocess.run(
+        [sys.executable, "-c", _MULTIDEVICE_SCRIPT, tests],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    res = json.loads(out.stdout.strip().splitlines()[-1])
+    assert res["nmv"][0] == res["nmv"][1]
+    assert res["f1_diff"] < 1e-10
+    # split by species and speed, so each device holds a quarter of f1 and of U
+    assert res["ndevices"] == 4
+    assert res["f1_shard"] == 0.25
+    assert res["U_shard"] == 0.25
+    # ideally 1/4, plus memory that doesn't scale with resolution
+    assert res["temp_ratio"] < 0.45
+
+
+def test_solve_dke_mesh_validation(field, pitchgrid, speedgrid, species2):
+    """Meshes that can't split the problem evenly by species and speed are rejected.
+
+    Validation only needs the mesh shape, so a single device repeated stands in for
+    several.
+    """
+    Auto = jax.sharding.AxisType.Auto
+
+    def mesh(shape, names, types=None):
+        devices = np.array(jax.devices()[:1] * int(np.prod(shape))).reshape(shape)
+        types = (Auto,) * len(names) if types is None else types
+        return jax.sharding.Mesh(devices, names, axis_types=types)
+
+    ns, nx = len(species2), speedgrid.nx
+    bad = [
+        (jax.devices()[0], "must be a jax.sharding.Mesh"),
+        (mesh((1,), ("pitch",)), "unknown axis names"),
+        (mesh((1,), ("species",), (jax.sharding.AxisType.Explicit,)), "Auto"),
+        (mesh((ns + 1,), ("species",)), "doesn't divide the number of species"),
+        (mesh((ns, nx + 1), ("species", "speed")), "doesn't divide the number of"),
+        (mesh((nx,), ("speed",)), "one device per species"),
+    ]
+    for m, match in bad:
+        with pytest.raises((ValueError, TypeError), match=match):
+            solve_dke(field, pitchgrid, speedgrid, species2, 1e3, mesh=m)
 
 
 def test_solve_dke_derivatives(field, pitchgrid, speedgrid):

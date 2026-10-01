@@ -25,6 +25,7 @@ from ._linalg import (
     lu_solve_banded,
     lu_solve_banded_periodic,
 )
+from ._sharding import _is_array, _shard_leading, _shard_state
 from ._trajectories import (
     DKE,
     MDKE,
@@ -569,6 +570,28 @@ class DKEJacobiSmoother(AbstractYanccOperator):
         else:
             self.mats = jnp.linalg.inv(mats)
 
+    def _shard(self, mesh):
+        # the factors are batched over every coordinate except the line one, in
+        # axorder order
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nalpha,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        nbatch = self.weight.size // sizes[self.axorder[-1]]
+        mats = jax.tree.map(
+            lambda x: (
+                _shard_leading(x, mesh, self.axorder[:-1])
+                if _is_array(x) and x.shape[0] == nbatch
+                else x
+            ),
+            self.mats,
+        )
+        out = eqx.tree_at(lambda m: m.mats, self, mats)
+        return eqx.tree_at(lambda m: m.weight, out, _shard_state(self.weight, mesh))
+
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
@@ -824,6 +847,11 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
         )
         self.invsym = jnp.where(
             jnp.abs(lam) > jnp.finfo(lam.real.dtype).eps, 1.0 / lam, 0.0
+        )
+
+    def _shard(self, mesh):
+        return eqx.tree_at(
+            lambda m: m.invsym, self, _shard_leading(self.invsym, mesh, "sx")
         )
 
     @eqx.filter_jit
@@ -1298,6 +1326,11 @@ class DKEL01LineSmoother(AbstractYanccOperator):
             "bilm,ij->biljm", k2, jnp.eye(n)
         )
         self._inv = jnp.linalg.inv(B.reshape(nblk, 2 * n, 2 * n))
+
+    def _shard(self, mesh):
+        return eqx.tree_at(
+            lambda m: m._inv, self, _shard_leading(self._inv, mesh, "sx")
+        )
 
     @eqx.filter_jit
     def mv(self, vector):

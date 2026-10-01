@@ -183,6 +183,40 @@ yancc inherits its hardware support from JAX. In broad terms:
 If you hit out-of-memory errors on GPU, the cheapest fix is usually to
 reduce the size of the krylov space ``m`` and increase the iteration count ``maxiter``.
 
+Multiple devices
+----------------
+
+A single DKE solve can be split across several devices by species and speed, so that
+each device only holds part of the problem. Pass a ``jax.sharding.Mesh`` with axes
+named ``"species"`` and/or ``"speed"`` to :func:`~yancc.solve_dke` or
+:func:`~yancc.solve_dke_ambipolar`:
+
+.. code-block:: python
+
+    import jax
+    from jax.sharding import AxisType
+    from yancc import solve_dke
+
+    # 2 species, nx = 8, on 8 GPUs: one species per device along "species",
+    # speed split in 4 along "speed"
+    mesh = jax.make_mesh(
+        (2, 4), ("species", "speed"), axis_types=(AxisType.Auto, AxisType.Auto)
+    )
+    sol, info = solve_dke(field, pitchgrid, speedgrid, species, Erho, mesh=mesh)
+
+The mesh must satisfy:
+
+- the axis types are ``AxisType.Auto`` (not the default ``Explicit``);
+- the ``"species"`` size divides the number of species and the ``"speed"`` size
+  divides ``nx``;
+- speed is only split when the ``"species"`` axis has one device per species.
+
+The result is the same as without a mesh, up to roundoff. Memory per device falls
+roughly in proportion to the number of devices, apart from the direct solve on the
+coarsest multigrid level, whose size doesn't depend on the resolution and which is
+kept whole on every device. The same ``mesh`` works when calling ``solve_dke`` inside
+``jax.jit``.
+
 Other tips
 ==========
 

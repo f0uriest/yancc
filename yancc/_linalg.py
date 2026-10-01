@@ -12,6 +12,7 @@ import lineax as lx
 import numpy as np
 from jaxtyping import Array, Float
 
+from ._sharding import _replicate
 from .field import Field
 from .velocity_grids import UniformPitchAngleGrid
 
@@ -476,6 +477,11 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         self._c = jax.lax.stop_gradient(c)
         self._operator = operator
         self._refine = refine
+
+    def _shard(self, mesh):
+        # its size is set by the coarsest grid rather than the problem resolution, and
+        # the factorization can't be split across devices, so it is kept whole
+        return _replicate(self, mesh)
 
     def mv(self, vector):
         """Matrix vector product."""

@@ -2,12 +2,14 @@
 
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
 from jaxtyping import Float
 from scipy.constants import elementary_charge
 
+from ._sharding import _shard_state
 from .field import Field
 from .species import LocalMaxwellian
 from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
@@ -85,6 +87,10 @@ class DKESources(lx.MatrixLinearOperator):
         sa = [jnp.concatenate([s1s, s2s]).T for s1s, s2s in zip(s1a, s2a)]
         super().__init__(jax.scipy.linalg.block_diag(*sa))
 
+    def _shard(self, mesh):
+        # rows are the flattened (species, speed, ...) state
+        return eqx.tree_at(lambda m: m.matrix, self, _shard_state(self.matrix, mesh, 0))
+
 
 class DKEConstraint(lx.MatrixLinearOperator):
     """Constraints to fix gauge freedom in density and energy.
@@ -145,6 +151,10 @@ class DKEConstraint(lx.MatrixLinearOperator):
         Iea = jnp.split(Ie, len(species))
         Ia = [jnp.concatenate([Ips, Ies]) for Ips, Ies in zip(Ipa, Iea)]
         super().__init__(jax.scipy.linalg.block_diag(*Ia))
+
+    def _shard(self, mesh):
+        # columns are the flattened (species, speed, ...) state
+        return eqx.tree_at(lambda m: m.matrix, self, _shard_state(self.matrix, mesh, 1))
 
 
 def radial_magnetic_drift(
