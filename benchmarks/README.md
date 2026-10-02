@@ -18,6 +18,13 @@ lowering and XLA compilation), `run_s` (one run of the compiled executable), `me
 estimate rather than a measured peak) and `wall_s` (total time for the case, including
 building it, which is used to balance groups when splitting the suite).
 
+With `--no-aot`, cases are instead run through a single jitted solve shared by the whole
+run, and the JAX caches are kept between cases, so a case whose static settings and
+array shapes match an earlier one reuses its compiled code. This makes runs with many
+similar cases faster, but `run_s` then includes compilation whenever nothing could be
+reused, and `compile_s` and `mem_bytes` are not recorded. Whether a run used ahead of
+time compilation is stored as `aot` in the results header.
+
 `nmv`, `niter`, `success` and `res` are deterministic and hardware independent, and are
 what `compare` uses. This is meant to catch regressions in overall deterministic
 performance (ie due to multigrid and krylov settings). The times depend on the machine
