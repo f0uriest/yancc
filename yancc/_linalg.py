@@ -165,10 +165,10 @@ class AbstractDKEOperator(AbstractYanccOperator):
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
 
     @abc.abstractmethod
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder: str = "sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of the operator.
-
-        Blocks are along the last axis of ``axorder``.
 
         Parameters
         ----------
@@ -178,6 +178,11 @@ class AbstractDKEOperator(AbstractYanccOperator):
         bw : int, optional
             Lower and upper bandwidth of the banded storage. Defaults to a
             bandwidth that holds all nonzero entries of the blocks.
+        axorder : str, optional
+            Ordering of the axes, a permutation of "sxatz" (or "atz" for operators
+            without species and speed). Blocks are along the last axis, and ordered
+            by the remaining axes in the given order. Defaults to "sxatz" (or "atz"),
+            giving blocks along zeta.
         """
 
 
@@ -410,24 +415,41 @@ def _tridiag_solve(l, d, u, b, *args):
 
 
 class DenseLUInverseOperator(lx.AbstractLinearOperator):
-    """Inverse of a dense matrix, via its LU factorization.
+    """Inverse of a linear operator, via the LU factorization of its dense matrix.
 
     Parameters
     ----------
-    matrix : jax.Array
-        Square matrix to invert.
+    operator : lx.AbstractLinearOperator
+        Operator to invert. Materialized into a dense matrix and factored.
     equilibrate : bool
         Whether to balance the rows and columns of the matrix before factoring it.
-        This does not change the inverse, but improves its accuracy for badly scaled
+        This does not change the inverse, but improves the factorization's accuracy
+        for badly scaled matrices.
+    refine : int
+        Number of steps of iterative refinement against ``operator`` to apply after
+        each triangular solve, which improves the accuracy for ill-conditioned
         matrices.
+    batch_size : int, optional
+        Number of columns of the identity to map ``operator`` over at a time when
+        materializing it. Default maps over all columns at once; a smaller batch
+        bounds the peak memory of materialization at the cost of a little speed.
     """
 
     _luT: jax.Array
     _perm: jax.Array
     _r: jax.Array
     _c: jax.Array
+    _operator: lx.AbstractLinearOperator
+    _refine: int = eqx.field(static=True)
 
-    def __init__(self, matrix: jax.Array, equilibrate: bool = True):
+    def __init__(
+        self,
+        operator: lx.AbstractLinearOperator,
+        equilibrate: bool = True,
+        refine: int = 1,
+        batch_size: int | None = None,
+    ):
+        matrix = dense_from_mv(operator.mv, operator.in_size(), batch_size)
         if equilibrate:
             r, c = _ruiz_scale(matrix)
             matrix = r[:, None] * matrix * c[None, :]
@@ -444,9 +466,25 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         self._perm = perm
         self._r = jax.lax.stop_gradient(r)
         self._c = jax.lax.stop_gradient(c)
+        self._operator = operator
+        self._refine = refine
 
     def mv(self, vector):
         """Matrix vector product."""
+        x = self._solve(vector)
+        # For badly conditioned matrices the LU solve leaves a residual many orders of
+        # magnitude above roundoff, and its size depends on floating point details
+        # such as operation order and fusion. That makes the preconditioner, and so
+        # the Krylov iteration count, differ between compilations and hardware.
+        # Refinement against the operator (whose residual is far more accurate than
+        # the solve) removes most of that residual for the cost of one operator
+        # product and one more solve per step. The operator is used instead of the
+        # matrix so no second n x n array has to be kept.
+        for _ in range(self._refine):
+            x = x + self._solve(vector - self._operator.mv(x))
+        return x
+
+    def _solve(self, vector):
         lu = self._luT.T
         # The factored matrix is diag(r) A diag(c), so A^-1 b = c * (LU)^-1 (r * b),
         # and (diag(r) A diag(c))[perm] = L U.

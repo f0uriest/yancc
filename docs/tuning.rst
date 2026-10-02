@@ -182,6 +182,27 @@ Cycle and smoothing
    to 4–5 is sometimes the cheapest way to recover convergence on stiff
    problems.
 
+``smooth_type`` *(str, default "plane,s,x,a,l01t,l01z" for DKE, "plane,a" for MDKE)*
+   Comma separated list of the smoothers applied on each multigrid level, in the
+   order given. Each entry is one of:
+
+   - ``"a"``, ``"t"``, ``"z"``: block-Jacobi line smoothers along pitch angle, theta
+     and zeta. The DKE also has ``"x"`` and ``"s"``, line smoothers along speed and
+     species.
+   - ``"plane"``: a (theta, zeta)-plane smoother that uses only the surface averaged
+     drift and diagonalizes via FFT so it is fast and memory efficient.
+   - ``"l01t"``, ``"l01z"``: theta and zeta line smoothers acting only on the
+     lowest two Legendre moments in pitch (the flux-surface density- and
+     flow-like parts of the distribution).
+
+   For example ``"z,t,a,x,s"`` uses only the block-Jacobi line smoothers for the DKE.
+   The moment smoothers only act on part of the distribution function, so they should
+   be combined with smoothers that cover the rest. Adding the block-Jacobi theta and
+   zeta lines to the defaults (e.g. ``"plane,s,x,a,l01t,l01z,t,z"`` for the DKE or
+   ``"plane,a,t,z,l01t,l01z"`` for the MDKE) usually reduces the number of iterations
+   further, but increases the cost of each iteration by more. ``smooth_weights``
+   applies to the line and plane smoothers.
+
 ``smooth_method`` *(str, default "standard")*
    How the smoother is applied. Choices: ``"standard"`` (block Jacobi, which is tuned
    to decrease the error but may not decrease the residual), ``"krylov1"``,
@@ -207,7 +228,10 @@ Cycle and smoothing
 
 ``smooth_weights`` *(default None)*
    Optional damping weights applied to each smoother. The default ``None`` uses
-   specially tuned weights based on the collisionality of the problem.
+   specially tuned weights based on the collisionality of the problem. A single value
+   applies to every smoother. A dict with entries from ``smooth_type`` as keys, e.g.
+   ``{"plane": 0.8, "l01t": 0.9}``, sets the weight of each of those smoothers, with
+   the others using their defaults.
 
 ``p1``, ``p2`` *(default "2d", 2)*
    Finite-difference order used inside the preconditioner. Lower order than

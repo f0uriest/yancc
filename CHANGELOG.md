@@ -19,6 +19,32 @@ Changelog
       flow, and the contravariant poloidal and toroidal components of the total flow.
   ``Vperp`` and the classical fluxes require ``Field.g_sup_rr``.
 
+Unreleased
+----------
+### New features
+- New smoothers, including a theta/zeta plane smoother using surface averaged wind
+  and fast diagonalization via FFT, and theta/zeta line smoothers retaining coupling
+  between the L0 and L1 Legendre modes in pitch to damp errors that are not smoothed
+  by collisions.
+- The multigrid option ``smooth_type`` is now a comma separated string listing the
+  smoothers to apply and their order, for both the DKE and MDKE. The new defaults are
+  ``"plane,s,x,a,l01t,l01z"`` for the DKE (the frozen plane, block-Jacobi lines in
+  species, speed and pitch, and new ``"l01t"`` and ``"l01z"`` theta and zeta line
+  smoothers acting on the lowest two Legendre moments in pitch) and ``"plane,a"`` for
+  the MDKE (the frozen plane and pitch lines). The previous integer values are no
+  longer accepted. See the tuning guide.
+- The multigrid option ``smooth_weights`` can now be a dict mapping entries of
+  ``smooth_type`` to their relaxation weight, with the other smoothers using their
+  defaults. A single value now applies to every smoother.
+
+### Performance improvements
+- The direct solve on the coarsest multigrid level now applies a step of iterative
+  refinement against the coarse operator, removing most of the error left by the LU
+  factorization of badly scaled multispecies coarse matrices.
+- All smoothers on a multigrid level are now built from a single shared operator,
+  reducing the compile time of the preconditioner by about a third.
+
+
 v0.0.2
 ------
 ### New features

@@ -18,6 +18,13 @@ lowering and XLA compilation), `run_s` (one run of the compiled executable), `me
 estimate rather than a measured peak) and `wall_s` (total time for the case, including
 building it, which is used to balance groups when splitting the suite).
 
+With `--no-aot`, cases are instead run through a single jitted solve shared by the whole
+run, and the JAX caches are kept between cases, so a case whose static settings and
+array shapes match an earlier one reuses its compiled code. This makes runs with many
+similar cases faster, but `run_s` then includes compilation whenever nothing could be
+reused, and `compile_s` and `mem_bytes` are not recorded. Whether a run used ahead of
+time compilation is stored as `aot` in the results header.
+
 `nmv`, `niter`, `success` and `res` are deterministic and hardware independent, and are
 what `compare` uses. This is meant to catch regressions in overall deterministic
 performance (ie due to multigrid and krylov settings). The times depend on the machine
@@ -53,6 +60,10 @@ python benchmarks/bench_dke.py run --tier all --out bench.json
 python benchmarks/bench_dke.py run --list                 # show all case names
 python benchmarks/bench_dke.py run --case ncsx_2sp_nu1e-2 --out one.json
 python benchmarks/bench_dke.py run --case hsx_2sp_1e-1,w7x_2sp_3e-2 --out two.json
+
+# scale the pitch, theta and zeta resolutions of every case (nx and nz = 1 unchanged,
+# each size keeps its parity); recorded as res_scale in the results header
+python benchmarks/bench_dke.py run --tier smoke --res-scale 1.5 --out smoke_x1.5.json
 
 # diff current against the committed baseline; exits nonzero on any regression
 python benchmarks/bench_dke.py compare benchmarks/baseline.json nightly.json
@@ -99,7 +110,7 @@ alongside the equilibrium / collisionality / resolution scans.
 ## The monoenergetic benchmark
 
 `bench_mdke.py` is the monoenergetic sibling of `bench_dke.py`, with the same CLI
-(`run`/`compare`, `--tier`, `--case`, `--list`, `--out`) and the same regression rules.
+(`run`/`compare`, `--tier`, `--case`, `--list`, `--out`, `--res-scale`) and the same regression rules.
 It solves `solve_mdke` with production defaults, so a change in `nmv`/`success`
 reflects a change in the shipped code.
 
