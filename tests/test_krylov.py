@@ -362,6 +362,13 @@ def test_gcrotmk_base(flexible):
     np.testing.assert_allclose(U1, U2)
 
 
+def _assert_cu_allclose(C1, U1, C2, U2):
+    """Recycled (C, U) pairs match, up to flipping the sign of a C, U column pair."""
+    sign = np.sign(np.sum(np.asarray(C1) * np.asarray(C2), axis=0))
+    np.testing.assert_allclose(C1, C2 * sign)
+    np.testing.assert_allclose(U1, U2 * sign)
+
+
 @pytest.mark.parametrize("flexible", [True, False])
 def test_gcrotmk_warm_start(flexible):
     """GCROT(m,k) warm-started with 1, k, and x0+k CU pairs matches scipy."""
@@ -407,8 +414,7 @@ def test_gcrotmk_warm_start(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
-    np.testing.assert_allclose(C1, C2)
-    np.testing.assert_allclose(U1, U2)
+    _assert_cu_allclose(C1, U1, C2, U2)
 
     # Round 3: warm-start with k CU pairs.
     CU = [(c, u) for c, u in zip(C1[:, :k].T, U1[:, :k].T)]
@@ -431,8 +437,7 @@ def test_gcrotmk_warm_start(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
-    np.testing.assert_allclose(C1, C2)
-    np.testing.assert_allclose(U1, U2)
+    _assert_cu_allclose(C1, U1, C2, U2)
 
     # Round 4: warm-start with x0 and k CU pairs.
     CU = [(c, u) for c, u in zip(C1[:, :k].T, U1[:, :k].T)]
@@ -456,8 +461,7 @@ def test_gcrotmk_warm_start(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
-    np.testing.assert_allclose(C1, C2)
-    np.testing.assert_allclose(U1, U2)
+    _assert_cu_allclose(C1, U1, C2, U2)
 
     # Round 5: a solve that restarts fewer than k times returns zero columns in U.
     # Passing that back, with C computed from it, must behave exactly like passing
@@ -808,7 +812,7 @@ def test_krylov_autodiff(flexible):
     def solve_gcrot(x):
         A = get_A(x)
         bx = b * x
-        M = DenseLUInverseOperator(A.as_matrix())
+        M = DenseLUInverseOperator(A)
         y, _, _, res, _, _, _ = gcrotmk(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
@@ -818,7 +822,7 @@ def test_krylov_autodiff(flexible):
     def solve_lgmres(x):
         A = get_A(x)
         bx = b * x
-        M = DenseLUInverseOperator(A.as_matrix())
+        M = DenseLUInverseOperator(A)
         y, _, _, res, _, _, _ = lgmres(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )

@@ -1,5 +1,7 @@
 """Tests for preconditioners."""
 
+import equinox as eqx
+import jax
 import numpy as np
 import pytest
 
@@ -9,6 +11,7 @@ from yancc._preconditioner import (
     DKEPreconditioner,
     MDKEPreconditioner,
 )
+from yancc._smoothers import DKEJacobiSmoother, MDKEJacobiSmoother
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
@@ -41,3 +44,55 @@ def test_preconditioner_interface(field, species1, build):
 
     AT = np.asarray(op.transpose().as_matrix())
     np.testing.assert_allclose(AT, A.T, atol=1e-2 * np.abs(A).max())
+
+
+def test_preconditioner_smoother_fd_order(field, species1):
+    """Smoothers with their own FD order don't reuse the level operators."""
+    pitchgrid = UniformPitchAngleGrid(5)
+    speedgrid = MaxwellSpeedGrid(2)
+    potentials = RosenbluthPotentials(speedgrid, species1)
+    M = DKEPreconditioner(
+        field,
+        pitchgrid,
+        speedgrid,
+        species1,
+        100.0,
+        None,
+        potentials,
+        p1="2d",
+        smooth_p1="4d",
+        smooth_type="t",
+    )
+    sm = M.smoothers[-1][0]
+    assert isinstance(sm, DKEJacobiSmoother)
+    ref = DKEJacobiSmoother(
+        sm.field,
+        sm.pitchgrid,
+        speedgrid,
+        species1,
+        100.0,
+        potentials=potentials,
+        p1="4d",
+        p2=sm.p2,
+        axorder=sm.axorder,
+        gauge=True,
+    )
+    jax.tree_util.tree_map(
+        np.testing.assert_allclose,
+        eqx.filter(sm.mats, eqx.is_inexact_array),
+        eqx.filter(ref.mats, eqx.is_inexact_array),
+    )
+
+    M = MDKEPreconditioner(
+        field, pitchgrid, 0.01, 0.1, p1="2d", smooth_p1="4d", smooth_type="t"
+    )
+    sm = M.smoothers[-1][0]
+    assert isinstance(sm, MDKEJacobiSmoother)
+    ref = MDKEJacobiSmoother(
+        sm.field, sm.pitchgrid, 0.01, 0.1, "4d", sm.p2, sm.axorder, True
+    )
+    jax.tree_util.tree_map(
+        np.testing.assert_allclose,
+        eqx.filter(sm.mats, eqx.is_inexact_array),
+        eqx.filter(ref.mats, eqx.is_inexact_array),
+    )

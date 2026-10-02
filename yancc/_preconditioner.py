@@ -6,22 +6,24 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+from jax.sharding import Mesh
 from jaxtyping import Array, ArrayLike, Float
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from ._linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
+from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
 from ._multigrid import (
     MultigridOperator,
-    get_dke_jacobi_smoothers,
     get_dke_operators,
+    get_dke_smoothers,
     get_fields_grids,
     get_grid_resolutions,
-    get_mdke_jacobi_smoothers,
     get_mdke_operators,
+    get_mdke_smoothers,
     get_prolongations,
     get_restrictions,
 )
+from ._sharding import _validate_mesh
 from ._trajectories import DKE, MDKE
 from .field import Field
 from .species import LocalMaxwellian, _collisionality
@@ -88,9 +90,13 @@ class MDKEPreconditioner(MultigridOperator):
         min_nt = options.pop("min_nt", min_n)
         min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
         min_na = options.pop("min_na", min_n)
+        # Smoother FD order, independent of the coarse-operator order (p1/p2).
+        smooth_p1 = options.pop("smooth_p1", self.p1)
+        smooth_p2 = options.pop("smooth_p2", self.p2)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
+        smooth_type = options.pop("smooth_type", "plane,a")
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -132,16 +138,21 @@ class MDKEPreconditioner(MultigridOperator):
             p2=self.p2,
             gauge=gauge,
         )
-        smoothers = get_mdke_jacobi_smoothers(
+        smoothers = get_mdke_smoothers(
             fields=fields,
             pitchgrids=grids,
             erhohat=erhohat,
             nuhat=nuhat,
-            p1=self.p1,
-            p2=self.p2,
+            p1=smooth_p1,
+            p2=smooth_p2,
             gauge=gauge,
+            smooth_type=smooth_type,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
+            # the level operators can be shared when the smoothers use the same ones
+            operators=(
+                operators if (smooth_p1, smooth_p2) == (self.p1, self.p2) else None
+            ),
         )
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
@@ -263,6 +274,11 @@ class DKEPreconditioner(MultigridOperator):
         Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
     background : list of LocalMaxwellian, optional
         Background species for inter-species collisions.
+    potentials : RosenbluthPotentials
+        Rosenbluth potentials for the collision operator.
+    mesh : jax.sharding.Mesh, optional
+        Devices to split the preconditioner across, with axes named ``"species"``
+        and/or ``"speed"``.
     """
 
     field: Field
@@ -284,8 +300,10 @@ class DKEPreconditioner(MultigridOperator):
         background: list[LocalMaxwellian] | None,
         potentials: RosenbluthPotentials,
         verbose: bool | int = False,
+        mesh: Mesh | None = None,
         **options,
     ):
+        _validate_mesh(mesh, len(species), speedgrid.nx)
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -301,9 +319,13 @@ class DKEPreconditioner(MultigridOperator):
         resolutions = _dke_resolutions(
             field, pitchgrid, speedgrid, species, self.p1, self.p2, options
         )
+        # Smoother FD order, independent of the coarse-operator order (p1/p2).
+        smooth_p1 = options.pop("smooth_p1", self.p1)
+        smooth_p2 = options.pop("smooth_p2", self.p2)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
+        smooth_type = options.pop("smooth_type", "plane,s,x,a,l01t,l01z")
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -333,8 +355,9 @@ class DKEPreconditioner(MultigridOperator):
             gauge=gauge,
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
+            mesh=mesh,
         )
-        smoothers = get_dke_jacobi_smoothers(
+        smoothers = get_dke_smoothers(
             fields=fields,
             pitchgrids=grids,
             speedgrid=speedgrid,
@@ -342,27 +365,34 @@ class DKEPreconditioner(MultigridOperator):
             Erho=Erho,
             background=background,
             potentials=potentials,
-            p1=self.p1,
-            p2=self.p2,
+            p1=smooth_p1,
+            p2=smooth_p2,
             gauge=gauge,
+            smooth_type=smooth_type,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
             operator_weights=smoother_weights,
             coulomb_log=coulomb_log,
+            # the level operators can be shared when the smoothers use the same ones
+            operators=(
+                operators
+                if (smooth_p1, smooth_p2) == (self.p1, self.p2)
+                and smoother_weights is operator_weights
+                else None
+            ),
+            mesh=mesh,
         )
         # The direct solve on the coarsest grid needs the operator as a dense matrix.
         # Building it a chunk of columns at a time keeps peak memory near the size of
         # the matrix itself, rather than that times the number of intermediates in a
-        # matrix vector product, at the cost of a little speed.
-        coarse_matrix = dense_from_mv(
-            operators[0].mv, operators[0].in_size(), as_matrix_chunk
-        )
-        # The coarse matrix is factored after row/column equilibration. With several
-        # species its entries span many orders of magnitude, and an unscaled LU has
-        # an error floor large enough to leave the nearly singular heavy-species
-        # modes with no correct digits, which stalls the outer Krylov solve at a
-        # residual that depends on floating point details of the hardware.
-        coarse_opinv = DenseLUInverseOperator(coarse_matrix, equilibrate=True)
+        # matrix vector product, at the cost of a little speed. The matrix is factored
+        # after row/column equilibration. With several species its entries span many
+        # orders of magnitude, and an unscaled LU has an error floor large enough to
+        # leave the nearly singular heavy-species modes with no correct digits, which
+        # stalls the outer Krylov solve at a residual that depends on floating point
+        # details of the hardware. One step of refinement against the coarse operator
+        # removes most of the remaining error.
+        coarse_opinv = DenseLUInverseOperator(operators[0], batch_size=as_matrix_chunk)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,

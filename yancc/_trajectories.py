@@ -1,7 +1,5 @@
 """Drift Kinetic Operators without collisions."""
 
-import itertools
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -20,7 +18,8 @@ from ._linalg import (
     banded_to_dense,
     dense_to_banded,
 )
-from ._utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d
+from ._sharding import _shard_sx_leaves
+from ._utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _to_axorder
 from .field import Field
 from .species import LocalMaxwellian
 from .velocity_grids import (
@@ -85,8 +84,6 @@ class MDKETheta(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
     """
@@ -97,7 +94,6 @@ class MDKETheta(AbstractDKEOperator):
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
-    axorder: str = eqx.field(static=True)
     _fd: Float[Array, "nt nt"]
     _bd: Float[Array, "nt nt"]
     _w: Float[Array, "na nt nz"]
@@ -111,7 +107,6 @@ class MDKETheta(AbstractDKEOperator):
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
         assert field.ntheta > fd_coeffs[1][p1].size // 2
@@ -121,7 +116,6 @@ class MDKETheta(AbstractDKEOperator):
         self.erhohat = jnp.array(erhohat)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
         f1 = jnp.ones(field.ntheta)
@@ -138,11 +132,8 @@ class MDKETheta(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
+        shape = (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
         f1 = jnp.moveaxis(f, 1, -1)  # (na, nz, nt) - convolved axis last
         # upwind: pick backward/forward difference per node by sign of w, then
         # move the convolved axis back into place (single transpose).
@@ -151,16 +142,12 @@ class MDKETheta(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale * f[idx, 0, 0], df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
         fd = jnp.diag(self._fd)[None, :, None]
         bd = jnp.diag(self._bd)[None, :, None]
         w = self._w
@@ -168,16 +155,12 @@ class MDKETheta(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
         fd = jnp.abs(self._fd).sum(axis=1)[None, :, None]
         bd = jnp.abs(self._bd).sum(axis=1)[None, :, None]
         w = self._w
@@ -185,16 +168,17 @@ class MDKETheta(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("MDKETheta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="atz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "t":  # its just diagonal
+        if axorder[-1] != "t":  # its just diagonal
             if bw is None:
                 bw = 0
             sizes = {
@@ -202,7 +186,9 @@ class MDKETheta(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(self.diagonal(), sizes, axorder).reshape(
+                (-1, sizes[axorder[-1]])
+            )
             if fmt == "dense":
                 return jax.vmap(jnp.diag)(df)
             return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
@@ -214,7 +200,7 @@ class MDKETheta(AbstractDKEOperator):
             )
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, axorder
         )
         fd = dense_to_banded(bw, bw, self._fd)
         bd = dense_to_banded(bw, bw, self._bd)
@@ -259,8 +245,6 @@ class MDKEZeta(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
     """
@@ -271,7 +255,6 @@ class MDKEZeta(AbstractDKEOperator):
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
-    axorder: str = eqx.field(static=True)
     _fd: Float[Array, "nz nz"]
     _bd: Float[Array, "nz nz"]
     _w: Float[Array, "na nt nz"]
@@ -285,7 +268,6 @@ class MDKEZeta(AbstractDKEOperator):
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
         self.field = field
@@ -293,7 +275,6 @@ class MDKEZeta(AbstractDKEOperator):
         self.erhohat = jnp.array(erhohat)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
         f1 = jnp.ones(field.nzeta)
@@ -315,26 +296,19 @@ class MDKEZeta(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
+        shape = (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
         # convolved (zeta) axis already last; upwind by sign of w per node
         df = self._w * jnp.where(self._wpos, f @ self._bd.T, f @ self._fd.T)
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale * f[idx, 0, 0], df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
         fd = jnp.diag(self._fd)[None, None, :]
         bd = jnp.diag(self._bd)[None, None, :]
         w = self._w
@@ -342,16 +316,12 @@ class MDKEZeta(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
         fd = jnp.abs(self._fd).sum(axis=1)[None, None, :]
         bd = jnp.abs(self._bd).sum(axis=1)[None, None, :]
         w = self._w
@@ -359,16 +329,17 @@ class MDKEZeta(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("MDKEZeta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="atz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "z":  # its just diagonal
+        if axorder[-1] != "z":  # its just diagonal
             if bw is None:
                 bw = 0
             sizes = {
@@ -376,7 +347,9 @@ class MDKEZeta(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(self.diagonal(), sizes, axorder).reshape(
+                (-1, sizes[axorder[-1]])
+            )
             if fmt == "dense":
                 return jax.vmap(jnp.diag)(df)
             return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
@@ -388,7 +361,7 @@ class MDKEZeta(AbstractDKEOperator):
             )
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, axorder
         )
         fd = dense_to_banded(bw, bw, self._fd)
         bd = dense_to_banded(bw, bw, self._bd)
@@ -432,8 +405,6 @@ class MDKEPitch(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
     gauge : bool
         Whether to impose gauge constraint by fixing f at a single point on the surface.
     """
@@ -444,7 +415,6 @@ class MDKEPitch(AbstractDKEOperator):
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
-    axorder: str = eqx.field(static=True)
     _fd: Float[Array, "na na"]
     _bd: Float[Array, "na na"]
     _w: Float[Array, "na nt nz"]
@@ -458,7 +428,6 @@ class MDKEPitch(AbstractDKEOperator):
         erhohat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
         assert pitchgrid.nalpha > fd_coeffs[1][p1].size // 2
@@ -468,7 +437,6 @@ class MDKEPitch(AbstractDKEOperator):
         self.erhohat = jnp.array(erhohat)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.nalpha
         f1 = jnp.ones(pitchgrid.nalpha)
@@ -485,11 +453,8 @@ class MDKEPitch(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
+        shape = (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2))  # (na, nt, nz)
         f1 = jnp.moveaxis(f, 0, -1)  # (nt, nz, na) - convolved axis last
         # upwind: pick backward/forward difference per node by sign of w, then
         # move the convolved axis back into place (single transpose).
@@ -498,16 +463,12 @@ class MDKEPitch(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale * f[idx, 0, 0], df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
         fd = jnp.diag(self._fd)[:, None, None]
         bd = jnp.diag(self._bd)[:, None, None]
         w = self._w
@@ -515,16 +476,12 @@ class MDKEPitch(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, self._scale, df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
-        )
         fd = jnp.abs(self._fd).sum(axis=1)[:, None, None]
         bd = jnp.abs(self._bd).sum(axis=1)[:, None, None]
         w = self._w
@@ -532,16 +489,17 @@ class MDKEPitch(AbstractDKEOperator):
         idx = self.pitchgrid.nalpha // 2
         gval = jnp.where(self.gauge, jnp.abs(self._scale), df[idx, 0, 0])
         df = df.at[idx, 0, 0].set(gval, indices_are_sorted=True, unique_indices=True)
-        df = jnp.moveaxis(df, (0, 1, 2), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("MDKEPitch.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="atz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "a":  # its just diagonal
+        if axorder[-1] != "a":  # its just diagonal
             if bw is None:
                 bw = 0
             sizes = {
@@ -549,7 +507,9 @@ class MDKEPitch(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = self.diagonal().reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(self.diagonal(), sizes, axorder).reshape(
+                (-1, sizes[axorder[-1]])
+            )
             if fmt == "dense":
                 return jax.vmap(jnp.diag)(df)
             return jnp.pad(df[:, None, :], [(0, 0), (bw, bw), (0, 0)])
@@ -561,7 +521,7 @@ class MDKEPitch(AbstractDKEOperator):
             )
 
         _, caxorder = _parse_axorder_shape_3d(
-            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, self.axorder
+            self.field.ntheta, self.field.nzeta, self.pitchgrid.nalpha, axorder
         )
         fd = dense_to_banded(bw, bw, self._fd)
         bd = dense_to_banded(bw, bw, self._bd)
@@ -601,8 +561,6 @@ class MDKE(AbstractDKEOperator):
         Monoenergetic electric field, Erho/v in units of V*s/m
     nuhat : float
         Monoenergetic collisionality, nu/v in units of 1/m
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -620,7 +578,6 @@ class MDKE(AbstractDKEOperator):
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
-    axorder: str = eqx.field(static=True)
     _opa: MDKEPitch
     _opt: MDKETheta
     _opz: MDKEZeta
@@ -634,7 +591,6 @@ class MDKE(AbstractDKEOperator):
         nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "atz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
         self.field = field
@@ -644,15 +600,12 @@ class MDKE(AbstractDKEOperator):
         self.nuhat = jnp.array(nuhat)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
-        self._opa = MDKEPitch(field, pitchgrid, erhohat, p1, p2, axorder, gauge)
-        self._opt = MDKETheta(field, pitchgrid, erhohat, p1, p2, axorder, gauge)
-        self._opz = MDKEZeta(field, pitchgrid, erhohat, p1, p2, axorder, gauge)
-        self._opp = MDKEPitchAngleScattering(
-            field, pitchgrid, nuhat, p1, p2, axorder, gauge
-        )
+        self._opa = MDKEPitch(field, pitchgrid, erhohat, p1, p2, gauge)
+        self._opt = MDKETheta(field, pitchgrid, erhohat, p1, p2, gauge)
+        self._opz = MDKEZeta(field, pitchgrid, erhohat, p1, p2, gauge)
+        self._opp = MDKEPitchAngleScattering(field, pitchgrid, nuhat, p1, p2, gauge)
 
     @eqx.filter_jit
     @jax.named_scope("MDKE.mv")
@@ -694,7 +647,9 @@ class MDKE(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("MDKE.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="atz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         if fmt == "banded" and bw is None:
             sizes = {
@@ -707,12 +662,12 @@ class MDKE(AbstractDKEOperator):
                     fd_coeffs[1][self.p1].size // 2,
                     fd_coeffs[2][self.p2].size // 2,
                 ),
-                sizes[self.axorder[-1]] // 2,
+                sizes[axorder[-1]] // 2,
             )
-        d0 = self._opa.block_diagonal(fmt, bw)
-        d1 = self._opt.block_diagonal(fmt, bw)
-        d2 = self._opz.block_diagonal(fmt, bw)
-        d3 = self._opp.block_diagonal(fmt, bw)
+        d0 = self._opa.block_diagonal(fmt, bw, axorder)
+        d1 = self._opt.block_diagonal(fmt, bw, axorder)
+        d2 = self._opz.block_diagonal(fmt, bw, axorder)
+        d3 = self._opp.block_diagonal(fmt, bw, axorder)
         return d0 + d1 + d2 + d3
 
 
@@ -807,8 +762,6 @@ class DKETheta(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
-    axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
-        Ordering for variables in f, eg how the 5d array is flattened
     """
 
     field: Field
@@ -818,7 +771,6 @@ class DKETheta(AbstractDKEOperator):
     Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
 
     _fd: Float[Array, "nt nt"]
@@ -836,10 +788,8 @@ class DKETheta(AbstractDKEOperator):
         Erho: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert field.ntheta > fd_coeffs[1][p1].size // 2
         assert field.ntheta > fd_coeffs[2][p2].size // 2
         self.field = field
@@ -849,7 +799,6 @@ class DKETheta(AbstractDKEOperator):
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.ntheta
         f1 = jnp.ones(field.ntheta)
@@ -871,16 +820,14 @@ class DKETheta(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_4d(
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nalpha,
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
         f1 = jnp.moveaxis(f, 3, -1)  # (ns, nx, na, nz, nt) - convolved axis last
         # upwind: pick backward/forward difference per node by sign of w, then
         # move the convolved axis back into place (single transpose).
@@ -896,21 +843,12 @@ class DKETheta(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         fd = jnp.diag(self._fd)[None, None, None, :, None]
         bd = jnp.diag(self._bd)[None, None, None, :, None]
         w = self._w
@@ -921,21 +859,12 @@ class DKETheta(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         fd = jnp.abs(self._fd).sum(axis=1)[None, None, None, :, None]
         bd = jnp.abs(self._bd).sum(axis=1)[None, None, None, :, None]
         w = self._w
@@ -946,16 +875,17 @@ class DKETheta(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKETheta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "t":  # its just diagonal
+        if axorder[-1] != "t":  # its just diagonal
             if bw is None:
                 bw = 0
             df = self.diagonal()
@@ -966,7 +896,7 @@ class DKETheta(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = df.reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(df, sizes, axorder).reshape((-1, sizes[axorder[-1]]))
             if fmt == "dense":
                 op = jax.vmap(jnp.diag)
             else:
@@ -982,7 +912,7 @@ class DKETheta(AbstractDKEOperator):
             self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
-            self.axorder,
+            axorder,
         )
         fd = dense_to_banded(bw, bw, self._fd)
         bd = dense_to_banded(bw, bw, self._bd)
@@ -1044,8 +974,6 @@ class DKEZeta(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
-    axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
-        Ordering for variables in f, eg how the 5d array is flattened
     """
 
     field: Field
@@ -1055,7 +983,6 @@ class DKEZeta(AbstractDKEOperator):
     Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
 
     _fd: Float[Array, "nz nz"]
@@ -1073,10 +1000,8 @@ class DKEZeta(AbstractDKEOperator):
         Erho: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1084,7 +1009,6 @@ class DKEZeta(AbstractDKEOperator):
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = 2 * np.pi / field.nzeta / field.NFP
         f1 = jnp.ones(field.nzeta)
@@ -1111,16 +1035,14 @@ class DKEZeta(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_4d(
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nalpha,
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
         # convolved (zeta) axis already last; upwind by sign of w per node
         df = self._w * jnp.where(self._wpos, f @ self._bd.T, f @ self._fd.T)
         idxa = self.pitchgrid.nalpha // 2
@@ -1133,21 +1055,12 @@ class DKEZeta(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         fd = jnp.diag(self._fd)[None, None, None, None, :]
         bd = jnp.diag(self._bd)[None, None, None, None, :]
         w = self._w
@@ -1158,21 +1071,12 @@ class DKEZeta(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         fd = jnp.abs(self._fd).sum(axis=1)[None, None, None, None, :]
         bd = jnp.abs(self._bd).sum(axis=1)[None, None, None, None, :]
         w = self._w
@@ -1183,17 +1087,18 @@ class DKEZeta(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKEZeta.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
         # off-axis, or axisymmetric (nzeta=1) with no zeta coupling: just diagonal
-        if self.axorder[-1] != "z" or self.field.nzeta == 1:
+        if axorder[-1] != "z" or self.field.nzeta == 1:
             if bw is None:
                 bw = 0
             df = self.diagonal()
@@ -1204,7 +1109,7 @@ class DKEZeta(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = df.reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(df, sizes, axorder).reshape((-1, sizes[axorder[-1]]))
             if fmt == "dense":
                 op = jax.vmap(jnp.diag)
             else:
@@ -1220,7 +1125,7 @@ class DKEZeta(AbstractDKEOperator):
             self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
-            self.axorder,
+            axorder,
         )
         fd = dense_to_banded(bw, bw, self._fd)
         bd = dense_to_banded(bw, bw, self._bd)
@@ -1280,8 +1185,6 @@ class DKEPitch(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
-    axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
-        Ordering for variables in f, eg how the 5d array is flattened
     """
 
     field: Field
@@ -1291,7 +1194,6 @@ class DKEPitch(AbstractDKEOperator):
     Erho: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
 
     _fd: Float[Array, "na na"]
@@ -1309,10 +1211,8 @@ class DKEPitch(AbstractDKEOperator):
         Erho: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         assert pitchgrid.nalpha > fd_coeffs[1][p1].size // 2
         assert pitchgrid.nalpha > fd_coeffs[2][p2].size // 2
         self.field = field
@@ -1322,7 +1222,6 @@ class DKEPitch(AbstractDKEOperator):
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         h = np.pi / pitchgrid.nalpha
         f1 = jnp.ones(pitchgrid.nalpha)
@@ -1344,16 +1243,14 @@ class DKEPitch(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_4d(
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nalpha,
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))  # (ns, nx, na, nt, nz)
         f1 = jnp.moveaxis(f, 2, -1)  # (ns, nx, nt, nz, na) - convolved axis last
         # upwind: pick backward/forward difference per node by sign of w, then
         # move the convolved axis back into place (single transpose).
@@ -1369,21 +1266,12 @@ class DKEPitch(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         fd = jnp.diag(self._fd)[None, None, :, None, None]
         bd = jnp.diag(self._bd)[None, None, :, None, None]
         w = self._w
@@ -1394,21 +1282,12 @@ class DKEPitch(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         fd = jnp.abs(self._fd).sum(axis=1)[None, None, :, None, None]
         bd = jnp.abs(self._bd).sum(axis=1)[None, None, :, None, None]
         w = self._w
@@ -1419,16 +1298,17 @@ class DKEPitch(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKEPitch.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "a":  # its just diagonal
+        if axorder[-1] != "a":  # its just diagonal
             if bw is None:
                 bw = 0
             df = self.diagonal()
@@ -1439,7 +1319,7 @@ class DKEPitch(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = df.reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(df, sizes, axorder).reshape((-1, sizes[axorder[-1]]))
             if fmt == "dense":
                 op = jax.vmap(jnp.diag)
             else:
@@ -1455,7 +1335,7 @@ class DKEPitch(AbstractDKEOperator):
             self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
-            self.axorder,
+            axorder,
         )
         fd = dense_to_banded(bw, bw, self._fd)
         bd = dense_to_banded(bw, bw, self._bd)
@@ -1502,8 +1382,6 @@ class DKESpeed(AbstractDKEOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
-    axorder : {"sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"}
-        Ordering for variables in f, eg how the 5d array is flattened
     """
 
     field: Field
@@ -1511,7 +1389,6 @@ class DKESpeed(AbstractDKEOperator):
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: Float[Array, ""]
-    axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     _w: Float[Array, "ns nx na nt nz"]
     _scale: Float[Array, "ns nidx"]
@@ -1523,16 +1400,13 @@ class DKESpeed(AbstractDKEOperator):
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
-        axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
     ):
-        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
         self.species = species
         self.Erho = jnp.array(Erho)
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
         # wind and gauge scale are independent of the vector; precompute once
         w = sfincs_w_speed(
@@ -1553,16 +1427,14 @@ class DKESpeed(AbstractDKEOperator):
         """Matrix vector product."""
         f = vector
         shp = f.shape
-        shape, caxorder = _parse_axorder_shape_4d(
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nalpha,
             self.field.ntheta,
             self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
         )
         f = f.reshape(shape)
-        f = jnp.moveaxis(f, caxorder, (0, 1, 2, 3, 4))
         df = jnp.einsum("yx,sxatz->syatz", self.speedgrid.Dx_pseudospectral, f)
         df = self._w * df
         idxa = self.pitchgrid.nalpha // 2
@@ -1575,21 +1447,12 @@ class DKESpeed(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.reshape(shp)
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        shape, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         w = sfincs_w_speed(
             self.field,
             self.pitchgrid,
@@ -1607,21 +1470,12 @@ class DKESpeed(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        _, caxorder = _parse_axorder_shape_4d(
-            self.field.ntheta,
-            self.field.nzeta,
-            self.pitchgrid.nalpha,
-            self.speedgrid.nx,
-            len(self.species),
-            self.axorder,
-        )
         w = sfincs_w_speed(
             self.field,
             self.pitchgrid,
@@ -1641,16 +1495,17 @@ class DKESpeed(AbstractDKEOperator):
         df = df.at[:, idxx, idxa, 0, 0].set(
             gval, indices_are_sorted=True, unique_indices=True
         )
-        df = jnp.moveaxis(df, (0, 1, 2, 3, 4), caxorder)
         return df.flatten()
 
     @eqx.filter_jit
     @jax.named_scope("DKESpeed.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         assert fmt in ["dense", "banded"]
 
-        if self.axorder[-1] != "x":  # its just diagonal
+        if axorder[-1] != "x":  # its just diagonal
             if bw is None:
                 bw = 0
             df = self.diagonal()
@@ -1661,7 +1516,7 @@ class DKESpeed(AbstractDKEOperator):
                 "t": self.field.ntheta,
                 "z": self.field.nzeta,
             }
-            df = df.reshape((-1, sizes[self.axorder[-1]]))
+            df = _to_axorder(df, sizes, axorder).reshape((-1, sizes[axorder[-1]]))
             if fmt == "dense":
                 op = jax.vmap(jnp.diag)
             else:
@@ -1680,7 +1535,7 @@ class DKESpeed(AbstractDKEOperator):
             self.pitchgrid.nalpha,
             self.speedgrid.nx,
             len(self.species),
-            self.axorder,
+            axorder,
         )
         w = sfincs_w_speed(
             self.field,
@@ -1730,8 +1585,6 @@ class DKE(AbstractDKEOperator):
         Background species to include in the collision operator without solving for df.
     potentials : RosenbluthPotentials
         Thing for calculating Rosenbluth potentials.
-    axorder : {"atz", "zat", "tza"}
-        Ordering for variables in f, eg how the 3d array is flattened
     p1 : int
         Order of approximation for first derivatives.
     p2 : int
@@ -1748,7 +1601,6 @@ class DKE(AbstractDKEOperator):
     background: list[LocalMaxwellian]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
-    axorder: str = eqx.field(static=True)
     gauge: Bool[Array, ""]
     operator_weights: jax.Array
     _opx: DKESpeed
@@ -1768,12 +1620,10 @@ class DKE(AbstractDKEOperator):
         potentials: RosenbluthPotentials | None = None,
         p1: str = "4d",
         p2: int = 4,
-        axorder: str = "sxatz",
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
     ):
-        assert axorder in ["".join(p) for p in itertools.permutations("sxatz")]
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -1787,7 +1637,6 @@ class DKE(AbstractDKEOperator):
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
-        self.axorder = axorder
         self.gauge = jnp.array(gauge)
 
         if operator_weights is None:
@@ -1796,16 +1645,10 @@ class DKE(AbstractDKEOperator):
             )
         self.operator_weights = jnp.asarray(operator_weights)
 
-        self._opx = DKESpeed(field, pitchgrid, speedgrid, species, Erho, axorder, gauge)
-        self._opa = DKEPitch(
-            field, pitchgrid, speedgrid, species, Erho, p1, p2, axorder, gauge
-        )
-        self._opt = DKETheta(
-            field, pitchgrid, speedgrid, species, Erho, p1, p2, axorder, gauge
-        )
-        self._opz = DKEZeta(
-            field, pitchgrid, speedgrid, species, Erho, p1, p2, axorder, gauge
-        )
+        self._opx = DKESpeed(field, pitchgrid, speedgrid, species, Erho, gauge)
+        self._opa = DKEPitch(field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge)
+        self._opt = DKETheta(field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge)
+        self._opz = DKEZeta(field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge)
         self._C = FokkerPlanckLandau(
             field,
             pitchgrid,
@@ -1814,11 +1657,13 @@ class DKE(AbstractDKEOperator):
             background,
             potentials,
             p2,
-            axorder,
             gauge,
             operator_weights=self.operator_weights[4:7],
             coulomb_log=coulomb_log,
         )
+
+    def _shard(self, mesh):
+        return _shard_sx_leaves(self, mesh, len(self.species), self.speedgrid.nx)
 
     @eqx.filter_jit
     @jax.named_scope("DKE.mv")
@@ -1892,7 +1737,9 @@ class DKE(AbstractDKEOperator):
 
     @eqx.filter_jit
     @jax.named_scope("DKE.block_diagonal")
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder="sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of operator as (N,M,M) array."""
         sizes = {
             "s": len(self.species),
@@ -1901,7 +1748,7 @@ class DKE(AbstractDKEOperator):
             "t": self.field.ntheta,
             "z": self.field.nzeta,
         }
-        n2 = sizes[self.axorder[-1]]
+        n2 = sizes[axorder[-1]]
         n1 = np.prod(list(sizes.values())) // n2
         if fmt == "dense":
             x = jnp.broadcast_to(jnp.identity(n2), (n1, n2, n2))
@@ -1917,13 +1764,34 @@ class DKE(AbstractDKEOperator):
             x = jnp.zeros((n1, 2 * bw + 1, n2)).at[:, bw, :].set(1)
         x = self.operator_weights[-1] * x
         intermediates = [
-            lambda x: x + self.operator_weights[0] * self._opx.block_diagonal(fmt, bw),
-            lambda x: x + self.operator_weights[1] * self._opa.block_diagonal(fmt, bw),
-            lambda x: x + self.operator_weights[2] * self._opt.block_diagonal(fmt, bw),
-            lambda x: x + self.operator_weights[3] * self._opz.block_diagonal(fmt, bw),
+            lambda x: (
+                x
+                + self.operator_weights[0] * self._opx.block_diagonal(fmt, bw, axorder)
+            ),
+            lambda x: (
+                x
+                + self.operator_weights[1] * self._opa.block_diagonal(fmt, bw, axorder)
+            ),
+            lambda x: (
+                x
+                + self.operator_weights[2] * self._opt.block_diagonal(fmt, bw, axorder)
+            ),
+            lambda x: (
+                x
+                + self.operator_weights[3] * self._opz.block_diagonal(fmt, bw, axorder)
+            ),
             # could just call C.diagonal() but we prefer to flatten those extra loops
-            lambda x: x + self.operator_weights[4] * self._C.CL.block_diagonal(fmt, bw),
-            lambda x: x + self.operator_weights[5] * self._C.CE.block_diagonal(fmt, bw),
-            lambda x: x + self.operator_weights[6] * self._C.CF.block_diagonal(fmt, bw),
+            lambda x: (
+                x
+                + self.operator_weights[4] * self._C.CL.block_diagonal(fmt, bw, axorder)
+            ),
+            lambda x: (
+                x
+                + self.operator_weights[5] * self._C.CE.block_diagonal(fmt, bw, axorder)
+            ),
+            lambda x: (
+                x
+                + self.operator_weights[6] * self._C.CF.block_diagonal(fmt, bw, axorder)
+            ),
         ]
         return eqx.internal.scan_trick(lambda x: x, intermediates, x)

@@ -54,6 +54,10 @@ python benchmarks/bench_dke.py run --list                 # show all case names
 python benchmarks/bench_dke.py run --case ncsx_2sp_nu1e-2 --out one.json
 python benchmarks/bench_dke.py run --case hsx_2sp_1e-1,w7x_2sp_3e-2 --out two.json
 
+# scale the pitch, theta and zeta resolutions of every case (nx and nz = 1 unchanged,
+# each size keeps its parity); recorded as res_scale in the results header
+python benchmarks/bench_dke.py run --tier smoke --res-scale 1.5 --out smoke_x1.5.json
+
 # diff current against the committed baseline; exits nonzero on any regression
 python benchmarks/bench_dke.py compare benchmarks/baseline.json nightly.json
 ```
@@ -99,7 +103,7 @@ alongside the equilibrium / collisionality / resolution scans.
 ## The monoenergetic benchmark
 
 `bench_mdke.py` is the monoenergetic sibling of `bench_dke.py`, with the same CLI
-(`run`/`compare`, `--tier`, `--case`, `--list`, `--out`) and the same regression rules.
+(`run`/`compare`, `--tier`, `--case`, `--list`, `--out`, `--res-scale`) and the same regression rules.
 It solves `solve_mdke` with production defaults, so a change in `nmv`/`success`
 reflects a change in the shipped code.
 

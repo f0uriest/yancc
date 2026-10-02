@@ -1,5 +1,6 @@
 """Tests for linalg stuff."""
 
+import equinox as eqx
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
@@ -58,8 +59,8 @@ def test_bordered_operator():
     np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(Ab), atol=1e-14)
     np.testing.assert_allclose(Fi.T.as_matrix(), np.linalg.inv(Ab.T), atol=1e-14)
 
-    assert Fi.in_structure().shape == (n + k,)
-    assert Fi.out_structure().shape == (n + k,)
+    assert [x.shape for x in Fi.in_structure()] == [(n,), (k,)]
+    assert [x.shape for x in Fi.out_structure()] == [(n,), (k,)]
 
 
 def test_tridiagonal():
@@ -194,7 +195,7 @@ def test_dense_lu_inverse_operator():
     # well-conditioned, with rows shuffled so that LU needs pivoting
     A = (rng.standard_normal((n, n)) + n * np.eye(n))[rng.permutation(n)]
     Aop = lx.MatrixLinearOperator(jnp.array(A))
-    Ainv = yancc._linalg.DenseLUInverseOperator(Aop.as_matrix())
+    Ainv = yancc._linalg.DenseLUInverseOperator(Aop, refine=0)
 
     np.testing.assert_allclose(Ainv.as_matrix(), np.linalg.inv(A), atol=1e-10)
     assert Ainv.in_structure().shape == (n,)
@@ -205,6 +206,28 @@ def test_dense_lu_inverse_operator():
     np.testing.assert_allclose(
         Ainv.transpose().as_matrix(), np.linalg.inv(A.T), atol=1e-10
     )
+
+    # a well conditioned matrix is exact with or without refinement (default refine=1)
+    Aref = yancc._linalg.DenseLUInverseOperator(Aop)
+    np.testing.assert_allclose(Aref.as_matrix(), np.linalg.inv(A), atol=1e-10)
+    np.testing.assert_allclose(
+        Aref.transpose().as_matrix(), np.linalg.inv(A.T), atol=1e-10
+    )
+    # a coarser batch size gives the same matrix
+    Abatched = yancc._linalg.DenseLUInverseOperator(Aop, refine=0, batch_size=2)
+    np.testing.assert_allclose(Abatched.as_matrix(), np.linalg.inv(A), atol=1e-10)
+
+    # each refinement step is x += inv(A) (b - operator x). Factor A (well
+    # conditioned, so the LU solve is exact to atol) but refine against a
+    # deliberately wrong operator, 2A: the first step cancels the solution and the
+    # second restores it, which pins down the formula regardless of how well the
+    # matched-operator case happens to refine.
+    b = jnp.array(rng.standard_normal(n))
+    op2 = lx.MatrixLinearOperator(2 * jnp.array(A))
+    for refine, expected in [(1, np.zeros(n)), (2, np.linalg.solve(A, b))]:
+        Ainv2 = yancc._linalg.DenseLUInverseOperator(Aop, refine=refine)
+        Ainv2 = eqx.tree_at(lambda m: m._operator, Ainv2, op2)
+        np.testing.assert_allclose(Ainv2.mv(b), expected, atol=1e-10)
 
 
 def test_transposed_linear_operator():

@@ -6,11 +6,13 @@ from typing import cast
 
 import equinox as eqx
 import jax
+import jax.flatten_util
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
 from jaxtyping import Array, Float
 
+from ._sharding import _replicate
 from .field import Field
 from .velocity_grids import UniformPitchAngleGrid
 
@@ -165,10 +167,10 @@ class AbstractDKEOperator(AbstractYanccOperator):
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
 
     @abc.abstractmethod
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder: str = "sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of the operator.
-
-        Blocks are along the last axis of ``axorder``.
 
         Parameters
         ----------
@@ -178,7 +180,29 @@ class AbstractDKEOperator(AbstractYanccOperator):
         bw : int, optional
             Lower and upper bandwidth of the banded storage. Defaults to a
             bandwidth that holds all nonzero entries of the blocks.
+        axorder : str, optional
+            Ordering of the axes, a permutation of "sxatz" (or "atz" for operators
+            without species and speed). Blocks are along the last axis, and ordered
+            by the remaining axes in the given order. Defaults to "sxatz" (or "atz"),
+            giving blocks along zeta.
         """
+
+
+def _bordered_structure(n1, n2):
+    """Structure of a bordered vector, a tuple of parts of size n1 and n2."""
+    dtype = jnp.array(1.0).dtype
+    return (jax.ShapeDtypeStruct((n1,), dtype), jax.ShapeDtypeStruct((n2,), dtype))
+
+
+def _bordered_as_matrix(operator):
+    """Dense matrix of an operator on bordered vectors, parts concatenated in order."""
+    x = jax.tree.map(jnp.zeros_like, operator.in_structure())
+    unravel = jax.flatten_util.ravel_pytree(x)[1]
+
+    def mv(v):
+        return jax.flatten_util.ravel_pytree(operator.mv(unravel(v)))[0]
+
+    return jax.vmap(mv, out_axes=-1)(jnp.eye(operator.in_size()))
 
 
 class BorderedOperator(lx.AbstractLinearOperator):
@@ -186,6 +210,9 @@ class BorderedOperator(lx.AbstractLinearOperator):
 
     [A B]
     [C 0]
+
+    Vectors are tuples ``(x1, x2)`` with ``x1`` in the space of ``A`` and ``x2`` of
+    size ``B.in_size()`` (input) or ``C.out_size()`` (output).
     """
 
     A: lx.AbstractLinearOperator
@@ -203,30 +230,25 @@ class BorderedOperator(lx.AbstractLinearOperator):
         """Matrix vector product."""
         # [A B] [X1] = [AX1 + BX2]
         # [C 0] [X2] = [CX1      ]
-        X1 = vector[: self.A.in_size()]
-        X2 = vector[self.A.in_size() :]
+        # The two parts are kept as separate arrays rather than one concatenated
+        # vector, so that when X1 is split across devices its shards stay aligned
+        # with those of the operators acting on it.
+        X1, X2 = vector
         Y1 = self.A.mv(X1) + self.B.mv(X2)
         Y2 = self.C.mv(X1)
-        return jnp.concatenate([Y1, Y2])
+        return (Y1, Y2)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.A.in_size() + self.B.in_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.A.in_size(), self.B.in_size())
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.A.out_size() + self.C.out_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.A.out_size(), self.C.out_size())
 
     def transpose(self):
         """Transpose of the operator."""
@@ -257,8 +279,7 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
 
     def mv(self, vector):
         """Matrix vector product."""
-        X1 = vector[: self.Ai.in_size()]
-        X2 = vector[self.Ai.in_size() :]
+        X1, X2 = vector
         cbic_x1 = self.CBi.mv(self.C.mv(X1))
         z11 = X1 - self.B.mv(cbic_x1)
         Az11 = self.Ai.mv(z11)
@@ -266,26 +287,19 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
         z12 = self.B.mv(self.CBi.mv(X2))
         Y1 = z11 + z12
         Y2 = cbic_x1
-        return jnp.concatenate([Y1, Y2])
+        return (Y1, Y2)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.Ai.in_size() + self.B.in_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.Ai.in_size(), self.B.in_size())
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.Ai.out_size() + self.C.out_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.Ai.out_size(), self.C.out_size())
 
     def transpose(self):
         """Transpose of the operator."""
@@ -410,24 +424,41 @@ def _tridiag_solve(l, d, u, b, *args):
 
 
 class DenseLUInverseOperator(lx.AbstractLinearOperator):
-    """Inverse of a dense matrix, via its LU factorization.
+    """Inverse of a linear operator, via the LU factorization of its dense matrix.
 
     Parameters
     ----------
-    matrix : jax.Array
-        Square matrix to invert.
+    operator : lx.AbstractLinearOperator
+        Operator to invert. Materialized into a dense matrix and factored.
     equilibrate : bool
         Whether to balance the rows and columns of the matrix before factoring it.
-        This does not change the inverse, but improves its accuracy for badly scaled
+        This does not change the inverse, but improves the factorization's accuracy
+        for badly scaled matrices.
+    refine : int
+        Number of steps of iterative refinement against ``operator`` to apply after
+        each triangular solve, which improves the accuracy for ill-conditioned
         matrices.
+    batch_size : int, optional
+        Number of columns of the identity to map ``operator`` over at a time when
+        materializing it. Default maps over all columns at once; a smaller batch
+        bounds the peak memory of materialization at the cost of a little speed.
     """
 
     _luT: jax.Array
     _perm: jax.Array
     _r: jax.Array
     _c: jax.Array
+    _operator: lx.AbstractLinearOperator
+    _refine: int = eqx.field(static=True)
 
-    def __init__(self, matrix: jax.Array, equilibrate: bool = True):
+    def __init__(
+        self,
+        operator: lx.AbstractLinearOperator,
+        equilibrate: bool = True,
+        refine: int = 1,
+        batch_size: int | None = None,
+    ):
+        matrix = dense_from_mv(operator.mv, operator.in_size(), batch_size)
         if equilibrate:
             r, c = _ruiz_scale(matrix)
             matrix = r[:, None] * matrix * c[None, :]
@@ -444,9 +475,30 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         self._perm = perm
         self._r = jax.lax.stop_gradient(r)
         self._c = jax.lax.stop_gradient(c)
+        self._operator = operator
+        self._refine = refine
+
+    def _shard(self, mesh):
+        # its size is set by the coarsest grid rather than the problem resolution, and
+        # the factorization can't be split across devices, so it is kept whole
+        return _replicate(self, mesh)
 
     def mv(self, vector):
         """Matrix vector product."""
+        x = self._solve(vector)
+        # For badly conditioned matrices the LU solve leaves a residual many orders of
+        # magnitude above roundoff, and its size depends on floating point details
+        # such as operation order and fusion. That makes the preconditioner, and so
+        # the Krylov iteration count, differ between compilations and hardware.
+        # Refinement against the operator (whose residual is far more accurate than
+        # the solve) removes most of that residual for the cost of one operator
+        # product and one more solve per step. The operator is used instead of the
+        # matrix so no second n x n array has to be kept.
+        for _ in range(self._refine):
+            x = x + self._solve(vector - self._operator.mv(x))
+        return x
+
+    def _solve(self, vector):
         lu = self._luT.T
         # The factored matrix is diag(r) A diag(c), so A^-1 b = c * (LU)^-1 (r * b),
         # and (diag(r) A diag(c))[perm] = L U.

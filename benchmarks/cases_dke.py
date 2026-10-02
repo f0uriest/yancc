@@ -29,7 +29,7 @@ importable; the two bundled VMEC cases (NCSX_vmec, DSHAPE) do not.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from scipy.optimize import brentq
@@ -76,6 +76,19 @@ EQUILS: dict[str, tuple[str, str]] = {
     "NCSX_vmec": ("vmec", "tests/data/wout_NCSX.nc"),
     "DSHAPE": ("vmec", "tests/data/wout_DSHAPE.nc"),
 }
+
+
+def scale_resolution(n: int, scale: float) -> int:
+    """Scale a grid size by ``scale``, rounding to the nearest size of the same parity.
+
+    A size of 1 (e.g. nzeta for an axisymmetric field) is left unchanged.
+    """
+    if n == 1:
+        return 1
+    m = round(n * scale)
+    if (m - n) % 2:
+        m += 1 if n * scale > m else -1
+    return max(m, 2 - n % 2)
 
 
 def load_field(name: str, ntheta: int, nzeta: int, rho: float = 0.5) -> Field:
@@ -223,6 +236,11 @@ class Case:
     # matters for ``nkinetic`` (background species must be last), so this lets a main
     # ion be the reference while an impurity trails as a background.
     reference: int = -1
+
+    def scaled(self, scale: float) -> Case:
+        """Copy of this case with the na, nt, nz resolutions scaled by ``scale``."""
+        nx, *angles = self.res
+        return replace(self, res=(nx, *(scale_resolution(n, scale) for n in angles)))
 
     def build(self):
         """Return (field, pitchgrid, speedgrid, species, Erho, background)."""
