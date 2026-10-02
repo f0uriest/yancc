@@ -10,7 +10,7 @@ from jaxtyping import Array, ArrayLike, Float
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from ._linalg import AbstractYanccOperator, DenseLUInverseOperator, dense_from_mv
+from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
 from ._multigrid import (
     MultigridOperator,
     get_dke_jacobi_smoothers,
@@ -143,6 +143,10 @@ class MDKEPreconditioner(MultigridOperator):
             smooth_solver=smooth_solver,
             weight=smooth_weights,
         )
+        # The MDKE has no species mass ratios to badly scale the coarse operator, so
+        # its LU factorization is never the ill-conditioned case iterative refinement
+        # is for; skip it rather than pay for the check on every coarse solve.
+        coarse_opinv = DenseLUInverseOperator(operators[0], refine=0)
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
         )
@@ -160,7 +164,7 @@ class MDKEPreconditioner(MultigridOperator):
             v1=v1,
             v2=v2,
             smooth_method=smooth_method,
-            coarse_opinv=None,
+            coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
             coarse_weight=coarse_weight,
             verbose=max(0, verbose - 2),
@@ -353,16 +357,14 @@ class DKEPreconditioner(MultigridOperator):
         # The direct solve on the coarsest grid needs the operator as a dense matrix.
         # Building it a chunk of columns at a time keeps peak memory near the size of
         # the matrix itself, rather than that times the number of intermediates in a
-        # matrix vector product, at the cost of a little speed.
-        coarse_matrix = dense_from_mv(
-            operators[0].mv, operators[0].in_size(), as_matrix_chunk
-        )
-        # The coarse matrix is factored after row/column equilibration. With several
-        # species its entries span many orders of magnitude, and an unscaled LU has
-        # an error floor large enough to leave the nearly singular heavy-species
-        # modes with no correct digits, which stalls the outer Krylov solve at a
-        # residual that depends on floating point details of the hardware.
-        coarse_opinv = DenseLUInverseOperator(coarse_matrix, equilibrate=True)
+        # matrix vector product, at the cost of a little speed. The matrix is factored
+        # after row/column equilibration. With several species its entries span many
+        # orders of magnitude, and an unscaled LU has an error floor large enough to
+        # leave the nearly singular heavy-species modes with no correct digits, which
+        # stalls the outer Krylov solve at a residual that depends on floating point
+        # details of the hardware. One step of refinement against the coarse operator
+        # removes most of the remaining error.
+        coarse_opinv = DenseLUInverseOperator(operators[0], batch_size=as_matrix_chunk)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,
