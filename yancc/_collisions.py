@@ -89,7 +89,11 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
         w2 = -self.nuhat / 2
         # w1, w2 only depend on pitch (na), not state size, so fold into a
         # single (na, na) operator.
-        self._D = w1[:, None] * D1 + w2 * D2
+        D = w1[:, None] * D1 + w2 * D2
+        # Pitch angle scattering annihilates isotropic functions. With deflection
+        # frequencies many orders of magnitude above the other terms, rounding in the
+        # row sums would act as a large spurious isotropic sink, so they are made zero.
+        self._D = D - jnp.diag(D.sum(axis=1))
         self._scale = self.nuhat / h**2
 
     @eqx.filter_jit
@@ -101,6 +105,9 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
         shape = (self.pitchgrid.nalpha, self.field.ntheta, self.field.nzeta)
         f = f.reshape(shape)
         f1 = jnp.moveaxis(f, 0, -1)  # (nt, nz, na) - convolved axis last
+        # _D annihilates constants, so removing the pitch mean first leaves the result
+        # unchanged but scales its rounding error with the anisotropic part of f only.
+        f1 = f1 - jnp.mean(f1, axis=-1, keepdims=True)
         df = jnp.moveaxis(f1 @ self._D.T, -1, 0)
 
         idx = self.pitchgrid.nalpha // 2
@@ -654,7 +661,11 @@ class PitchAngleScattering(AbstractDKEOperator):
         cosa = -pitchgrid.xi
         # cos/sin only depends on pitchgrid; fold into a single (na, na) op.
         # The species/x-dependent prefactor (-nus/2) is applied in mv.
-        self._D = (cosa / sina)[:, None] * D1 + D2
+        D = (cosa / sina)[:, None] * D1 + D2
+        # Pitch angle scattering annihilates isotropic functions. With deflection
+        # frequencies many orders of magnitude above the other terms, rounding in the
+        # row sums would act as a large spurious isotropic sink, so they are made zero.
+        self._D = D - jnp.diag(D.sum(axis=1))
         idxx = self.speedgrid.gauge_idx
         self._scale = self.nus[:, idxx] / h**2
 
@@ -673,6 +684,9 @@ class PitchAngleScattering(AbstractDKEOperator):
         )
         f = f.reshape(shape)
         f1 = jnp.moveaxis(f, 2, -1)  # (ns, nx, nt, nz, na) - convolved axis last
+        # _D annihilates constants, so removing the pitch mean first leaves the result
+        # unchanged but scales its rounding error with the anisotropic part of f only.
+        f1 = f1 - jnp.mean(f1, axis=-1, keepdims=True)
         df = jnp.moveaxis(f1 @ self._D.T, -1, 2)
         df *= -self.nus[:, :, None, None, None] / 2
 
