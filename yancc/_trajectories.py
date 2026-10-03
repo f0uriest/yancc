@@ -1661,6 +1661,17 @@ class DKE(AbstractDKEOperator):
             coulomb_log=coulomb_log,
         )
 
+    def _rounding_scale(self, transpose=False) -> Float[Array, " nf"]:
+        """Componentwise scale of the change in ``mv`` when its input is rounded.
+
+        Returns ``s`` with ``|mv(v) - mv(v')|`` of order at most ``s * |v|`` for every
+        ``v'`` whose entries differ from those of ``v`` by at most a relative machine
+        epsilon, or the same for the transposed operator if ``transpose`` is True.
+        """
+        # the collision operator dominates the rounding error, and already carries its
+        # weights from operator_weights
+        return self._C._rounding_scale(transpose)
+
     @eqx.filter_jit
     @jax.named_scope("DKE.mv")
     def mv(self, vector) -> Float[Array, " nf"]:

@@ -472,6 +472,12 @@ def solve_dke(  # noqa: C901
         flexible=flexible,
         throw=throw,
         weights=weights if entropy_norm else None,
+        residual_floor=jnp.concatenate(
+            [A._rounding_scale(), jnp.zeros(2 * len(species))]
+        ),
+        residual_floor_transpose=jnp.concatenate(
+            [A._rounding_scale(transpose=True), jnp.zeros(2 * len(species))]
+        ),
     )
     info = {
         "niter": j1,

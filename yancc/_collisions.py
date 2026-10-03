@@ -701,6 +701,27 @@ class PitchAngleScattering(AbstractDKEOperator):
         return df.reshape(shp)
 
     @eqx.filter_jit
+    @jax.named_scope("PitchAngleScattering._rounding_scale")
+    def _rounding_scale(self, transpose=False) -> Float[Array, " nf"]:
+        """Componentwise scale of the change in ``mv`` under rounding of its input.
+
+        Returns ``s`` with ``|mv(v) - mv(v')|`` of order at most ``s * |v|`` for every
+        ``v'`` whose entries differ from those of ``v`` by at most a relative machine
+        epsilon, or the same for the transposed operator if ``transpose`` is True.
+        """
+        # The rounding error of row i is eps * sum_j |A_ij| |v_j|. The rows that need
+        # it are those where large terms nearly cancel, which happens on functions that
+        # are smooth along the short pitch stencil, so |v_j| ~ |v_i| and the row sum of
+        # |A| times |v_i| estimates it. Where v varies more this is an underestimate,
+        # which only makes a convergence test using it stricter.
+        D = jnp.abs(self._D)
+        d = D.sum(axis=0 if transpose else 1)
+        eps = jnp.finfo(d.dtype).eps
+        out = eps * jnp.abs(self.nus)[:, :, None] / 2 * d[None, None, :]
+        shape = out.shape + (self.field.ntheta, self.field.nzeta)
+        return jnp.broadcast_to(out[..., None, None], shape).flatten()
+
+    @eqx.filter_jit
     @jax.named_scope("PitchAngleScattering.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
@@ -2043,6 +2064,14 @@ class FokkerPlanckLandau(AbstractDKEOperator):
             + self.operator_weights[1] * out2
             + self.operator_weights[2] * out3
         )
+
+    def _rounding_scale(self, transpose=False) -> Float[Array, " nf"]:
+        """Componentwise scale of the change in ``mv`` under rounding of its input.
+
+        Only pitch angle scattering is included: its deflection frequency can exceed
+        the other terms by many orders of magnitude, so it dominates the rounding.
+        """
+        return jnp.abs(self.operator_weights[0]) * self.CL._rounding_scale(transpose)
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.diagonal")
