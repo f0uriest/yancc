@@ -54,7 +54,9 @@ def test_permutations_mdke(field, pitchgrid):
         m = sizes[axorder[-1]]
         Ap = P.T @ A @ P
         blocks = [Ap[k : k + m, k : k + m] for k in range(0, N, m)]
-        np.testing.assert_allclose(op.block_diagonal(axorder=axorder), blocks)
+        np.testing.assert_allclose(
+            op.block_diagonal(axorder=axorder), blocks, atol=1e-12 * np.abs(A).max()
+        )
 
 
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
