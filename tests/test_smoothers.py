@@ -23,6 +23,7 @@ from yancc._multigrid import (
     standard_smooth,
 )
 from yancc._smoothers import (
+    _L01_COLLISION_JACOBI_CAP,
     DKEFrozenPlaneSmoother,
     DKEJacobiSmoother,
     DKEL01LineSmoother,
@@ -386,9 +387,30 @@ def test_get_smoothers_order_and_shared_operator(
 
 def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentials2):
     """L01 line blocks match the projection of the dense DKE/MDKE block diagonals."""
+    # axisymmetric counterpart of the test field, where the zeta line is a single point
+    theta = np.linspace(0, 2 * np.pi, field.ntheta, endpoint=False)[:, None]
+    tokamak = Field.from_boozer(
+        rho=0.5,
+        Bmag=2.5 - 0.25 * np.cos(theta),
+        I=0.0,
+        G=14.4,
+        iota=-0.88356,
+        Psi=-2.0004,
+        R_major=5.4832,
+        a_minor=0.5211,
+        NFP=1,
+    )
+    for fld in (field, tokamak):
+        scale = _check_l01_line_blocks(fld, pitchgrid, speedgrid, species2, potentials2)
+        # the collision diagonal scaling is active
+        assert scale > 1
+
+
+def _check_l01_line_blocks(field, pitchgrid, speedgrid, species2, potentials2):
     ns, nx = len(species2), speedgrid.nx
     na, nt, nz = pitchgrid.nalpha, field.ntheta, field.nzeta
     Erho = jnp.array(1e3)
+    scale = np.array(0)
     for line in "tz":
         M = DKEL01LineSmoother(
             field, pitchgrid, speedgrid, species2, Erho, None, potentials2, line=line
@@ -416,6 +438,31 @@ def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentia
         Aa = Aa.reshape(ns, nx, nt, nz, na, na)
         Aa = Aa - Aa * jnp.eye(na)
         k2 = jnp.einsum("la,sxtzab,bm->sxtzlm", W, Aa, Q)
+        # collision diagonal scaled so the largest eigenvalue of D^-1 K, with K the
+        # projected collision coupling across speed of one species and l, is capped
+        C = op._C
+        vb = sum(c._velocity_block()[0] for c in (C.CL, C.CE, C.CF))
+        K = jnp.einsum("la,syauvb,bl->sluyv", W, vb, Q)
+        K = np.stack([K[s, :, s] for s in range(ns)])
+        d = np.einsum("slyy->sly", K)
+        lam = np.array(
+            [
+                [
+                    np.real(np.linalg.eigvals(K[s, l] / d[s, l, :, None])).max()
+                    for l in (0, 1)
+                ]
+                for s in range(ns)
+            ]
+        )
+        scale = np.maximum(1.0, lam / _L01_COLLISION_JACOBI_CAP)
+        shift = (scale[..., None] - 1) * d
+        k2 = k2 + np.einsum("slx,lm->sxlm", shift, np.eye(2))[:, :, None, None]
+        # diagonal shift: the streaming diagonal along the line when the other angle
+        # has a single node
+        if nother == 1:
+            shift = jnp.abs((op._opt if line == "t" else op._opz).diagonal())
+            shift = shift.reshape(ns, nx, na, nt, nz)
+            k2 = k2 + jnp.einsum("la,sxatz,am->sxtzlm", W, shift, Q)
         if line == "t":
             k2 = jnp.moveaxis(k2, 2, 3)
         B = jnp.transpose(t1, (0, 1, 2, 5, 3, 6, 4)) + jnp.einsum(
@@ -444,6 +491,7 @@ def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentia
         np.testing.assert_allclose(
             jnp.linalg.inv(Mm._inv), B, atol=1e-10 * float(jnp.abs(B).max())
         )
+    return float(scale.max())
 
 
 def test_parse_smooth_type():
