@@ -557,6 +557,22 @@ class RosenbluthPotentials(eqx.Module):
         return jax.grad(self._dI_4)(x, l, k)
 
 
+def _pitch_projection(Txi, wxi):
+    """Nodal to modal pitch transform, the inverse of Txi on its range."""
+    # Weighted least squares with the pitch quadrature weights. The quadrature
+    # integrates products of the Legendre modes exactly, so this is the Galerkin
+    # projection onto them, and its l = 0 row is the quadrature pitch average used by
+    # the density and energy moments. An unweighted fit would instead mix modes the
+    # truncated basis cannot represent into the low modes.
+    if Txi.shape[1] > Txi.shape[0]:
+        # more modes than pitch nodes: the fit is underdetermined and the normal
+        # equations are singular, so take the minimum norm weighted fit instead
+        sw = jnp.sqrt(wxi)
+        return jnp.linalg.pinv(sw[:, None] * Txi) * sw[None, :]
+    TW = Txi.T * wxi[None, :]
+    return jnp.linalg.solve(TW @ Txi, TW)
+
+
 def _velocity_abs_row_sum(op, block, gauge_value):
     """Row L1 norms of a collision operator from its velocity-space block."""
     # Collision operators are local in (theta, zeta) and their velocity-space block
@@ -1499,7 +1515,7 @@ class FieldPartCG(AbstractDKEOperator):
             potentials.legendregrid.nalpha - 1,
             potentials.legendregrid.xirec,
         )
-        self.Txi_inv = jnp.linalg.pinv(self.Txi)
+        self.Txi_inv = _pitch_projection(self.Txi, pitchgrid.wxi)
 
         # Gabxlk and the gauge scale depend only on operator data, not the input
         # vector, so precompute them here rather than on every matvec. We also
@@ -1648,7 +1664,7 @@ class FieldPartCH(AbstractDKEOperator):
             potentials.legendregrid.nalpha - 1,
             potentials.legendregrid.xirec,
         )
-        self.Txi_inv = jnp.linalg.pinv(self.Txi)
+        self.Txi_inv = _pitch_projection(self.Txi, pitchgrid.wxi)
 
         # The H potential tensor and gauge scale depend only on operator data, not
         # the input vector, so precompute them here rather than on every matvec. We
@@ -1814,7 +1830,7 @@ class FieldParticleScattering(AbstractDKEOperator):
             potentials.legendregrid.nalpha - 1,
             potentials.legendregrid.xirec,
         )
-        self.Txi_inv = jnp.linalg.pinv(self.Txi)
+        self.Txi_inv = _pitch_projection(self.Txi, pitchgrid.wxi)
 
         # G and H share an identical nodal<->modal-pitch pipeline differing only
         # in the potential tensor, so they fuse exactly into a single modal
