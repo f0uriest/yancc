@@ -24,6 +24,13 @@ Unreleased
   pitch angle scattering frequency at the lowest speed nodes limits the attainable
   residual, and the solve previously ran to ``maxiter`` and reported failure even
   though the solution was as accurate as it could be.
+- New ``solve_dke`` option ``fluid_correction`` (default ``True``) that combines the
+  multigrid preconditioner with an exact correction of the density, energy and parallel
+  momentum of each species at every point on the flux surface. This makes the solve
+  much more robust at high collisionality, often cutting the number of iterations by
+  5-10x for less than 2% extra cost per iteration. Each species' correction is weighted
+  smoothly from 0 at low collisionality to 1 at high collisionality, and the correction
+  is skipped entirely when no species is collisional.
 
 ### Performance improvements
 - The direct solve on the coarsest multigrid level now applies a step of iterative
