@@ -17,6 +17,7 @@ from yancc._collisions import (
     PitchAngleScattering,
     RosenbluthPotentials,
 )
+from yancc._misc import _dr
 from yancc.species import _JOULE_PER_EV, GlobalMaxwellian, Hydrogen, _gamma_ab
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -599,6 +600,85 @@ def test_verify_collision_null_single_species(dummy_field):
     # should have a null space of dimension 3*nt*nz
     # maxwellian, v*maxwellian, v^2*maxwellian
     assert sum(np.abs(es) < 1e-14 * np.max(np.abs(es))) == 3 * nt * nz
+
+
+def test_collision_species_energy_projection(field, species2):
+    """Surface averaged density and energy of each species are conserved, perturbations
+    of them that are constant on the surface are null, and the local exchange is kept.
+
+    The species have different temperatures, so without the projection a density
+    perturbation also drives temperature equilibration. Pitch angle scattering is
+    excluded from the conservation check, since its finite difference discretization
+    conserves the moments only to the pitch resolution.
+    """
+    speedgrid = MaxwellSpeedGrid(4)
+    # more pitch nodes than Legendre modes of the potentials, so the pitch quadrature
+    # annihilates every mode but l = 0
+    pitchgrid = UniformPitchAngleGrid(9)
+    potentials = RosenbluthPotentials(speedgrid, species2)
+    ns, nx, na = len(species2), speedgrid.nx, pitchgrid.nalpha
+    nt, nz = field.ntheta, field.nzeta
+    x = np.asarray(speedgrid.x)
+    F = np.array([np.asarray(sp(speedgrid.x * sp.v_thermal)) for sp in species2])
+    wv = (x**2 * np.asarray(speedgrid.wx))[:, None] * np.asarray(pitchgrid.wxi)[None]
+    wr = np.asarray(_dr(field))
+    wr = wr / wr.sum()
+
+    # isotropic density and temperature perturbations of each species, constant on
+    # the surface, and the surface averaged density and energy moments of each species
+    U, Mo = [], []
+    for s in range(ns):
+        for p in (np.ones_like(x), x**2):
+            u = np.zeros((ns, nx, na, nt, nz))
+            u[s] = (p * F[s])[:, None, None, None]
+            U.append(u.flatten())
+            m = np.zeros((ns, nx, na, nt, nz))
+            m[s] = (wv * p[:, None])[:, :, None, None] * wr
+            Mo.append(m.flatten())
+    U, Mo = np.array(U).T, np.array(Mo)
+    # temperature perturbation of the first species at a single point, and the
+    # energy moment of the second species at that point
+    u_loc = np.zeros((ns, nx, na, nt, nz))
+    u_loc[0, :, :, 0, 0] = (x**2 * F[0])[:, None]
+    m_loc = np.zeros((ns, nx, na, nt, nz))
+    m_loc[1, :, :, 0, 0] = wv * (x**2)[:, None]
+    u_loc, m_loc = u_loc.flatten(), m_loc.flatten()
+
+    min_eig = {}
+    for exchange in (True, False):
+        C = FokkerPlanckLandau(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            potentials=potentials,
+            energy_exchange=exchange,
+        )
+        A = np.asarray(C.as_matrix())
+        right = A @ U
+        left = Mo @ (A - np.asarray(C.CL.as_matrix()))
+        right_scale = np.abs(A) @ np.abs(U)
+        left_scale = np.abs(Mo) @ np.abs(A)
+        # the local exchange is kept either way
+        local = m_loc @ A @ u_loc
+        assert np.abs(local) > 1e-6 * (np.abs(m_loc) @ np.abs(A) @ np.abs(u_loc))
+        es = np.linalg.eigvals(A)
+        min_eig[exchange] = np.real(es).min()
+        if exchange:
+            # temperature perturbations exchange energy between the species
+            temp = right[:, 1::2]
+            energy = Mo[1::2] @ temp
+            assert np.all(
+                np.abs(energy) > 1e-6 * (np.abs(Mo[1::2]) @ right_scale[:, 1::2])
+            )
+        else:
+            np.testing.assert_allclose(right, 0, atol=1e-12 * right_scale.max())
+            np.testing.assert_allclose(left, 0, atol=1e-12 * left_scale.max())
+            # The discrete operator conserves each species' density and energy only to
+            # the speed resolution, so their local perturbations have small eigenvalues
+            # of either sign. Removing the surface averaged exchange adds none below
+            # them.
+            assert min_eig[False] >= min_eig[True] - 1e-12 * np.abs(es).max()
 
 
 def _check_operator_interface(op, rng):
