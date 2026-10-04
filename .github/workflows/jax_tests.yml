@@ -68,6 +68,9 @@ jobs:
   jax_tests:
     needs: discover_jax_versions
     runs-on: ubuntu-latest
+    # a full run takes well under an hour, so anything longer is a hang. Without this
+    # a hung job runs until the 6 hour runner limit.
+    timeout-minutes: 90
     permissions:
       actions: write
       contents: read
@@ -104,7 +107,13 @@ jobs:
         run: |
           pwd
           lscpu
+          # -v puts each test on its own line, so the log shows which test is running
+          # (the default progress dots only reach the log once the whole file is done).
+          # faulthandler_timeout dumps the stack of every thread if a single test runs
+          # longer than that many seconds, which shows where a hung test is stuck.
           python -m pytest tests/test_solve.py \
+            -v \
+            -o faulthandler_timeout=900 \
             --durations=0 \
             --maxfail=1
       # GitHub does not expose per-cell outcomes of a matrix job in the needs
