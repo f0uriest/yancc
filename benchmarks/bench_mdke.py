@@ -21,7 +21,7 @@ Usage
     python benchmarks/bench_mdke.py run --tier smoke   --out smoke.json
     python benchmarks/bench_mdke.py run --tier nightly --out nightly.json
 
-    # Run specific case(s) by name (overrides --tier); --list shows the names.
+    # Run specific case(s) by name (overrides --tier); --list shows the cases.
     python benchmarks/bench_mdke.py run --list
     python benchmarks/bench_mdke.py run --case w7x_nu1e-3_er0 --out one.json
     python benchmarks/bench_mdke.py run --case w7x_nu1e-3_er0,hsx_nu1e-3_er0
@@ -157,8 +157,10 @@ def _split_names(values: list[str]) -> list[str]:
 def cmd_run(args: argparse.Namespace) -> int:
     """Run benchmarks."""
     if args.list:
-        for name in all_case_names():
-            print(name)
+        print(f"  {'case':>26} {_CASE_HDR} {'tier':>8}")
+        for case in CASES:
+            case = case.scaled(args.res_scale)
+            print(f"  {case.name:>26} {_case_cols(case)} {case.tier:>8}")
         return 0
     if args.case:
         names = _split_names(args.case)
@@ -337,7 +339,7 @@ def main() -> int:
     pr.add_argument(
         "--list",
         action="store_true",
-        help="print every available case name and exit (no solve)",
+        help="print a table of every case and its parameters, then exit (no solve)",
     )
     add_arguments(pr)
     pr.add_argument(

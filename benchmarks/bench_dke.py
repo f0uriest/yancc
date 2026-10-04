@@ -18,7 +18,7 @@ Usage
     python benchmarks/bench_dke.py run --tier smoke   --out smoke.json
     python benchmarks/bench_dke.py run --tier nightly --out nightly.json
 
-    # Run specific case(s) by name (overrides --tier); --list shows the names.
+    # Run specific case(s) by name (overrides --tier); --list shows the cases.
     python benchmarks/bench_dke.py run --list
     python benchmarks/bench_dke.py run --case ncsx_2sp_nu1e-2 --out one.json
     python benchmarks/bench_dke.py run --case hsx_2sp_1e-1,w7x_2sp_3e-2 --out two.json
@@ -71,7 +71,7 @@ NMV_REL_TOL = 0.05
 # Descriptive columns (field / species / nu* / E* / grid) shared by run and
 # compare so the case being solved is legible without cross-referencing cases_dke.py.
 _CASE_HDR = (
-    f"{'field':>12} {'species':>11} {'Ti/Te':>5} {'nu*':>10} {'E*':>10} {'grid':>13}"
+    f"{'field':>12} {'species':>14} {'Ti/Te':>5} {'nu*':>10} {'E*':>10} {'grid':>13}"
 )
 
 
@@ -98,7 +98,7 @@ def _case_cols(case: Case) -> str:
     nx, na, nt, nz = case.res
     grid = f"{nx}x{na}x{nt}x{nz}"
     return (
-        f"{case.field:>12} {_species_label(case):>11} {case.tratio:>5.2f} "
+        f"{case.field:>12} {_species_label(case):>14} {case.tratio:>5.2f} "
         f"{case.nustar:>10.1e} {case.estar:>10.2e} {grid:>13}"
     )
 
@@ -176,8 +176,10 @@ def _split_names(values: list[str]) -> list[str]:
 def cmd_run(args: argparse.Namespace) -> int:
     """Run benchmarks."""
     if args.list:
-        for name in all_case_names():
-            print(name)
+        print(f"  {'case':>30} {_CASE_HDR} {'tier':>8}")
+        for case in CASES:
+            case = case.scaled(args.res_scale)
+            print(f"  {case.name:>30} {_case_cols(case)} {case.tier:>8}")
         return 0
     if args.case:
         names = _split_names(args.case)
@@ -356,7 +358,7 @@ def main() -> int:
     pr.add_argument(
         "--list",
         action="store_true",
-        help="print every available case name and exit (no solve)",
+        help="print a table of every case and its parameters, then exit (no solve)",
     )
     add_arguments(pr)
     pr.add_argument(
