@@ -34,6 +34,14 @@ Unreleased
 - Reduced rounding error in the pitch angle scattering operator, which at high
   collisionality could act as a large spurious sink of isotropic (density and energy)
   perturbations.
+- The Fokker-Planck collision operator no longer includes the flux surface averaged
+  exchange of density and energy between species (the equilibration of the background
+  Maxwellian temperatures). This happens over the slower transport timescale and
+  doesn't belong in the DKE. Removing it puts each species' surface-constant density
+  and temperature perturbations in the null space of the operator, which makes
+  convergence much smoother at high collisionality. The local exchange between
+  species' temperature perturbations is kept, because it sets the fluxes at high
+  collisionality, so fluxes are unaffected.
 
 ### Bug fixes
 - The field particle collision operators now project from pitch nodes to Legendre
