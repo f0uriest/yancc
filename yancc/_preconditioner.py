@@ -97,6 +97,7 @@ class MDKEPreconditioner(MultigridOperator):
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
         cycle_index = options.pop("cycle_index", 3)
+        as_matrix_chunk = options.pop("as_matrix_chunk", 512)
 
         assert len(options) == 0, "MDKEPreconditioner got unknown option " + str(
             options
@@ -145,8 +146,13 @@ class MDKEPreconditioner(MultigridOperator):
         )
         # The MDKE has no species mass ratios to badly scale the coarse operator, so
         # its LU factorization is never the ill-conditioned case iterative refinement
-        # is for; skip it rather than pay for the check on every coarse solve.
-        coarse_opinv = DenseLUInverseOperator(operators[0], refine=0)
+        # is for; skip it rather than pay for the check on every coarse solve. The
+        # dense coarse matrix is built a chunk of columns at a time, which keeps peak
+        # memory near the size of the matrix itself rather than that times the number
+        # of intermediates in a matrix vector product.
+        coarse_opinv = DenseLUInverseOperator(
+            operators[0], refine=0, batch_size=as_matrix_chunk
+        )
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
         )
