@@ -340,7 +340,8 @@ CASES: list[Case] = [
     # --- high nx
     Case("ncsx_2sp_nx12", "NCSX", 2, 1e-1, (12, 61, 15, 31), estar=3e-3),
     Case("w7x_2sp_nx12", "W7X", 2, 1.0, (12, 61, 15, 31), estar=1e-3),
-    Case("hsx_2sp_nx12", "W7X", 2, 1.0, (12, 61, 15, 31), estar=1e-3),
+    Case("hsx_2sp_nx12", "HSX", 2, 1.0, (12, 61, 15, 31), estar=2e-3),
+    Case("precise_qa_2sp_1e1_nx12", "precise_QA", 2, 1e1, (12, 41, 15, 21), estar=2e-3),
     # --- high Er cases
     Case("estell_2sp_er1e-2", "ESTELL", 2, 1e-2, (6, 41, 15, 21), estar=1e-2),
     Case("w7x_2sp_er1e-2", "W7X", 2, 1e-2, (6, 41, 15, 21), estar=1e-2),
@@ -505,6 +506,44 @@ CASES += [
         "imp_dshape_w_kin", "DSHAPE", (184.0, 40.0), 1 / 40, (6, 61, 15, 1), 3e-3, "kin"
     ),
 ]
+
+
+# --- collisional limit. The linearized collisional exchange between species and the
+# stiffness of the electron collision terms grow with collisionality and are resolved
+# at large nx, and unequal temperatures, unequal masses and additional kinetic species
+# tilt or add exchange pairs, so these push those directions.
+_by_name = {c.name: c for c in CASES}
+CASES += [
+    Case("estell_2sp_1e1_nx12", "ESTELL", 2, 1e1, (12, 41, 15, 21), estar=2e-3),
+    Case(
+        "w7x_2sp_1e1_tratio3_nx12",
+        "W7X",
+        2,
+        1e1,
+        (12, 41, 15, 21),
+        estar=1e-3,
+        tratio=3.0,
+    ),
+    replace(_by_name["massT_m1000_t10"], name="massT_m1000_t10_1e1", nustar=1e1),
+    replace(
+        _impurity_case(
+            "imp_heliotron_c6_kin_1e1_nx12",
+            "HELIOTRON",
+            (12.0, 6.0),
+            1 / 6,
+            (12, 41, 15, 21),
+            7e-3,
+            "kin",
+        ),
+        nustar=1e1,
+    ),
+    Case("hsx_2sp_1e2_nx6", "HSX", 2, 1e2, (6, 41, 15, 21), estar=2e-3),
+    Case("w7x_2sp_1e2_nx12", "W7X", 2, 1e2, (12, 41, 15, 21), estar=1e-3),
+    Case("ncsx_2sp_1e2_nx12", "NCSX", 2, 1e2, (12, 61, 15, 31), estar=3e-3),
+    Case("hsx_2sp_1e2_nx12", "HSX", 2, 1e2, (12, 41, 15, 21), estar=2e-3),
+    Case("dshape_2sp_1e2_nx12", "DSHAPE", 2, 1e2, (12, 61, 15, 1), estar=3e-3),
+]
+del _by_name
 
 
 def cases_for_tier(tier: str) -> list[Case]:
