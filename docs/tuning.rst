@@ -86,6 +86,16 @@ DKE-only options
    add Krook style diffusion. Use this to selectively turn parts of the operator off
    (e.g. zero out :math:`C_E` and :math:`C_F` to recover a Lorentz operator).
 
+``fluid_correction`` *(bool, default True)*
+   Whether to precede each application of the multigrid preconditioner with an
+   exact correction of the density, energy and parallel momentum of each species
+   at every point of the flux surface. This makes the solve much more robust at high
+   collisionality, at the cost of a setup step and one extra operator application
+   per iteration (usually less than 2% additional cost per iteration, and can reduce
+   the required number of iterations by 5-10x). The correction of each species is
+   weighted smoothly from 0 at low collisionality to 1 at high collisionality, where
+   it is needed most, and it is skipped when no species is collisional.
+
 Warm-starting
 -------------
 

@@ -477,7 +477,7 @@ def _nustar(
     return _normalize_collisionality(nu, v, field)
 
 
-def _normalize_collisionality(nu, v, field):
+def _normalize_collisionality(nu: jax.Array, v: jax.Array, field: Field) -> jax.Array:
     """ν* = ν R₀ /(v ι) from a collisionality ν at speed v."""
     return field.R_major * nu / v / jnp.abs(field.iota)
 
