@@ -13,12 +13,17 @@ Unreleased
   smoothers to apply and their order, for both the DKE and MDKE. The new defaults are
   ``"plane,s,x,a,l01t,l01z"`` for the DKE (the frozen plane, block-Jacobi lines in
   species, speed and pitch, and new ``"l01t"`` and ``"l01z"`` theta and zeta line
-  smoothers acting on the lowest two Legendre moments in pitch) and ``"plane,a"`` for
-  the MDKE (the frozen plane and pitch lines). The previous integer values are no
-  longer accepted. See the tuning guide.
+  smoothers acting on the lowest two Legendre moments in pitch) and ``"plane,a,t,z"``
+  for the MDKE (the frozen plane and pitch, theta and zeta lines). The previous integer
+  values are no longer accepted. See the tuning guide.
 - The multigrid option ``smooth_weights`` can now be a dict mapping entries of
   ``smooth_type`` to their relaxation weight, with the other smoothers using their
   defaults. A single value now applies to every smoother.
+- ``solve_dke`` now stops once the remaining residual is at the level that rounding
+  error in the matrix-vector product can explain. At very high collisionality the large
+  pitch angle scattering frequency at the lowest speed nodes limits the attainable
+  residual, and the solve previously ran to ``maxiter`` and reported failure even
+  though the solution was as accurate as it could be.
 
 ### Performance improvements
 - The direct solve on the coarsest multigrid level now applies a step of iterative
@@ -26,6 +31,23 @@ Unreleased
   factorization of badly scaled multispecies coarse matrices.
 - All smoothers on a multigrid level are now built from a single shared operator,
   reducing the compile time of the preconditioner by about a third.
+- Reduced rounding error in the pitch angle scattering operator, which at high
+  collisionality could act as a large spurious sink of isotropic (density and energy)
+  perturbations.
+- The Fokker-Planck collision operator no longer includes the flux surface averaged
+  exchange of density and energy between species (the equilibration of the background
+  Maxwellian temperatures). This happens over the slower transport timescale and
+  doesn't belong in the DKE. Removing it puts each species' surface-constant density
+  and temperature perturbations in the null space of the operator, which makes
+  convergence much smoother at high collisionality. The local exchange between
+  species' temperature perturbations is kept, because it sets the fluxes at high
+  collisionality, so fluxes are unaffected.
+
+### Bug fixes
+- The field particle collision operators now project from pitch nodes to Legendre
+  modes with a weighted Galerkin projection rather than an unweighted least squares
+  fit, so the density and energy moments match the pitch quadrature used elsewhere and
+  unresolved high order modes are not mixed into the low order ones.
 
 
 v0.0.2

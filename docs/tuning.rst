@@ -192,7 +192,7 @@ Cycle and smoothing
    to 4–5 is sometimes the cheapest way to recover convergence on stiff
    problems.
 
-``smooth_type`` *(str, default "plane,s,x,a,l01t,l01z" for DKE, "plane,a" for MDKE)*
+``smooth_type`` *(str, default "plane,s,x,a,l01t,l01z" for DKE, "plane,a,t,z" for MDKE)*
    Comma separated list of the smoothers applied on each multigrid level, in the
    order given. Each entry is one of:
 

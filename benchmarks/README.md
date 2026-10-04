@@ -57,7 +57,7 @@ python benchmarks/bench_dke.py run --tier smoke --out smoke.json
 python benchmarks/bench_dke.py run --tier all --out bench.json
 
 # run specific case(s) by name (overrides --tier); repeatable / comma-separated
-python benchmarks/bench_dke.py run --list                 # show all case names
+python benchmarks/bench_dke.py run --list                 # table of all cases + params
 python benchmarks/bench_dke.py run --case ncsx_2sp_nu1e-2 --out one.json
 python benchmarks/bench_dke.py run --case hsx_2sp_1e-1,w7x_2sp_3e-2 --out two.json
 

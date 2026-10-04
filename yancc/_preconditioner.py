@@ -94,7 +94,7 @@ class MDKEPreconditioner(MultigridOperator):
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
-        smooth_type = options.pop("smooth_type", "plane,a")
+        smooth_type = options.pop("smooth_type", "plane,a,t,z")
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
