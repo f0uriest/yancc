@@ -7,11 +7,16 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.constants import elementary_charge, proton_mass
+from scipy.constants import elementary_charge, epsilon_0, proton_mass
 
 from ._misc import _d3v, _dr, radial_magnetic_drift
 from .field import Field
-from .species import _JOULE_PER_EV, LocalMaxwellian
+from .species import (
+    _JOULE_PER_EV,
+    LocalMaxwellian,
+    _coulomb_logarithm,
+    _species_pairs,
+)
 from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
 
 _MDKE_OUTPUTS = {}
@@ -437,6 +442,32 @@ def _dke_heat_flux(sol, **kwargs):
 
 
 @_register_dke_output(
+    name="<momentum_flux>",
+    label="\\langle \\int d^3v m_s v_{||} B f_s \\mathbf{v}_m \\cdot "
+    "\\nabla \\rho \\rangle",
+    units="kg \\cdot T \\cdot m^{-2} \\cdot s^{-2}",
+    description="Flux of parallel momentum times field strength for each species",
+    dim=("ns",),
+)
+def _dke_momentum_flux(sol, **kwargs):
+    vth = jnp.array([sp.v_thermal for sp in sol.species])[:, None, None, None, None]
+    ms = jnp.array([sp.species.mass for sp in sol.species])[:, None, None, None, None]
+    xi = sol.pitchgrid.xi[None, None, :, None, None]
+    x = sol.speedgrid.x[None, :, None, None, None]
+    vpar = x * vth * xi
+    d3v = _d3v(sol.speedgrid, sol.pitchgrid, sol.species)[..., None, None]
+    dr = _dr(sol.field)[None, None, None]
+    dr = dr / dr.sum()
+
+    radial_drift = radial_magnetic_drift(
+        sol.field, sol.speedgrid, sol.pitchgrid, sol.species
+    )
+    momentum_flux = ms * vpar * sol.field.Bmag * sol.f * radial_drift * d3v * dr
+    momentum_flux = momentum_flux.sum(axis=(-4, -3, -2, -1))
+    return momentum_flux
+
+
+@_register_dke_output(
     name="V||",
     label="V_{||} = 1/n_s \\int d^3v v_{||} f_s",
     units="m \\cdot s^{-1}",
@@ -472,6 +503,77 @@ def _dke_VparB(sol, **kwargs):
     BVpar = sol.field.Bmag[:, :] * Vpar * dr
     BVpar = BVpar.sum(axis=(-2, -1))
     return BVpar
+
+
+def _perpendicular_rotation(sol):
+    """Coefficient of B x grad(rho) / B^2 in the perpendicular flow, shape (ns, nt, nz).
+
+    The perpendicular (diamagnetic and ExB) flow is
+    V_perp = B x grad(rho) / B^2 * (1/(q n) dp/drho + dPhi/drho).
+    """
+    # The density is a pseudo-density times the Boltzmann factor in Phi_1. The
+    # radial derivative of Phi_1 enters both the Boltzmann factor and the ExB
+    # drift, and cancels between them.
+    qs = jnp.array([sp.species.charge for sp in sol.species])[:, None, None]
+    Ts = jnp.array([sp.temperature for sp in sol.species])[:, None, None]
+    dTs = jnp.array([sp.dTdrho for sp in sol.species])[:, None, None]
+    ns = jnp.array([sp.density for sp in sol.species])[:, None, None]
+    dns = jnp.array([sp.dndrho for sp in sol.species])[:, None, None]
+    Ts, dTs = Ts * _JOULE_PER_EV, dTs * _JOULE_PER_EV
+    Phi1 = sol.get("Phi_1")
+    return Ts / qs * dns / ns + (1 + qs * Phi1 / Ts) * dTs / qs - sol.Erho
+
+
+@_register_dke_output(
+    name="Vperp",
+    label="V_{\\perp} = \\frac{|\\nabla \\rho|}{B} \\left(\\frac{1}{q_s n_s} "
+    "\\frac{\\partial p_s}{\\partial \\rho} + \\frac{\\partial \\Phi}"
+    "{\\partial \\rho}\\right)",
+    units="m \\cdot s^{-1}",
+    description="Perpendicular (diamagnetic and ExB) flow on surface for each "
+    "species, along b x grad(rho), including Phi_1. Requires Field.g_sup_rr.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_Vperp(sol, **kwargs):
+    if sol.field.g_sup_rr is None:
+        raise ValueError(
+            "Vperp requires Field.g_sup_rr, which is not available for this field."
+        )
+    return jnp.sqrt(sol.field.g_sup_rr) / sol.field.Bmag * _perpendicular_rotation(sol)
+
+
+@_register_dke_output(
+    name="V^theta",
+    label="V^{\\theta} = V_{||} B^{\\theta} / B + \\mathbf{V}_{\\perp} \\cdot "
+    "\\nabla \\theta",
+    units="s^{-1}",
+    description="Contravariant poloidal component of the total flow for each "
+    "species, including Phi_1.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_V_theta(sol, **kwargs):
+    field = sol.field
+    # (B x grad(rho)) . grad(theta) = B_zeta / sqrt(g)
+    Vperp = field.B_sub_z / (field.Bmag**2 * field.sqrtg) * _perpendicular_rotation(sol)
+    return sol.get("V||") * field.B_sup_t / field.Bmag + Vperp
+
+
+@_register_dke_output(
+    name="V^zeta",
+    label="V^{\\zeta} = V_{||} B^{\\zeta} / B + \\mathbf{V}_{\\perp} \\cdot "
+    "\\nabla \\zeta",
+    units="s^{-1}",
+    description="Contravariant toroidal component of the total flow for each "
+    "species, including Phi_1.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_V_zeta(sol, **kwargs):
+    field = sol.field
+    # (B x grad(rho)) . grad(zeta) = -B_theta / sqrt(g)
+    Vperp = (
+        -field.B_sub_t / (field.Bmag**2 * field.sqrtg) * _perpendicular_rotation(sol)
+    )
+    return sol.get("V||") * field.B_sup_z / field.Bmag + Vperp
 
 
 @_register_dke_output(
@@ -519,6 +621,199 @@ def _dke_parallel_current(sol, **kwargs):
     Jpar = qs * ns * Vpar
     Jpar = Jpar.sum(axis=(-3))
     return Jpar
+
+
+def _velocity_moment(sol, f, weight):
+    """Integrate weight * f over velocity space at each point on the surface."""
+    d3v = _d3v(sol.speedgrid, sol.pitchgrid, sol.species)[..., None, None]
+    return (weight * f * d3v).sum(axis=(1, 2))
+
+
+def _pressure_weight(sol):
+    vth = jnp.array([sp.v_thermal for sp in sol.species])[:, None, None, None, None]
+    ms = jnp.array([sp.species.mass for sp in sol.species])[:, None, None, None, None]
+    x = sol.speedgrid.x[None, :, None, None, None]
+    return ms * (vth * x) ** 2 / 3
+
+
+def _boltzmann_factor(sol):
+    """Boltzmann response exp(-q_s Phi_1 / T_s), shape (ns, nt, nz)."""
+    qs = jnp.array([sp.species.charge for sp in sol.species])[:, None, None]
+    Ts = jnp.array([sp.temperature for sp in sol.species])[:, None, None]
+    return jnp.exp(-qs * sol.get("Phi_1") / (Ts * _JOULE_PER_EV))
+
+
+@_register_dke_output(
+    name="n1",
+    label="\\delta n_s = \\int d^3v f_{s1}",
+    units="m^{-3}",
+    description="Density perturbation on surface for each species.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_density_perturbation(sol, **kwargs):
+    return _velocity_moment(sol, sol.f1, 1.0)
+
+
+@_register_dke_output(
+    name="n",
+    label="n_s = e^{-q_s \\Phi_1 / T_s} \\int d^3v F_{s0} + \\delta n_s",
+    units="m^{-3}",
+    description="Total density on surface for each species, including the "
+    "Boltzmann response to Phi_1.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_density(sol, **kwargs):
+    n0 = _velocity_moment(sol, sol.F0, 1.0)
+    return _boltzmann_factor(sol) * n0 + sol.get("n1")
+
+
+@_register_dke_output(
+    name="p1",
+    label="\\delta p_s = \\int d^3v 1/3 m_s v^2 f_{s1}",
+    units="kg \\cdot m^{-1} \\cdot s^{-2} = Pa",
+    description="Pressure perturbation on surface for each species.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_pressure_perturbation(sol, **kwargs):
+    return _velocity_moment(sol, sol.f1, _pressure_weight(sol))
+
+
+@_register_dke_output(
+    name="p",
+    label="p_s = e^{-q_s \\Phi_1 / T_s} \\int d^3v 1/3 m_s v^2 F_{s0} + \\delta p_s",
+    units="kg \\cdot m^{-1} \\cdot s^{-2} = Pa",
+    description="Total pressure on surface for each species, including the "
+    "Boltzmann response to Phi_1.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_pressure(sol, **kwargs):
+    p0 = _velocity_moment(sol, sol.F0, _pressure_weight(sol))
+    return _boltzmann_factor(sol) * p0 + sol.get("p1")
+
+
+@_register_dke_output(
+    name="Phi_1",
+    label="\\Phi_1 = \\sum_s q_s \\delta n_s / \\sum_s (q_s^2 n_s / T_s)",
+    units="V",
+    description="Variation of electrostatic potential on surface from "
+    "quasi-neutrality, with zero flux surface average.",
+    dim=("nt", "nz"),
+)
+def _dke_Phi1(sol, **kwargs):
+    # Quasi-neutrality with a linearized Boltzmann response to Phi_1 from every
+    # species, including background species which have no kinetic perturbation.
+    # The flux surface average of Phi_1 is absorbed into the equilibrium potential,
+    # so only the variation of the charge density on the surface is kept.
+    qs = jnp.array([sp.species.charge for sp in sol.species])[:, None, None]
+    charge = (qs * sol.get("n1")).sum(axis=0)
+    charge = charge - sol.field.flux_surface_average(charge)
+    shielding = sum(
+        sp.species.charge**2 * sp.density / (sp.temperature * _JOULE_PER_EV)
+        for sp in list(sol.species) + list(sol.background)
+    )
+    return charge / shielding
+
+
+def _classical_fluxes(sol, coulomb_log=None):
+    """Classical particle and heat fluxes for each species.
+
+    Friction is evaluated with the Braginskii matrix elements for collisions with
+    all species, including background species. Species densities are the
+    pseudo-densities of Maxwell-Boltzmann distributions in Phi_1.
+    """
+    # Eqs. (3.9)-(3.10) of S. Buller et al., J. Plasma Phys. 85, 175850401 (2019),
+    # using the linearized Fokker-Planck operator for arbitrary masses and
+    # temperatures. The gyrophase dependent part of f_1 that carries
+    # the classical flux is -rho.grad(F_0), set by the gradients of the
+    # Maxwellians alone, so the friction is independent of the drift kinetic
+    # solution. That function lies exactly in the span of the first two Laguerre
+    # polynomials, so the Braginskii matrix elements give the friction exactly.
+    if sol.field.g_sup_rr is None:
+        raise ValueError(
+            "Classical fluxes require Field.g_sup_rr, which is not available "
+            "for this field."
+        )
+    g = sol.field.g_sup_rr / sol.field.Bmag**2
+    Phi1 = sol.get("Phi_1")
+
+    def fluxes_ab(a, b):
+        ma, qa, na = a.species.mass, a.species.charge, a.density
+        mb, qb, nb = b.species.mass, b.species.charge, b.density
+        Ta = a.temperature * _JOULE_PER_EV
+        Tb = b.temperature * _JOULE_PER_EV
+        dTa = a.dTdrho * _JOULE_PER_EV
+        dTb = b.dTdrho * _JOULE_PER_EV
+        lnlambda = _coulomb_logarithm(a, b) if coulomb_log is None else coulomb_log
+        xab2 = ma * Tb / (mb * Ta)
+        norm = (1 + xab2) ** 2.5
+        M00 = -(1 + ma / mb) * (1 + xab2) / norm
+        M01 = -1.5 * (1 + ma / mb) / norm
+        M11 = -(13 + 16 * xab2 + 30 * xab2**2) / 4 / norm
+        N11 = 27 * ma / (4 * mb) / norm
+        # Boltzmann factors of both species weight the friction on the surface.
+        # The radial derivative of the variation in the Boltzmann factor gives
+        # the extra Phi_1 * dlnT term.
+        weight = jnp.exp(-(qa / Ta + qb / Tb) * Phi1)
+        geometry1 = sol.field.flux_surface_average(g * weight)
+        geometry2 = sol.field.flux_surface_average(g * weight * Phi1)
+        dp = Ta * a.dndrho / (na * qa) - Tb * b.dndrho / (nb * qb)
+        dlnT = dTa / Ta - dTb / Tb
+        coeff = lnlambda * qa * qb**2 * na * nb
+        Gamma = coeff * (
+            geometry1 * M00 * dp
+            + geometry2 * M00 * dlnT
+            + geometry1 * (M00 - M01) * dTa / qa
+            - geometry1 * (M00 - xab2 * M01) * dTb / qb
+        )
+        q = coeff * (
+            geometry1 * M01 * dp
+            + geometry2 * M01 * dlnT
+            + geometry1 * (M01 - M11) * dTa / qa
+            - geometry1 * (M01 + N11) * dTb / qb
+        )
+        return Gamma, q
+
+    Gamma, q = _species_pairs(
+        fluxes_ab, list(sol.species), list(sol.species) + list(sol.background)
+    )
+    Gamma, q = Gamma.sum(axis=1), q.sum(axis=1)
+    ma = jnp.array([sp.species.mass for sp in sol.species])
+    Ta = jnp.array([sp.temperature for sp in sol.species]) * _JOULE_PER_EV
+    prefactor = (
+        4 * jnp.sqrt(2 * jnp.pi) * jnp.sqrt(ma) / (3 * (4 * jnp.pi * epsilon_0) ** 2)
+    ) / Ta**1.5
+    Gamma = prefactor * Gamma
+    # total energy flux Q = q + 5/2 T Gamma, matching <heat_flux>
+    Q = -prefactor * Ta * q + 2.5 * Ta * Gamma
+    return Gamma, Q
+
+
+@_register_dke_output(
+    name="<classical_particle_flux>",
+    label="\\Gamma^{C} = \\frac{1}{q_s} \\langle \\frac{\\mathbf{B} \\times "
+    "\\nabla \\rho}{B^2} \\cdot \\mathbf{R}_s \\rangle",
+    units="m^{-3} \\cdot s^{-1}",
+    description="Classical particle flux for each species, including Phi_1. "
+    "Requires Field.g_sup_rr. Accepts coulomb_log to override the Coulomb "
+    "logarithm.",
+    dim=("ns",),
+)
+def _dke_classical_particle_flux(sol, coulomb_log=None, **kwargs):
+    return _classical_fluxes(sol, coulomb_log)[0]
+
+
+@_register_dke_output(
+    name="<classical_heat_flux>",
+    label="Q^{C} = \\frac{1}{q_s} \\langle \\frac{\\mathbf{B} \\times "
+    "\\nabla \\rho}{B^2} \\cdot \\mathbf{G}_s \\rangle",
+    units="kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}",
+    description="Classical heat flux for each species, including Phi_1. "
+    "Requires Field.g_sup_rr. Accepts coulomb_log to override the Coulomb "
+    "logarithm.",
+    dim=("ns",),
+)
+def _dke_classical_heat_flux(sol, coulomb_log=None, **kwargs):
+    return _classical_fluxes(sol, coulomb_log)[1]
 
 
 @_register_dke_output(
