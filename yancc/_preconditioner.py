@@ -13,12 +13,12 @@ from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
 from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
 from ._multigrid import (
     MultigridOperator,
-    get_dke_jacobi_smoothers,
     get_dke_operators,
+    get_dke_smoothers,
     get_fields_grids,
     get_grid_resolutions,
-    get_mdke_jacobi_smoothers,
     get_mdke_operators,
+    get_mdke_smoothers,
     get_prolongations,
     get_restrictions,
 )
@@ -88,9 +88,13 @@ class MDKEPreconditioner(MultigridOperator):
         min_nt = options.pop("min_nt", min_n)
         min_nz = options.pop("min_nz", 1 if field.nzeta == 1 else min_n)
         min_na = options.pop("min_na", min_n)
+        # Smoother FD order, independent of the coarse-operator order (p1/p2).
+        smooth_p1 = options.pop("smooth_p1", self.p1)
+        smooth_p2 = options.pop("smooth_p2", self.p2)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
+        smooth_type = options.pop("smooth_type", "plane,a,t,z")
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -133,16 +137,21 @@ class MDKEPreconditioner(MultigridOperator):
             p2=self.p2,
             gauge=gauge,
         )
-        smoothers = get_mdke_jacobi_smoothers(
+        smoothers = get_mdke_smoothers(
             fields=fields,
             pitchgrids=grids,
             erhohat=erhohat,
             nuhat=nuhat,
-            p1=self.p1,
-            p2=self.p2,
+            p1=smooth_p1,
+            p2=smooth_p2,
             gauge=gauge,
+            smooth_type=smooth_type,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
+            # the level operators can be shared when the smoothers use the same ones
+            operators=(
+                operators if (smooth_p1, smooth_p2) == (self.p1, self.p2) else None
+            ),
         )
         # The MDKE has no species mass ratios to badly scale the coarse operator, so
         # its LU factorization is never the ill-conditioned case iterative refinement
@@ -311,9 +320,13 @@ class DKEPreconditioner(MultigridOperator):
         resolutions = _dke_resolutions(
             field, pitchgrid, speedgrid, species, self.p1, self.p2, options
         )
+        # Smoother FD order, independent of the coarse-operator order (p1/p2).
+        smooth_p1 = options.pop("smooth_p1", self.p1)
+        smooth_p2 = options.pop("smooth_p2", self.p2)
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
+        smooth_type = options.pop("smooth_type", "plane,s,x,a,l01t,l01z")
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
@@ -344,7 +357,7 @@ class DKEPreconditioner(MultigridOperator):
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
         )
-        smoothers = get_dke_jacobi_smoothers(
+        smoothers = get_dke_smoothers(
             fields=fields,
             pitchgrids=grids,
             speedgrid=speedgrid,
@@ -352,13 +365,21 @@ class DKEPreconditioner(MultigridOperator):
             Erho=Erho,
             background=background,
             potentials=potentials,
-            p1=self.p1,
-            p2=self.p2,
+            p1=smooth_p1,
+            p2=smooth_p2,
             gauge=gauge,
+            smooth_type=smooth_type,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
             operator_weights=smoother_weights,
             coulomb_log=coulomb_log,
+            # the level operators can be shared when the smoothers use the same ones
+            operators=(
+                operators
+                if (smooth_p1, smooth_p2) == (self.p1, self.p2)
+                and smoother_weights is operator_weights
+                else None
+            ),
         )
         # The direct solve on the coarsest grid needs the operator as a dense matrix.
         # Building it a chunk of columns at a time keeps peak memory near the size of

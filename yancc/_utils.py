@@ -9,6 +9,17 @@ import numpy as np
 ###############################
 
 
+def _to_axorder(f, sizes: dict[str, int], axorder: str) -> jax.Array:
+    """Reorder a flattened array from the canonical layout into the ``axorder`` layout.
+
+    The canonical layout is (s, x, a, t, z) for the DKE and (a, t, z) for the MDKE,
+    and ``sizes`` gives the size of each axis.
+    """
+    canon = "sxatz" if len(axorder) == 5 else "atz"
+    f = f.reshape([sizes[c] for c in canon])
+    return jnp.transpose(f, [canon.index(c) for c in axorder]).flatten()
+
+
 def _parse_axorder_shape_3d(
     nt: int, nz: int, na: int, axorder: str
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:

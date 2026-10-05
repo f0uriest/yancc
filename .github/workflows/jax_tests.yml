@@ -1,16 +1,30 @@
 name: Dependency test JAX
 
+# Trigger by adding the test_jax label to the PR (re-runs on every push while the label
+# is present), or run manually from the Actions tab.
+
 on:
   pull_request:
-    types: [labeled]
+    types: [labeled, synchronize]
   workflow_dispatch:
+
+# A newer push supersedes a run in progress. Adding any other label also starts this
+# workflow, so those runs get a group of their own and can't cancel the tests.
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{
+    (github.event.action == 'labeled' && github.event.label.name != 'test_jax')
+    && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
 
 jobs:
   discover_jax_versions:
     if: >-
-      ${{ github.event.label.name == 'test_jax' &&
-      github.event_name == 'pull_request' ||
-      github.event_name == 'workflow_dispatch' }}
+      ${{ github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' &&
+      github.event.label.name == 'test_jax') ||
+      (github.event.action == 'synchronize' &&
+      contains(github.event.pull_request.labels.*.name, 'test_jax')) }}
     runs-on: ubuntu-latest
     outputs:
       jax-versions: ${{ steps.discover.outputs.versions }}
@@ -68,6 +82,9 @@ jobs:
   jax_tests:
     needs: discover_jax_versions
     runs-on: ubuntu-latest
+    # a full run takes well under an hour, so anything longer is a hang. Without this
+    # a hung job runs until the 6 hour runner limit.
+    timeout-minutes: 90
     permissions:
       actions: write
       contents: read
@@ -104,7 +121,13 @@ jobs:
         run: |
           pwd
           lscpu
+          # -v puts each test on its own line, so the log shows which test is running
+          # (the default progress dots only reach the log once the whole file is done).
+          # faulthandler_timeout dumps the stack of every thread if a single test runs
+          # longer than that many seconds, which shows where a hung test is stuck.
           python -m pytest tests/test_solve.py \
+            -v \
+            -o faulthandler_timeout=900 \
             --durations=0 \
             --maxfail=1
       # GitHub does not expose per-cell outcomes of a matrix job in the needs

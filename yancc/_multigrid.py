@@ -1,6 +1,7 @@
 """Stuff for multigrid cycles."""
 
 import functools
+from typing import Any
 
 import equinox as eqx
 import interpax
@@ -12,9 +13,13 @@ from jaxtyping import Array, Float, Int
 
 from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
 from ._smoothers import (
+    DKEFrozenPlaneSmoother,
     DKEJacobiSmoother,
+    DKEL01LineSmoother,
     DKELaplacian,
+    MDKEFrozenPlaneSmoother,
     MDKEJacobiSmoother,
+    MDKEL01LineSmoother,
 )
 from ._trajectories import DKE, MDKE
 from .field import Field
@@ -71,46 +76,51 @@ def get_dke_operators(
     return operators
 
 
-@eqx.filter_jit
-@jax.named_call
-def get_mdke_jacobi_smoothers(
-    fields,
-    pitchgrids,
-    erhohat,
-    nuhat,
-    p1,
-    p2,
-    gauge,
-    smooth_solver,
-    weight,
-    **options,
-):
-    """Get multigrid smoothers for each field, pitchgrid."""
-    smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
-        smooth = [
-            MDKEJacobiSmoother(
-                field,
-                pitchgrid,
-                erhohat,
-                nuhat,
-                axorder=order,
-                p1=p1,
-                p2=p2,
-                gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=weight,
-                **options,
-            )
-            for order in ["atz", "zat", "tza"]
-        ]
-        smoothers.append(smooth)
-    return smoothers
+# Axorder for each DKE line smoother; the last axis is the relaxed direction.
+_DKE_LINE_AXORDERS = {
+    "x": "atzsx",
+    "a": "tzsxa",
+    "s": "xatzs",
+    "z": "sxatz",
+    "t": "zsxat",
+}
+_DKE_SMOOTHER_TOKENS = (*_DKE_LINE_AXORDERS, "plane", "l01t", "l01z")
+
+
+def _parse_smooth_type(smooth_type: str, valid: tuple[str, ...]) -> list[str]:
+    """Split a comma separated smoother specification into validated tokens."""
+    tokens = [tok.strip() for tok in smooth_type.split(",")]
+    if not tokens or any(tok == "" for tok in tokens):
+        raise ValueError(f"smooth_type {smooth_type!r} has an empty entry")
+    unknown = [tok for tok in tokens if tok not in valid]
+    if unknown:
+        raise ValueError(
+            f"smooth_type {smooth_type!r} has unknown entries {unknown}, "
+            f"expected a comma separated list of {list(valid)}"
+        )
+    return tokens
+
+
+def _smoother_weights(weight, tokens: list[str]) -> list[Any]:
+    """Relaxation weight for each smoother token.
+
+    A dict gives the weight of each token, with tokens not in it using the smoother's
+    default, while any other weight applies to every smoother.
+    """
+    if not isinstance(weight, dict):
+        return [weight for _ in tokens]
+    unknown = [key for key in weight if key not in tokens]
+    if unknown:
+        raise ValueError(
+            f"smoother weights given for {unknown}, which are not in smooth_type "
+            f"{tokens}"
+        )
+    return [weight.get(tok) for tok in tokens]
 
 
 @eqx.filter_jit
 @jax.named_call
-def get_dke_jacobi_smoothers(
+def get_dke_smoothers(
     fields,
     pitchgrids,
     speedgrid,
@@ -121,16 +131,39 @@ def get_dke_jacobi_smoothers(
     p1,
     p2,
     gauge,
+    smooth_type,
     smooth_solver,
     weight,
+    operator_weights=None,
     coulomb_log=None,
+    operators=None,
     **options,
 ):
-    """Get multigrid smoothers for each field, pitchgrid."""
+    """Get the multigrid smoothers for each field, pitchgrid.
+
+    ``smooth_type`` is a comma separated list of smoothers, applied in the given order
+    on every level: ``"x"``, ``"a"``, ``"s"``, ``"z"``, ``"t"`` are block Jacobi line
+    smoothers along speed, pitch, species, zeta and theta, ``"plane"`` is the frozen
+    (theta, zeta) plane smoother, and ``"l01t"`` and ``"l01z"`` are theta and zeta line
+    smoothers on the l = 0, 1 Legendre subspace in pitch.
+
+    ``weight`` is the relaxation weight of every smoother, or a dict from smoother
+    names in ``smooth_type`` to the weight of each. Smoothers without a weight, or all
+    of them if ``weight`` is None, use their default.
+
+    ``operators``, if given, are the DKE operator on each level built from the same
+    arguments, and are shared by the smoothers rather than building new ones.
+    """
+    tokens = _parse_smooth_type(smooth_type, _DKE_SMOOTHER_TOKENS)
+    weights = _smoother_weights(weight, tokens)
+    if operators is None:
+        operators = [None] * len(fields)
     smoothers = []
-    for field, pitchgrid in zip(fields, pitchgrids):
-        smooth = [
-            DKEJacobiSmoother(
+    for field, pitchgrid, operator in zip(fields, pitchgrids, operators):
+        if operator is None:
+            # every smoother on a level is built from the same operator, which only
+            # differs in the axis ordering, so it is built once and relabeled
+            operator = DKE(
                 field,
                 pitchgrid,
                 speedgrid,
@@ -140,16 +173,114 @@ def get_dke_jacobi_smoothers(
                 potentials,
                 p1=p1,
                 p2=p2,
-                axorder=order,
                 gauge=gauge,
-                smooth_solver=smooth_solver,
-                weight=weight,
+                operator_weights=operator_weights,
                 coulomb_log=coulomb_log,
-                **options,
             )
-            for order in ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"]
-        ]
-        smoothers.append(smooth)
+        common: dict[str, Any] = dict(
+            field=field,
+            pitchgrid=pitchgrid,
+            speedgrid=speedgrid,
+            species=species,
+            Erho=Erho,
+            background=background,
+            potentials=potentials,
+            p1=p1,
+            p2=p2,
+            gauge=gauge,
+            operator_weights=operator_weights,
+            coulomb_log=coulomb_log,
+            operator=operator,
+        )
+        group = []
+        for tok, w in zip(tokens, weights):
+            if tok in _DKE_LINE_AXORDERS:
+                smoother = DKEJacobiSmoother(
+                    **common,
+                    axorder=_DKE_LINE_AXORDERS[tok],
+                    smooth_solver=smooth_solver,
+                    weight=w,
+                    **options,
+                )
+            elif tok == "plane":
+                smoother = DKEFrozenPlaneSmoother(**common, weight=w)
+            else:  # tok in ("l01t", "l01z"), the only remaining valid token
+                smoother = DKEL01LineSmoother(**common, line=tok[-1], weight=w)
+            group.append(smoother)
+        smoothers.append(group)
+    return smoothers
+
+
+# Axorder for each MDKE line smoother; the last axis is the relaxed direction.
+_MDKE_LINE_AXORDERS = {"a": "tza", "t": "zat", "z": "atz"}
+_MDKE_SMOOTHER_TOKENS = (*_MDKE_LINE_AXORDERS, "plane", "l01t", "l01z")
+
+
+@eqx.filter_jit
+@jax.named_call
+def get_mdke_smoothers(
+    fields,
+    pitchgrids,
+    erhohat,
+    nuhat,
+    p1,
+    p2,
+    gauge,
+    smooth_type,
+    smooth_solver,
+    weight,
+    operators=None,
+):
+    """Get the multigrid smoothers for each field, pitchgrid.
+
+    ``smooth_type`` is a comma separated list of smoothers, applied in the given order
+    on every level: ``"a"``, ``"t"``, ``"z"`` are block Jacobi line smoothers along
+    pitch, theta and zeta, ``"plane"`` is the frozen (theta, zeta) plane smoother, and
+    ``"l01t"`` and ``"l01z"`` are theta and zeta line smoothers on the l = 0, 1
+    Legendre subspace in pitch.
+
+    ``weight`` is the relaxation weight of every smoother, or a dict from smoother
+    names in ``smooth_type`` to the weight of each. Smoothers without a weight, or all
+    of them if ``weight`` is None, use their default.
+
+    ``operators``, if given, are the MDKE operator on each level built from the same
+    arguments, and are shared by the smoothers rather than building new ones.
+    """
+    tokens = _parse_smooth_type(smooth_type, _MDKE_SMOOTHER_TOKENS)
+    weights = _smoother_weights(weight, tokens)
+    if operators is None:
+        operators = [None] * len(fields)
+    smoothers = []
+    for field, pitchgrid, operator in zip(fields, pitchgrids, operators):
+        if operator is None:
+            # every smoother on a level is built from the same operator, which only
+            # differs in the axis ordering, so it is built once and relabeled
+            operator = MDKE(field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, gauge=gauge)
+        common: dict[str, Any] = dict(
+            field=field,
+            pitchgrid=pitchgrid,
+            erhohat=erhohat,
+            nuhat=nuhat,
+            p1=p1,
+            p2=p2,
+            gauge=gauge,
+            operator=operator,
+        )
+        group = []
+        for tok, w in zip(tokens, weights):
+            if tok in _MDKE_LINE_AXORDERS:
+                smoother = MDKEJacobiSmoother(
+                    **common,
+                    axorder=_MDKE_LINE_AXORDERS[tok],
+                    smooth_solver=smooth_solver,
+                    weight=w,
+                )
+            elif tok == "plane":
+                smoother = MDKEFrozenPlaneSmoother(**common, weight=w)
+            else:  # tok in ("l01t", "l01z"), the only remaining valid token
+                smoother = MDKEL01LineSmoother(**common, line=tok[-1], weight=w)
+            group.append(smoother)
+        smoothers.append(group)
     return smoothers
 
 

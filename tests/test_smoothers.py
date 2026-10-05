@@ -1,5 +1,8 @@
 """Tests for constructing smoothing operators."""
 
+from typing import Any
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -7,8 +10,12 @@ import pytest
 
 from yancc._misc import dke_rhs
 from yancc._multigrid import (
+    _DKE_SMOOTHER_TOKENS,
+    _MDKE_SMOOTHER_TOKENS,
+    _parse_smooth_type,
     adpative_smooth,
-    get_dke_jacobi_smoothers,
+    get_dke_smoothers,
+    get_mdke_smoothers,
     krylov1_smooth,
     krylov1s_smooth,
     krylov2_smooth,
@@ -16,9 +23,14 @@ from yancc._multigrid import (
     standard_smooth,
 )
 from yancc._smoothers import (
+    _L01_COLLISION_JACOBI_CAP,
+    DKEFrozenPlaneSmoother,
     DKEJacobiSmoother,
+    DKEL01LineSmoother,
     DKELaplacian,
+    MDKEFrozenPlaneSmoother,
     MDKEJacobiSmoother,
+    MDKEL01LineSmoother,
     optimal_smoothing_parameter_3d,
     optimal_smoothing_parameter_4d,
     permute_f_3d,
@@ -30,41 +42,21 @@ from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
 def test_permutations_mdke(field, pitchgrid):
-    """Test that re-ordering the grid points gives equivalent operators."""
-    p1 = "2a"
-    p2 = 2
-    erhohat = 1e-4
-    nuhat = 1e-4
-    N = field.ntheta * field.nzeta * pitchgrid.nalpha
-
-    A0f = MDKE(
-        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="atz", gauge=True
-    ).as_matrix()
-    A1f = MDKE(
-        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="zat", gauge=True
-    ).as_matrix()
-    A2f = MDKE(
-        field, pitchgrid, erhohat, nuhat, p1=p1, p2=p2, axorder="tza", gauge=True
-    ).as_matrix()
-
-    P0f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "atz")
-    P1f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "zat")
-    P2f = jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, "tza")
-
-    # dummy check that Ps are permutation matrices
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f @ P0f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P1f @ P1f.T)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P2f @ P2f.T)
-
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P0f.T @ P0f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P1f.T @ P1f)
-    np.testing.assert_allclose(np.eye(P0f.shape[0]), P2f.T @ P2f)
-
-    # applying permutation matrices should be the same as the operator in
-    # re-ordered basis
-    np.testing.assert_allclose(A0f, P0f @ A0f @ P0f.T)
-    np.testing.assert_allclose(A0f, P1f @ A1f @ P1f.T)
-    np.testing.assert_allclose(A0f, P2f @ A2f @ P2f.T)
+    """The smoothers' reordering of f matches the layout of the operator blocks."""
+    op = MDKE(field, pitchgrid, 1e-4, 1e-4, p1="2a", p2=2, gauge=True)
+    A = np.asarray(op.as_matrix())
+    N = A.shape[0]
+    sizes = {"a": pitchgrid.nalpha, "t": field.ntheta, "z": field.nzeta}
+    for axorder in ["atz", "zat", "tza"]:
+        # maps f in the axorder layout to the canonical (a, t, z) layout
+        P = np.asarray(jax.jacfwd(permute_f_3d)(np.zeros(N), field, pitchgrid, axorder))
+        np.testing.assert_allclose(P @ P.T, np.eye(N))
+        m = sizes[axorder[-1]]
+        Ap = P.T @ A @ P
+        blocks = [Ap[k : k + m, k : k + m] for k in range(0, N, m)]
+        np.testing.assert_allclose(
+            op.block_diagonal(axorder=axorder), blocks, atol=1e-12 * np.abs(A).max()
+        )
 
 
 @pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
@@ -167,7 +159,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
     b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
-    smoothers = get_dke_jacobi_smoothers(
+    smoothers = get_dke_smoothers(
         [field],
         [pitchgrid],
         speedgrid,
@@ -178,6 +170,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         "2d",
         2,
         True,
+        "z,t,a,x,s",
         "dense",
         None,
         operator_weights=operator_weights,
@@ -288,6 +281,238 @@ def test_optimal_smoothing_parameter_4d_unknown_axis():
     np.testing.assert_allclose(float(w), 0.01)
 
 
+def _assert_arrays_close(a, b):
+    """Assert two pytrees have the same structure and matching floating point leaves."""
+    jax.tree_util.tree_map(
+        np.testing.assert_allclose,
+        eqx.filter(a, eqx.is_inexact_array),
+        eqx.filter(b, eqx.is_inexact_array),
+    )
+
+
+def test_get_smoothers_order_and_shared_operator(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """Smoothers come in smooth_type order, and sharing work between them is exact."""
+    ow = jnp.ones(8).at[-2:].set(0)
+    dke_args = (
+        [field],
+        [pitchgrid],
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        [],
+        potentials2,
+        "2d",
+        2,
+        True,
+        "l01t,plane,x,l01z",
+        None,
+        {"l01t": 0.5, "x": 0.3},
+    )
+    (group,) = get_dke_smoothers(*dke_args, operator_weights=ow)
+    assert [type(op) for op in group] == [
+        DKEL01LineSmoother,
+        DKEFrozenPlaneSmoother,
+        DKEJacobiSmoother,
+        DKEL01LineSmoother,
+    ]
+    assert group[2].axorder == "atzsx"
+    assert [group[0].line, group[3].line] == ["t", "z"]
+    # each smoother built on its own, with no shared operator
+    kw: dict[str, Any] = dict(
+        field=field,
+        pitchgrid=pitchgrid,
+        speedgrid=speedgrid,
+        species=species2,
+        Erho=jnp.array(1e3),
+        background=[],
+        potentials=potentials2,
+        p1="2d",
+        p2=2,
+        gauge=True,
+        operator_weights=ow,
+    )
+    direct = [
+        DKEL01LineSmoother(**kw, line="t", weight=0.5),
+        DKEFrozenPlaneSmoother(**kw),
+        DKEJacobiSmoother(**kw, axorder="atzsx", weight=0.3),
+        DKEL01LineSmoother(**kw, line="z"),
+    ]
+    _assert_arrays_close(direct, group)
+
+    # a shared level operator gives the same smoothers
+    op = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        p1="2d",
+        p2=2,
+        gauge=True,
+        operator_weights=ow,
+    )
+    shared = get_dke_smoothers(*dke_args, operator_weights=ow, operators=[op])
+    _assert_arrays_close([group], shared)
+
+    mdke_args = (
+        [field],
+        [pitchgrid],
+        1e-3,
+        1e-2,
+        "2d",
+        2,
+        True,
+        "a,t,z,plane,l01t,l01z",
+    )
+    own = get_mdke_smoothers(*mdke_args, None, None)
+    with pytest.raises(ValueError, match="not in smooth_type"):
+        get_mdke_smoothers(*mdke_args, None, {"plane": 0.5, "s": 0.5})
+    # a single weight applies to every smoother
+    (group,) = get_mdke_smoothers(*mdke_args, None, 0.5)
+    for sm in group:
+        np.testing.assert_allclose(sm.weight, 0.5)
+    op = MDKE(field, pitchgrid, 1e-3, 1e-2, "2d", 2, True)
+    shared = get_mdke_smoothers(*mdke_args, None, None, operators=[op])
+    assert [type(sm) for sm in shared[0]] == [
+        MDKEJacobiSmoother,
+        MDKEJacobiSmoother,
+        MDKEJacobiSmoother,
+        MDKEFrozenPlaneSmoother,
+        MDKEL01LineSmoother,
+        MDKEL01LineSmoother,
+    ]
+    _assert_arrays_close(own, shared)
+
+
+def test_l01_line_smoother_block(field, pitchgrid, speedgrid, species2, potentials2):
+    """L01 line blocks match the projection of the dense DKE/MDKE block diagonals."""
+    # axisymmetric counterpart of the test field, where the zeta line is a single point
+    theta = np.linspace(0, 2 * np.pi, field.ntheta, endpoint=False)[:, None]
+    tokamak = Field.from_boozer(
+        rho=0.5,
+        Bmag=2.5 - 0.25 * np.cos(theta),
+        I=0.0,
+        G=14.4,
+        iota=-0.88356,
+        Psi=-2.0004,
+        R_major=5.4832,
+        a_minor=0.5211,
+        NFP=1,
+    )
+    for fld in (field, tokamak):
+        scale = _check_l01_line_blocks(fld, pitchgrid, speedgrid, species2, potentials2)
+        # the collision diagonal scaling is active
+        assert scale > 1
+
+
+def _check_l01_line_blocks(field, pitchgrid, speedgrid, species2, potentials2):
+    ns, nx = len(species2), speedgrid.nx
+    na, nt, nz = pitchgrid.nalpha, field.ntheta, field.nzeta
+    Erho = jnp.array(1e3)
+    scale = np.array(0)
+    for line in "tz":
+        M = DKEL01LineSmoother(
+            field, pitchgrid, speedgrid, species2, Erho, None, potentials2, line=line
+        )
+        n, nother = (nt, nz) if line == "t" else (nz, nt)
+
+        op = DKE(
+            field,
+            pitchgrid,
+            speedgrid,
+            species2,
+            Erho,
+            potentials=potentials2,
+            p1="2d",
+            p2=2,
+            gauge=True,
+            operator_weights=jnp.ones(8).at[-1].set(0),
+        )
+
+        W, Q = M._W, M._Q
+        D = op.block_diagonal("dense", axorder="sxzat" if line == "t" else "sxtaz")
+        D = D.reshape(ns, nx, nother, na, n, n)
+        t1 = jnp.einsum("la,sxoaij,am->sxolmij", W, D, Q)
+        Aa = op.block_diagonal("dense", axorder="sxtza")
+        Aa = Aa.reshape(ns, nx, nt, nz, na, na)
+        Aa = Aa - Aa * jnp.eye(na)
+        k2 = jnp.einsum("la,sxtzab,bm->sxtzlm", W, Aa, Q)
+        # collision diagonal scaled so the largest eigenvalue of D^-1 K, with K the
+        # projected collision coupling across speed of one species and l, is capped
+        C = op._C
+        vb = sum(c._velocity_block()[0] for c in (C.CL, C.CE, C.CF))
+        K = jnp.einsum("la,syauvb,bl->sluyv", W, vb, Q)
+        K = np.stack([K[s, :, s] for s in range(ns)])
+        d = np.einsum("slyy->sly", K)
+        lam = np.array(
+            [
+                [
+                    np.real(np.linalg.eigvals(K[s, l] / d[s, l, :, None])).max()
+                    for l in (0, 1)
+                ]
+                for s in range(ns)
+            ]
+        )
+        scale = np.maximum(1.0, lam / _L01_COLLISION_JACOBI_CAP)
+        shift = (scale[..., None] - 1) * d
+        k2 = k2 + np.einsum("slx,lm->sxlm", shift, np.eye(2))[:, :, None, None]
+        # diagonal shift: the streaming diagonal along the line when the other angle
+        # has a single node
+        if nother == 1:
+            shift = jnp.abs((op._opt if line == "t" else op._opz).diagonal())
+            shift = shift.reshape(ns, nx, na, nt, nz)
+            k2 = k2 + jnp.einsum("la,sxatz,am->sxtzlm", W, shift, Q)
+        if line == "t":
+            k2 = jnp.moveaxis(k2, 2, 3)
+        B = jnp.transpose(t1, (0, 1, 2, 5, 3, 6, 4)) + jnp.einsum(
+            "sxoilm,ij->sxoiljm", k2, jnp.eye(n)
+        )
+        B = B.reshape(ns * nx * nother, 2 * n, 2 * n)
+        np.testing.assert_allclose(
+            jnp.linalg.inv(M._inv), B, atol=1e-10 * float(jnp.abs(B).max())
+        )
+
+        # monoenergetic analog, same construction without species and speed
+        Mm = MDKEL01LineSmoother(field, pitchgrid, 1e-3, 1e-2, line=line)
+
+        mop = MDKE(field, pitchgrid, 1e-3, 1e-2, "2d", 2, True)
+        D = mop.block_diagonal("dense", axorder="zat" if line == "t" else "taz")
+        t1 = jnp.einsum("la,oaij,am->olmij", W, D.reshape(nother, na, n, n), Q)
+        Aa = mop.block_diagonal("dense", axorder="tza").reshape(nt, nz, na, na)
+        Aa = Aa - Aa * jnp.eye(na)
+        k2 = jnp.einsum("la,tzab,bm->tzlm", W, Aa, Q)
+        if line == "t":
+            k2 = jnp.moveaxis(k2, 0, 1)
+        B = jnp.transpose(t1, (0, 3, 1, 4, 2)) + jnp.einsum(
+            "oilm,ij->oiljm", k2, jnp.eye(n)
+        )
+        B = B.reshape(nother, 2 * n, 2 * n)
+        np.testing.assert_allclose(
+            jnp.linalg.inv(Mm._inv), B, atol=1e-10 * float(jnp.abs(B).max())
+        )
+    return float(scale.max())
+
+
+def test_parse_smooth_type():
+    assert _parse_smooth_type(" plane, x,l01t ", _DKE_SMOOTHER_TOKENS) == [
+        "plane",
+        "x",
+        "l01t",
+    ]
+    assert _parse_smooth_type("plane,a,l01z", _MDKE_SMOOTHER_TOKENS) == [
+        "plane",
+        "a",
+        "l01z",
+    ]
+    with pytest.raises(ValueError, match="unknown"):
+        _parse_smooth_type("plane,x", _MDKE_SMOOTHER_TOKENS)
+    with pytest.raises(ValueError, match="empty"):
+        _parse_smooth_type("plane,,x", _DKE_SMOOTHER_TOKENS)
+
+
 # ---------------------------------------------------------------------------
 # smoother constructor default-argument branches
 # ---------------------------------------------------------------------------
@@ -375,3 +600,158 @@ def test_mdke_cr_matches_banded(axorder):
         np.testing.assert_allclose(
             np.asarray(cr.mv(x)), np.asarray(banded.mv(x)), rtol=1e-7, atol=1e-9
         )
+
+
+# ---------------------------------------------------------------------------
+# frozen (theta, zeta)-plane FFT smoothers (DKEFrozenPlaneSmoother /
+# MDKEFrozenPlaneSmoother)
+# ---------------------------------------------------------------------------
+
+
+def _constant_boozer_field(nt, nz):
+    """A Boozer-coordinate field with constant |B| over the surface.
+
+    Not physically real, just used for testing the frozen plane approximation.
+    """
+    Bmag = jnp.ones((nt, nz))
+    return Field.from_boozer(rho=0.5, Bmag=Bmag, I=0.1, G=1.0, iota=0.9, Psi=1.0, NFP=1)
+
+
+def test_frozen_plane_protocol_mdke(field, pitchgrid):
+    """out/in structure, transpose, and as_matrix agree (FFT-based mv transposes)."""
+    op = MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3)
+    _check_protocol(op)
+
+
+def test_frozen_plane_protocol_dke(field, pitchgrid, speedgrid, species2, potentials2):
+    op = DKEFrozenPlaneSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        background=[],  # explicit (non-None) background -> skips the default branch
+        potentials=potentials2,
+        operator_weights=jnp.ones(8).at[-2:].set(0),
+    )
+    _check_protocol(op)
+
+
+def test_frozen_plane_weight_linear_mdke(field, pitchgrid):
+    """Matvec is linear in the (scalar) under-relaxation weight; default is 0.7."""
+    s1 = MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3, weight=jnp.array(1.0))
+    sw = MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3, weight=jnp.array(0.3))
+    x = jnp.asarray(np.random.default_rng(0).standard_normal(s1.in_size()))
+    np.testing.assert_allclose(
+        np.asarray(sw.mv(x)), 0.3 * np.asarray(s1.mv(x)), rtol=1e-10, atol=1e-12
+    )
+    # default-weight branch (weight=None -> 0.7)
+    assert float(MDKEFrozenPlaneSmoother(field, pitchgrid, 1e-3, 1e-3).weight) == 0.7
+
+
+def test_frozen_plane_dke_default_args(
+    field, pitchgrid, speedgrid, species2, potentials2
+):
+    """background=None, operator_weights=None, weight=None default branches."""
+    s = DKEFrozenPlaneSmoother(
+        field,
+        pitchgrid,
+        speedgrid,
+        species2,
+        jnp.array(1e3),
+        potentials=potentials2,
+        # background / operator_weights / weight all omitted -> default branches
+    )
+    assert float(s.weight) == 0.7
+    mat = s.as_matrix()
+    assert mat.shape[0] == mat.shape[1] == s.in_size()
+    assert np.all(np.isfinite(mat))
+
+
+def test_frozen_plane_mdke_matches_dense_block(pitchgrid):
+    """On a constant-|B| field the winds are plane-constant so the frozen
+    approximation is exact, and each pitch block of the smoother must be
+    weight * inv of the true (theta, zeta) sub-block of the MDKE. Also confirms the
+    smoother is block-diagonal in pitch and that the plane block has genuine
+    off-diagonal (streaming) coupling for the FFT solve to invert.
+    """
+    nt, nz = 5, 7
+    cfield = _constant_boozer_field(nt, nz)
+    erhohat, nuhat, weight = 1e-3, 1e-2, 0.6
+    sm = MDKEFrozenPlaneSmoother(
+        cfield, pitchgrid, erhohat, nuhat, gauge=False, weight=jnp.array(weight)
+    )
+    # use the public MDKE.as_matrix (catches a change to the private op attributes
+    # the smoother reads).
+    A = np.asarray(MDKE(cfield, pitchgrid, erhohat, nuhat, "2d", 2, False).as_matrix())
+    M = np.asarray(sm.as_matrix())
+
+    na, npl = pitchgrid.nalpha, nt * nz
+    eye = np.eye(npl)
+    for a in range(na):
+        idx = slice(a * npl, (a + 1) * npl)
+        plane = A[idx, idx]
+        # streaming actually couples the plane (not a trivially-diagonal block)
+        assert np.abs(plane - np.diag(np.diag(plane))).max() > 0
+        # off-pitch-block coupling is exactly zero (block diagonal in pitch)
+        off = M[idx].copy()
+        off[:, idx] = 0.0
+        np.testing.assert_allclose(off, 0.0, atol=1e-12)
+        # the block inverts its (exact) frozen operator, up to the weight
+        np.testing.assert_allclose(plane @ M[idx, idx], weight * eye, atol=1e-8)
+
+
+def test_frozen_plane_dke_matches_dense_block(speedgrid, species2, potentials2):
+    """DKE analog of the block-inverse check, on a constant-|B| Boozer field with 2
+    species (exercises the sxatz layout / per-(s, x, a) plane blocks).
+    """
+    nt, nz = 5, 5
+    cfield = _constant_boozer_field(nt, nz)
+    pg = UniformPitchAngleGrid(7)
+    Erho = jnp.array(1e3)
+    ow = jnp.ones(8).at[-1].set(0)
+    weight = 0.6
+    sm = DKEFrozenPlaneSmoother(
+        cfield,
+        pg,
+        speedgrid,
+        species2,
+        Erho,
+        potentials=potentials2,
+        operator_weights=ow,
+        gauge=False,
+        weight=jnp.array(weight),
+    )
+    # Dense reference built from the public ``DKE.as_matrix``. (catches a change to
+    # the private op attributes the smoother reads).
+    A = np.asarray(
+        DKE(
+            cfield,
+            pg,
+            speedgrid,
+            species2,
+            Erho,
+            background=[],
+            potentials=potentials2,
+            p1="2d",
+            p2=2,
+            gauge=False,
+            operator_weights=ow,
+        ).as_matrix()
+    )
+    M = np.asarray(sm.as_matrix())
+
+    ns, nx, na = len(species2), speedgrid.nx, pg.nalpha
+    npl = nt * nz
+    eye = np.eye(npl)
+    nblock = ns * nx * na
+    saw_offdiag = False
+    for b in range(nblock):
+        idx = slice(b * npl, (b + 1) * npl)
+        plane = A[idx, idx]
+        saw_offdiag |= np.abs(plane - np.diag(np.diag(plane))).max() > 0
+        off = M[idx].copy()
+        off[:, idx] = 0.0
+        np.testing.assert_allclose(off, 0.0, atol=1e-12)
+        np.testing.assert_allclose(plane @ M[idx, idx], weight * eye, atol=1e-8)
+    assert saw_offdiag  # at least some blocks have real plane coupling to invert
