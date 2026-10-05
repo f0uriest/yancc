@@ -18,8 +18,14 @@ on:
     types: [labeled, synchronize]
   workflow_dispatch:
 
+# Adding any label to the PR starts this workflow, not only run_benchmarks, and the
+# concurrency group applies to the whole run even when every job is then skipped. Other
+# label events get a group of their own, so they can't cancel benchmarks in progress.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: >-
+    ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{
+    (github.event.action == 'labeled' && github.event.label.name != 'run_benchmarks')
+    && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 env:
