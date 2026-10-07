@@ -28,6 +28,7 @@
     "tests/test_collisions.py::test_collision_operator_interface[CL]": 10.033219661330804,
     "tests/test_collisions.py::test_collision_operator_interface[FPL]": 0.8176511260680854,
     "tests/test_collisions.py::test_collision_operator_interface[FPS]": 0.5793482537847012,
+    "tests/test_collisions.py::test_collision_species_energy_projection": 28.3,
     "tests/test_collisions.py::test_mdke_pitch_angle_scattering_interface": 0.25734446942806244,
     "tests/test_collisions.py::test_verify_collision_null_single_species": 11.87483135680668,
     "tests/test_convergence.py::test_convergence_scan_dke_analytic_walkback_disabled_uses_chain": 0.2299998621456325,

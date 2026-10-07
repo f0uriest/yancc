@@ -16,6 +16,7 @@ from ._linalg import (
     banded_to_dense,
     dense_to_banded,
 )
+from ._misc import _dr
 from ._utils import (
     _parse_axorder_shape_3d,
     _parse_axorder_shape_4d,
@@ -580,16 +581,23 @@ def _pitch_projection(Txi, wxi):
     return jnp.linalg.solve(TW @ Txi, TW)
 
 
-def _velocity_abs_row_sum(op, block, gauge_value):
-    """Row L1 norms of a collision operator from its velocity-space block."""
-    # Collision operators are local in (theta, zeta) and their velocity-space block
-    # is identical at every spatial point, so the row L1 norms depend only on the
-    # (species, speed, pitch) coordinates and are broadcast across the spatial grid.
-    # The gauge rows are replaced by a single diagonal entry.
+def _velocity_abs_row_sum(op, block, gauge_value, rsum=None):
+    """Row L1 norms of a collision operator from its velocity-space block.
+
+    ``rsum`` gives the row norms at every spatial point, (ns, nx, na, nt, nz), for an
+    operator whose rows differ between points; by default they are those of ``block``.
+    """
+    # The local collision terms have a velocity-space block that is identical at every
+    # spatial point, so their row L1 norms depend only on the (species, speed, pitch)
+    # coordinates and are broadcast across the spatial grid. The gauge rows are
+    # replaced by a single diagonal entry.
     ns, nx, na = block.shape[:3]
     nt, nz = op.field.ntheta, op.field.nzeta
-    rsum = jnp.abs(block).sum(axis=(3, 4, 5))
-    df = jnp.broadcast_to(rsum[:, :, :, None, None], (ns, nx, na, nt, nz))
+    if rsum is None:
+        rsum = jnp.abs(block).sum(axis=(3, 4, 5))
+        df = jnp.broadcast_to(rsum[:, :, :, None, None], (ns, nx, na, nt, nz))
+    else:
+        df = rsum
     idxa = na // 2
     idxx = op.speedgrid.gauge_idx
     gval = jnp.where(op.gauge, jnp.abs(gauge_value), df[:, idxx, idxa, 0, 0])
@@ -1959,6 +1967,63 @@ class FieldParticleScattering(AbstractDKEOperator):
         ) + _field_part_cd_block_diagonal(self, self.C, self._scale_D, fmt, bw, axorder)
 
 
+def _species_exchange_correction(speedgrid, species, K0):
+    """Correction removing the exchange of density and energy changes between species.
+
+    K0 is the (ns, nx, ns, nx) block of a collision operator acting from isotropic
+    functions to their quadrature pitch average, output indices first. Returns the
+    block of the same shape that, added to K0, gives (I - P) K0 (I - P), with P the
+    projection of each species onto its density and temperature perturbations along
+    its density and energy moments.
+    """
+    # The linearized operator transfers energy between species at a rate set by the
+    # difference of their temperature perturbations, so only one combination of the
+    # species' temperatures is in its null space, and with unequal background
+    # temperatures a density perturbation also drives temperature equilibration. A
+    # drift kinetic problem that fixes each species' density and pressure through
+    # sources needs every species' density and temperature in the null space, and
+    # these exchanges belong to the slower evolution of the background Maxwellians.
+    #
+    # N_s f = int f d^3v and M_s f = int (x^2 - a_s) f d^3v are the density and the
+    # energy moment taken relative to the density, with a_s chosen so that M_s
+    # vanishes on F_s. With Fhat_s = F_s / N_s F_s and
+    # Phi_s = (x^2 - a_s) F_s / M_s((x^2 - a_s) F_s) the two pairs are biorthogonal,
+    # and P = Fhat N + Phi M is orthogonal in the inner product
+    # sum_s int f g / F_s d^3v, in which the collision operator is self-adjoint, so
+    # the corrected operator stays self-adjoint and dissipative. With V = [Fhat, Phi]
+    # and D = [N; M] (P = V D),
+    #   (I - P) K (I - P) - K = -V (D K) - (K V - V (D K V)) D.
+    ns, nx = len(species), speedgrid.nx
+    x = speedgrid.x
+    wv = x**2 * speedgrid.wx
+    F = jnp.array([sp(x * sp.v_thermal) for sp in species])  # (ns, nx)
+    a = jnp.einsum("x,sx->s", wv * x**2, F) / jnp.einsum("x,sx->s", wv, F)
+    nu = jnp.broadcast_to(wv, (ns, nx))
+    mu = wv[None] * (x[None, :] ** 2 - a[:, None])
+    fhat = F / jnp.einsum("sx,sx->s", nu, F)[:, None]
+    phi = (x[None, :] ** 2 - a[:, None]) * F
+    phi = phi / jnp.einsum("sx,sx->s", mu, phi)[:, None]
+    eye = jnp.eye(ns)
+    V = jnp.concatenate(
+        [
+            jnp.einsum("sx,st->sxt", fhat, eye).reshape(ns * nx, ns),
+            jnp.einsum("sx,st->sxt", phi, eye).reshape(ns * nx, ns),
+        ],
+        axis=1,
+    )
+    D = jnp.concatenate(
+        [
+            jnp.einsum("sx,st->tsx", nu, eye).reshape(ns, ns * nx),
+            jnp.einsum("sx,st->tsx", mu, eye).reshape(ns, ns * nx),
+        ],
+        axis=0,
+    )
+    K = K0.reshape(ns * nx, ns * nx)
+    DK = D @ K
+    W = K @ V - V @ (DK @ V)
+    return -(V @ DK + W @ D).reshape(ns, nx, ns, nx)
+
+
 class FokkerPlanckLandau(AbstractDKEOperator):
     """Fokker-Planck Landau collision operator.
 
@@ -1978,6 +2043,12 @@ class FokkerPlanckLandau(AbstractDKEOperator):
         Thing for calculating Rosenbluth potentials.
     p2 : int
         Order of approximation for second derivatives.
+    energy_exchange : bool
+        Whether to keep the flux surface average of the exchange of density and energy
+        between species. If False (default), it is removed, so the operator conserves
+        the flux surface averaged density and energy of each species separately and
+        each species' density and temperature perturbations that are constant on the
+        flux surface are in its null space. The local exchange is kept either way.
 
     """
 
@@ -1993,6 +2064,8 @@ class FokkerPlanckLandau(AbstractDKEOperator):
     CL: PitchAngleScattering
     CE: EnergyScattering
     CF: FieldParticleScattering
+    _exchange: jax.Array | None
+    _surface_weights: jax.Array
 
     def __init__(
         self,
@@ -2006,6 +2079,7 @@ class FokkerPlanckLandau(AbstractDKEOperator):
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
+        energy_exchange: bool = False,
     ):
         self.field = field
         self.speedgrid = speedgrid
@@ -2051,11 +2125,42 @@ class FokkerPlanckLandau(AbstractDKEOperator):
             gauge,
             coulomb_log=coulomb_log,
         )
+        # Linearized collisions exchange density and energy between species at every
+        # point, but only the exchange averaged over the flux surface is removed: it
+        # belongs to the slower evolution of the background Maxwellians, while the
+        # local exchange sets the fluxes at high collisionality. With P the projection
+        # onto each species' density and temperature perturbations along its moments
+        # (see _species_exchange_correction) and <.> the flux surface average, the
+        # operator is C + Delta <.>, with Delta = (I - P) C (I - P) - C, which removes
+        # the exchange of surface averaged moments and annihilates perturbations that
+        # are constant on the surface, since C acts the same at every point.
+        w = _dr(field)
+        self._surface_weights = w / w.sum()
+        if energy_exchange:
+            self._exchange = None
+        else:
+            # The pitch quadrature annihilates every Legendre mode but l = 0, and the
+            # field particle term's pitch transform is the projection with those
+            # weights, so the speed and field particle terms map isotropic functions to
+            # isotropic functions through their l = 0 blocks, and their pitch averages
+            # see only the l = 0 part of the input. Delta is therefore an l = 0 block.
+            # Pitch angle scattering annihilates isotropic functions and is left out,
+            # since its finite difference pitch average is not exactly that l = 0
+            # block; it does not exchange density or energy between species.
+            wE, wF = self.operator_weights[1], self.operator_weights[2]
+            K0 = -wE * jnp.einsum(
+                "ps,syx->pysx", jnp.eye(len(species)), self.CE._M
+            ) - wF * jnp.einsum("psyx->pysx", self.CF._GHhat[:, :, :, 0, :] + self.CF.C)
+            self._exchange = _species_exchange_correction(speedgrid, species, K0)
 
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.mv")
     def mv(self, vector) -> Float[Array, " nf"]:
         """Matrix vector product."""
+        return self._local_mv(vector) + self._surface_exchange(vector)
+
+    def _local_mv(self, vector) -> Float[Array, " nf"]:
+        """Terms of the operator that act separately at each point of the surface."""
         out1 = self.CL.mv(vector)
         out2 = self.CE.mv(vector)
         out3 = self.CF.mv(vector)
@@ -2065,6 +2170,31 @@ class FokkerPlanckLandau(AbstractDKEOperator):
             + self.operator_weights[2] * out3
         )
 
+    def _surface_exchange(self, vector) -> Float[Array, " nf"]:
+        """Term removing the flux surface average of the exchange between species."""
+        shape = (
+            len(self.species),
+            self.speedgrid.nx,
+            self.pitchgrid.nalpha,
+            self.field.ntheta,
+            self.field.nzeta,
+        )
+        if self._exchange is None:
+            return jnp.zeros_like(vector)
+        f = vector.reshape(shape)
+        Txi, Txi_inv = self.CF.Txi[:, 0], self.CF.Txi_inv[0]
+        # l = 0 part of the surface average, through Delta, back to an isotropic and
+        # surface constant function
+        c = jnp.einsum("a,sxatz,tz->sx", Txi_inv, f, self._surface_weights)
+        d = jnp.einsum("pysx,sx->py", self._exchange, c)
+        out = jnp.broadcast_to(jnp.einsum("a,py->pya", Txi, d)[..., None, None], shape)
+        # the gauge rows are set by the local terms
+        idxa = self.pitchgrid.nalpha // 2
+        idxx = self.speedgrid.gauge_idx
+        gval = jnp.where(self.gauge, 0.0, out[:, idxx, idxa, 0, 0])
+        out = out.at[:, idxx, idxa, 0, 0].set(gval, unique_indices=True)
+        return out.reshape(vector.shape)
+
     def _rounding_scale(self, transpose=False) -> Float[Array, " nf"]:
         """Componentwise scale of the change in ``mv`` under rounding of its input.
 
@@ -2073,6 +2203,9 @@ class FokkerPlanckLandau(AbstractDKEOperator):
         """
         return jnp.abs(self.operator_weights[0]) * self.CL._rounding_scale(transpose)
 
+    # The diagonal and block structure below are those of the local terms. The surface
+    # exchange term couples each point to the surface average, so each of its entries
+    # is smaller than the local ones by the number of points on the surface.
     @eqx.filter_jit
     @jax.named_scope("FokkerPlanckLandau.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
@@ -2097,7 +2230,25 @@ class FokkerPlanckLandau(AbstractDKEOperator):
     @jax.named_scope("FokkerPlanckLandau.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        return _velocity_abs_row_sum(self, *self._velocity_block())
+        block, gauge_value = self._velocity_block()
+        if self._exchange is None:
+            return _velocity_abs_row_sum(self, block, gauge_value)
+        # The surface exchange term adds T0[a] Delta[p,y,s,x] Ti0[b] w[t',z'] to every
+        # column (s, x, b, t', z') of row (p, y, a, t, z). At the row's own point it
+        # adds to the local velocity block, and the other points, whose weights sum to
+        # 1 - w[t, z], hold it alone.
+        S = jnp.einsum(
+            "a,pysx,b->pyasxb", self.CF.Txi[:, 0], self._exchange, self.CF.Txi_inv[0]
+        )
+        Sabs = jnp.abs(S).sum(axis=(3, 4, 5))
+
+        def at_point(w):
+            return jnp.abs(block + w * S).sum(axis=(3, 4, 5)) + (1 - w) * Sabs
+
+        nt, nz = self.field.ntheta, self.field.nzeta
+        rsum = jax.lax.map(at_point, self._surface_weights.reshape(-1))
+        rsum = jnp.moveaxis(rsum.reshape((nt, nz) + Sabs.shape), (0, 1), (3, 4))
+        return _velocity_abs_row_sum(self, block, gauge_value, rsum)
 
     def _velocity_block(self):
         # CL/CE/CF are summed *before* taking absolute values so entries they share
