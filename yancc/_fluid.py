@@ -10,9 +10,8 @@ from ._finite_diff import fd_coeffs
 from ._linalg import (
     TransposedLinearOperator,
     _ruiz_scale,
-    banded_to_dense,
-    cr_block_tridiag_factor,
-    cr_block_tridiag_solve,
+    block_tridiag_periodic_factor,
+    block_tridiag_periodic_solve,
 )
 from .species import _nustar_species
 
@@ -103,25 +102,30 @@ def _stencil_halfwidth(op):
     return max(fd_coeffs[1][op.p1].size // 2, fd_coeffs[2][op.p2].size // 2)
 
 
-def _line_blocks(op, axorder, n_line, weight, V, Psi):
+def _line_blocks(op, axis, weight, V, Psi):
     """Fluid projection of an operator that couples points along one surface line.
 
-    Returns ``(ns, 3, 3, n_other, n_line, n_line)`` dense line blocks, with rows
-    indexed by the fluid moment and columns by the fluid shape.
+    ``op`` is the theta (``axis="t"``) or zeta (``axis="z"``) advection term of an
+    ungauged DKE. Returns ``(ns, 3, 3, n_other, n_line, n_line)`` dense line blocks,
+    with rows indexed by the fluid moment and columns by the fluid shape.
     """
-    ns, _, nx, na = V.shape
-    bw = _stencil_halfwidth(op)
-    if n_line < 2 * bw + 1:
-        # On a periodic line shorter than the stencil, offsets wrap onto the same
-        # column, which banded storage can't hold. Dense blocks of such short lines
-        # are no larger than banded ones.
-        blk = op.block_diagonal("dense", axorder=axorder)
-        blk = blk.reshape(ns, nx, na, -1, n_line, n_line)
-        return weight * jnp.einsum("spxa,sixa,sxaohl->spiohl", Psi, V, blk)
-    blk = op.block_diagonal("banded", bw, axorder)
-    blk = blk.reshape(ns, nx, na, -1, 2 * bw + 1, n_line)
-    blk = jnp.einsum("spxa,sixa,sxaohl->spiohl", Psi, V, blk)
-    return weight * banded_to_dense(bw, bw, blk)
+    # The term is w times an upwind difference along the line, the backward stencil
+    # where w > 0 and the forward one elsewhere. The difference acts on the line
+    # coordinate only, so the projection only needs the fluid moments of the positive
+    # and negative parts of w, each multiplying its (dense, periodic) stencil matrix.
+    w = op._w  # (ns, nx, na, nt, nz)
+    wp = jnp.where(w > 0, w, 0.0)
+    ap = jnp.einsum("spxa,sixa,sxatz->spitz", Psi, V, wp)
+    am = jnp.einsum("spxa,sixa,sxatz->spitz", Psi, V, w - wp)
+    if axis == "t":
+        blk = jnp.einsum("spitz,tu->spiztu", ap, op._bd) + jnp.einsum(
+            "spitz,tu->spiztu", am, op._fd
+        )
+    else:
+        blk = jnp.einsum("spitz,zu->spitzu", ap, op._bd) + jnp.einsum(
+            "spitz,zu->spitzu", am, op._fd
+        )
+    return weight * blk
 
 
 def _plane_groups(nz, bw):
@@ -186,8 +190,8 @@ class _FluidSolver(eqx.Module):
         # (s, i, s', i', t, z) for column (s, i) and row (s', i')
         Kloc = jax.vmap(probe)(jnp.eye(3 * ns)).reshape(ns, 3, ns, 3, nt, nz)
         # line terms: (s, i', i, z, t, t') and (s, i', i, t, z, z')
-        Kt = _line_blocks(A._opt, "sxazt", nt, w[2], V, Psi)
-        Kz = _line_blocks(A._opz, "sxatz", nz, w[3], V, Psi)
+        Kt = _line_blocks(A._opt, "t", w[2], V, Psi)
+        Kz = _line_blocks(A._opz, "z", w[3], V, Psi)
 
         bw = _stencil_halfwidth(A)
         groups = _plane_groups(nz, bw if nz > 1 else 1)
@@ -213,17 +217,32 @@ class _FluidSolver(eqx.Module):
             blk = blk.reshape(b0, b0)
             return jnp.where(valid, blk, 0.0) + pad * jnp.eye(b0)
 
-        def group_block(kr, kc):
-            rows, cols = groups[kr], groups[kc % m]
-            # padded unknowns are decoupled, with identity rows
-            pad = (kr == kc % m) * np.eye(g) * (rows < 0)[:, None]
-            zr = jnp.asarray(np.repeat(rows, g))
-            zc = jnp.asarray(np.tile(cols, g))
-            blocks = jax.vmap(coupling)(zr, zc, jnp.asarray(pad.reshape(-1)))
-            blocks = blocks.reshape(g, g, b0, b0)
-            return blocks.transpose(0, 2, 1, 3).reshape(g * b0, g * b0)
+        def group_blocks(offsets):
+            """(len(offsets), m, g b0, g b0) blocks coupling group k + offset into k.
 
-        D = jnp.stack([group_block(k, k) for k in range(m)])
+            All blocks are built by a single vmapped call, so the block assembly is
+            traced once however many groups there are.
+            """
+            kr = np.tile(np.arange(m), len(offsets))
+            kc = (kr + np.repeat(offsets, m)) % m
+            rows, cols = groups[kr], groups[kc]  # (nblk, g)
+            # padded unknowns are decoupled, with identity rows
+            pad = (kr == kc)[:, None, None] * np.eye(g) * (rows < 0)[:, :, None]
+            zr = np.repeat(rows, g, axis=1)
+            zc = np.tile(cols, (1, g))
+            blocks = jax.vmap(coupling)(
+                jnp.asarray(zr.reshape(-1)),
+                jnp.asarray(zc.reshape(-1)),
+                jnp.asarray(pad.reshape(-1)),
+            )
+            blocks = blocks.reshape(len(offsets), m, g, g, b0, b0)
+            return blocks.transpose(0, 1, 2, 4, 3, 5).reshape(
+                len(offsets), m, g * b0, g * b0
+            )
+
+        # diagonal blocks first, then the sub- and super-diagonal ones if needed
+        blocks = group_blocks([0] if self.dense else [0, -1, 1])
+        D = blocks[0]
 
         # pin the fluid density and energy of each species at one point, removing the
         # null space of the ungauged operator; the pins are undone in the Schur step
@@ -237,11 +256,7 @@ class _FluidSolver(eqx.Module):
             lu = jax.scipy.linalg.lu_factor(r[:, None] * D[0] * c[None, :])
             self.factors = (lu, r, c)
         else:
-            L = jnp.stack([group_block(k, k - 1) for k in range(m)])
-            U = jnp.stack([group_block(k, k + 1) for k in range(m)])
-            self.factors = cr_block_tridiag_factor(
-                D[None], L[None], U[None], equilibrate=True
-            )
+            self.factors = block_tridiag_periodic_factor(D, blocks[1], blocks[2])
 
         # low rank border: sources/constraints, pins and the surface exchange term
         Bm = B.as_matrix().T.reshape(-1, *self.shape)  # (nb, ns, nx, na, nt, nz)
@@ -303,7 +318,7 @@ class _FluidSolver(eqx.Module):
             lu, r, c = self.factors
             return c * jax.scipy.linalg.lu_solve(lu, r * v)
         m = len(self.groups)
-        return cr_block_tridiag_solve(self.factors, v.reshape(1, m, -1)).reshape(-1)
+        return block_tridiag_periodic_solve(self.factors, v.reshape(m, -1)).reshape(-1)
 
     def solve(self, c, h):
         """Solve the bordered fluid system for rhs (c, h)."""
