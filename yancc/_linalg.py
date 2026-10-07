@@ -413,12 +413,21 @@ def _tridiag_solve(l, d, u, b, *args):
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
 
 
-# Estimated 1-norm condition number above which a factored solve is refined. A
-# factored solve has relative error of order cond * eps, so near cond ~ 1/eps it has
-# lost essentially all accuracy along the worst conditioned directions. Well below
-# that the refined and unrefined solves are interchangeable as preconditioners, and
-# the extra operator product and solve per step are pure overhead.
-_REFINE_COND = 1e15
+# Estimated 1-norm condition number of the factored matrix above which its solve is
+# refined. An LU solve is backward stable, but its rounding error is new for every
+# right hand side. Along nearly singular directions it is amplified twice, once
+# through the size of the solution there and once more through the inverse, so the
+# solve is linear only to within that noise. A Krylov method that treats the solve
+# as a fixed linear preconditioner, and rebuilds its update with one more
+# application instead of storing the preconditioned basis, then has a floor on its
+# true residual that its own estimate does not see, and restarts or stalls once that
+# floor approaches the tolerance. The size of the noise also depends on how the
+# right hand sides project onto the nearly singular directions, so the condition
+# number bounds it only loosely: well below this threshold refinement does not
+# change convergence, while above it some problems need it and others don't. The
+# threshold is set low enough that problems below it don't need refinement, and
+# above it refinement is always applied.
+_REFINE_COND = 5e12
 
 
 class DenseLUInverseOperator(lx.AbstractLinearOperator):
@@ -435,9 +444,9 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
     refine : int
         Maximum number of steps of iterative refinement against ``operator`` to apply
         after each triangular solve, which improves the accuracy for ill-conditioned
-        matrices. Steps only run when the matrix is estimated to be badly enough
-        conditioned for the solve to lose most of its accuracy, so a well-conditioned
-        matrix pays only for a condition number estimate at construction.
+        matrices. Steps only run when the estimated condition number of the matrix
+        is large enough for the rounding error of the solve to matter, so a
+        well-conditioned matrix pays only for the estimate at construction.
     batch_size : int, optional
         Number of columns of the identity to map ``operator`` over at a time when
         materializing it. Default maps over all columns at once; a smaller batch
@@ -569,6 +578,40 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
 @lx.is_tridiagonal.register(DenseLUInverseOperator)
 def _(operator):
     return False
+
+
+class LowRankUpdateOperator(AbstractYanccOperator):
+    """Square linear operator plus a low rank term, ``A + U diag(s) V^T``.
+
+    Parameters
+    ----------
+    operator : lx.AbstractLinearOperator
+        The operator ``A``.
+    U, V : jax.Array, shape(n, k)
+        Left and right factors of the update.
+    s : jax.Array, shape(k,)
+        Scale of each rank one term of the update.
+    """
+
+    operator: lx.AbstractLinearOperator
+    U: jax.Array
+    V: jax.Array
+    s: jax.Array
+
+    def __init__(self, operator, U, V, s):
+        assert U.shape == V.shape == (operator.in_size(), s.size)
+        self.operator = operator
+        self.U = U
+        self.V = V
+        self.s = s
+
+    def mv(self, vector):
+        """Matrix vector product."""
+        return self.operator.mv(vector) + self.U @ (self.s * (self.V.T @ vector))
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return self.operator.in_structure()
 
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])

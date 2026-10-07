@@ -700,6 +700,7 @@
     "tests/test_potentials.py::test_sympy_potentials[1]": 7.657727618236095,
     "tests/test_potentials.py::test_sympy_potentials[2]": 17.131932797841728,
     "tests/test_potentials.py::test_sympy_potentials[3]": 23.88422596012242,
+    "tests/test_preconditioner.py::test_dke_coarse_solve": 7.69,
     "tests/test_preconditioner.py::test_preconditioner_interface[DKEM]": 10.392471131170169,
     "tests/test_preconditioner.py::test_preconditioner_interface[DKE]": 26.54367883130908,
     "tests/test_preconditioner.py::test_preconditioner_interface[MDKE]": 13.711023147916421,

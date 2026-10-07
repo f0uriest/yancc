@@ -87,7 +87,7 @@ def _build_dke_preconditioner(
     multigrid_options.setdefault("background", background)
     multigrid_options.setdefault("Erho", Erho)
     multigrid_options.setdefault("potentials", potentials)
-    multigrid_options.setdefault("gauge", True)
+    multigrid_options.setdefault("gauge", "shift")
     multigrid_options.setdefault("verbose", verbose)
     multigrid_options.setdefault("coulomb_log", coulomb_log)
     return DKEPreconditioner(**multigrid_options)
