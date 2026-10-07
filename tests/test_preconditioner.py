@@ -1,17 +1,21 @@
 """Tests for preconditioners."""
 
+from typing import cast
+
 import equinox as eqx
 import jax
 import numpy as np
 import pytest
 
 from yancc._collisions import RosenbluthPotentials
+from yancc._misc import DKESources
 from yancc._preconditioner import (
     DKEMPreconditioner,
     DKEPreconditioner,
     MDKEPreconditioner,
 )
 from yancc._smoothers import DKEJacobiSmoother, MDKEJacobiSmoother
+from yancc._trajectories import DKE
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
 
@@ -46,6 +50,38 @@ def test_preconditioner_interface(field, species1, build):
     np.testing.assert_allclose(AT, A.T, atol=1e-2 * np.abs(A).max())
 
 
+def test_dke_coarse_solve(field, pitchgrid, speedgrid, species2, potentials2):
+    """The coarse solve inverts the coarse operator on its range, without null part.
+
+    By default the DKE preconditioner levels keep the density and energy null space,
+    and the coarse solve factors a shifted operator. For a right hand side in the
+    range of the coarse operator it must return a solution with no component along
+    the null modes, to the accuracy of the LU solve.
+    """
+    M = DKEPreconditioner(
+        field, pitchgrid, speedgrid, species2, 100.0, None, potentials2
+    )
+    Ac = cast(DKE, M.operators[0])
+    assert not Ac.gauge
+    x = jax.random.normal(jax.random.key(0), (Ac.in_size(),))
+    b = Ac.mv(x)
+    y = M.coarse_opinv.mv(b)
+    np.testing.assert_allclose(Ac.mv(y), b, atol=1e-5 * np.abs(b).max())
+    B = DKESources(Ac.field, Ac.pitchgrid, speedgrid, species2).as_matrix()
+    B = np.linalg.qr(B)[0]
+    assert np.linalg.norm(B.T @ y) < 1e-3 * np.linalg.norm(y)
+
+    # the point gauge is still available, and other values are rejected
+    M = DKEPreconditioner(
+        field, pitchgrid, speedgrid, species2, 100.0, None, potentials2, gauge=True
+    )
+    assert cast(DKE, M.operators[0]).gauge
+    with pytest.raises(ValueError, match="gauge"):
+        DKEPreconditioner(
+            field, pitchgrid, speedgrid, species2, 100.0, None, potentials2, gauge="x"
+        )
+
+
 def test_preconditioner_smoother_fd_order(field, species1):
     """Smoothers with their own FD order don't reuse the level operators."""
     pitchgrid = UniformPitchAngleGrid(5)
@@ -75,7 +111,7 @@ def test_preconditioner_smoother_fd_order(field, species1):
         p1="4d",
         p2=sm.p2,
         axorder=sm.axorder,
-        gauge=True,
+        gauge=False,
     )
     jax.tree_util.tree_map(
         np.testing.assert_allclose,
