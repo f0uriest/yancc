@@ -43,6 +43,12 @@ Unreleased
   though the solution was as accurate as it could be.
 
 ### Performance improvements
+- The DKE multigrid preconditioner no longer fixes the density and energy gauge by
+  replacing equations at a grid point. The levels keep the null space of the DKE, and
+  the direct solve on the coarsest level shifts it away from zero instead. This
+  removes nearly singular coarse modes that slowed or stalled convergence at low
+  collisionality, and reduces the number of iterations on most problems. The point
+  gauge is still available with the multigrid option ``gauge=True``.
 - The direct solve on the coarsest multigrid level now applies a step of iterative
   refinement against the coarse operator, removing most of the error left by the LU
   factorization of badly scaled multispecies coarse matrices.
