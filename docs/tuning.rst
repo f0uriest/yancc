@@ -239,9 +239,14 @@ Cycle and smoothing
    preconditioner only needs to be a good approximation, and lower order is
    cheaper.
 
-``gauge`` *(bool, default True)*
-   Whether to fix the gauge of the constraint equations inside the
-   preconditioner. Keep this True; it exists primarily for verification.
+``gauge`` *(default True for the MDKE, "shift" for the DKE)*
+   How the preconditioner handles the null space of the operator (for the DKE, a
+   density and an energy mode for each species). ``True`` fixes it by replacing the
+   equations at one grid point on every level. For the DKE, ``"shift"`` keeps the
+   null space on every level and shifts it away from zero in the direct solve on the
+   coarsest level, which converges more reliably; ``True`` is still accepted.
+   ``False`` leaves the null space in place, so the coarsest solve is singular; it
+   exists primarily for verification. The MDKE accepts only ``True`` or ``False``.
 
 DKE-only multigrid options
 --------------------------
