@@ -818,7 +818,7 @@
     "tests/test_solve.py::test_solve_dke_derivatives": 342.27349610440433,
     "tests/test_solve.py::test_solve_dke_dshape_2species[15]": 93.86634588986635,
     "tests/test_solve.py::test_solve_dke_dshape_2species[17]": 93.86634588986635,
-    "tests/test_solve.py::test_solve_dke_mesh_multidevice": 138.96,
+    "tests/test_solve.py::test_solve_dke_mesh_multidevice": 185.76,
     "tests/test_solve.py::test_solve_dke_mesh_validation": 0.01,
     "tests/test_solve.py::test_solve_dke_multispecies_warm_start": 52.62285650614649,
     "tests/test_solve.py::test_solve_dke_ncsx_1species[0]": 104.85691488394514,

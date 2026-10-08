@@ -563,7 +563,9 @@ jax.config.update("jax_enable_x64", True)
 import numpy as np
 sys.path.insert(0, sys.argv[1])
 import conftest
-from yancc import MaxwellSpeedGrid, UniformPitchAngleGrid, solve_dke
+from yancc import (
+    MaxwellSpeedGrid, UniformPitchAngleGrid, solve_dke, solve_dke_ambipolar
+)
 
 field = conftest.field.__wrapped__()
 species = conftest.species2.__wrapped__()
@@ -575,6 +577,18 @@ sol0, info0 = solve_dke(field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10)
 sol1, info1 = solve_dke(
     field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10, mesh=mesh
 )
+
+# ambipolar root search around the ion root, with the preconditioner built on the mesh
+# once and reused for every solve. Fewer speeds don't resolve that root.
+Escale = float(field.a_minor * species[0].v_thermal * field.Bmag_fsa)
+bounds = (-4e-2 * Escale, -2e-2 * Escale)
+amb = [
+    solve_dke_ambipolar(
+        field, pitchgrid, MaxwellSpeedGrid(4), species, 1, bounds=bounds,
+        reuse_preconditioner=True, mesh=m,
+    )
+    for m in (None, mesh)
+]
 
 
 # per-device scratch memory, compiled but not run, at a resolution where the fine grids
@@ -597,6 +611,11 @@ def temp_bytes(mesh):
 print(json.dumps({
     "temp_ratio": temp_bytes(mesh) / temp_bytes(None),
     "nmv": [int(info0["nmv"]), int(info1["nmv"])],
+    "amb_Erho": [float(a[0][0]) for a in amb],
+    "amb_nmv": [int(a[2]["nmv_total"]) for a in amb],
+    "amb_success": [bool(a[2]["success"][0]) for a in amb],
+    "amb_f1_shard": amb[1][1][0].f1.addressable_shards[0].data.size
+    / amb[1][1][0].f1.size,
     "f1_diff": float(np.abs(sol1.f1 - sol0.f1).max() / np.abs(sol0.f1).max()),
     "ndevices": len(sol1.f1.sharding.device_set),
     "f1_shard": sol1.f1.addressable_shards[0].data.size / sol1.f1.size,
@@ -606,7 +625,9 @@ print(json.dumps({
 
 
 def test_solve_dke_mesh_multidevice():
-    """A solve split across 4 CPU devices matches the unsplit solve, in less memory.
+    """Solves split across 4 CPU devices match unsplit ones, in less memory.
+
+    Covers solve_dke and solve_dke_ambipolar.
 
     The number of CPU devices is fixed when JAX starts, so this runs in a separate
     process to leave the rest of the tests on a single device.
@@ -625,6 +646,10 @@ def test_solve_dke_mesh_multidevice():
     )
     res = json.loads(out.stdout.strip().splitlines()[-1])
     assert res["nmv"][0] == res["nmv"][1]
+    assert all(res["amb_success"])
+    assert res["amb_nmv"][0] == res["amb_nmv"][1]
+    np.testing.assert_allclose(res["amb_Erho"][0], res["amb_Erho"][1], rtol=1e-10)
+    assert res["amb_f1_shard"] == 0.25
     assert res["f1_diff"] < 1e-10
     # split by species and speed, so each device holds a quarter of f1 and of U
     assert res["ndevices"] == 4
