@@ -886,3 +886,37 @@ def test_krylov_throw_tangent(solver_fn):
 
     with pytest.raises(Exception, match="tangent"):
         jax.grad(f)(b)
+
+
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_residual_floor(solver):
+    """Residual within the floor counts as converged, with the transposed floor used
+    for the tangent solve.
+    """
+    n = 20
+    rng = np.random.default_rng(42)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = jnp.array(rng.random(n))
+    w = jnp.array(rng.random(n) + 0.5)
+    # no iterations from x0 = 1, so the floor is the scale itself, and the forward and
+    # tangent residuals b - A 1 and 1 - A^T 1 are both well below 100 in every entry
+    x0 = jnp.ones(n)
+    kw = dict(x0=x0, m=1, k=1, maxiter=0, throw=True)
+    big = jnp.full(n, 100.0)
+
+    with pytest.raises(Exception, match="forward"):
+        solver(A, b, **kw)
+    _, j, _, res, success, *_ = solver(A, b, weights=w, residual_floor=big, **kw)
+    assert success and j == 0
+    # the reported residual is that of b - A x, not its excess over the floor
+    np.testing.assert_allclose(res, jnp.linalg.norm(jnp.sqrt(w) * (b - A.mv(x0))))
+
+    def f(b, tangent_floor):
+        x = solver(
+            A, b, residual_floor=big, residual_floor_transpose=tangent_floor, **kw
+        )[0]
+        return x.sum()
+
+    jax.grad(f)(b, big)
+    with pytest.raises(Exception, match="tangent"):
+        jax.grad(f)(b, jnp.zeros(n))

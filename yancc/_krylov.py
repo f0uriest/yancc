@@ -728,6 +728,8 @@ def gcrotmk(
     stabilize_every: ArrayLike = 10,
     throw: bool = False,
     weights: PyTree[ArrayLike] | None = None,
+    residual_floor: PyTree[ArrayLike] | None = None,
+    residual_floor_transpose: PyTree[ArrayLike] | None = None,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using flexible GCROT(m,k) algorithm.
@@ -800,6 +802,14 @@ def gcrotmk(
         returned residual refer to this norm. Transposed solves (e.g. for
         derivatives) use the dual weights ``1/w``. ``C`` is given and returned in
         the unweighted residual space. Default: unweighted.
+    residual_floor, residual_floor_transpose : pytree of jax.Array, optional
+        Nonnegative component-wise scale ``s`` with the structure of ``b``, such that
+        ``s * |x|`` bounds the residual that rounding alone can leave in ``b - A x``.
+        If given, the convergence test is applied to the residual in excess of this
+        bound, ``max(|b - A x| - s * |x|, 0)``, so components that are already at
+        their attainable accuracy count as converged. The returned residual is still
+        that of ``b - A x``. ``residual_floor_transpose`` is the same for ``A^T``, used
+        by transposed solves (e.g. for derivatives). Default: no floor.
 
     Returns
     -------
@@ -848,9 +858,12 @@ def gcrotmk(
         sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
         sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
 
-    def _solve_weighted(matvec, b, lpsolve, rpsolve, C, U, sqrtw, msg):
+    def _solve_weighted(matvec, b, lpsolve, rpsolve, C, U, sqrtw, msg, transpose):
         matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
             matvec, b, lpsolve, rpsolve, sqrtw
+        )
+        floor = _weighted_floor(
+            residual_floor_transpose if transpose else residual_floor, sqrtw
         )
         xsol, (j, nmv, beta, success, Cnew, Unew) = _gcrotmk_solve(
             matvec,
@@ -871,6 +884,7 @@ def gcrotmk(
             refine,
             flexible,
             stabilize_every,
+            floor,
         )
         if throw:
             xsol = eqx.error_if(xsol, ~success, msg)
@@ -878,7 +892,15 @@ def gcrotmk(
 
     def _solve(A, b):
         return _solve_weighted(
-            A, b, ML.mv, MR.mv, C, U, sqrtw, "GCROT forward solve did not converge"
+            A,
+            b,
+            ML.mv,
+            MR.mv,
+            C,
+            U,
+            sqrtw,
+            "GCROT forward solve did not converge",
+            False,
         )
 
     def _transpose_solve(At, b):
@@ -896,6 +918,7 @@ def gcrotmk(
             None,
             sqrtw_t,
             "GCROT tangent solve did not converge",
+            True,
         )
 
     # custom_linear_solve is unannotated and pyright can infer NoReturn for it
@@ -956,6 +979,24 @@ def _tsqr_pivoted(X: PyTree[Array]) -> tuple[Callable, Array, Array]:
         return jax.tree_util.tree_unflatten(treedef, out)
 
     return Q, R, P
+
+
+def _weighted_floor(scale, sqrtw):
+    """Map from x to the floor ``scale * |x|`` in the weighted residual space."""
+    if scale is None:
+        return None
+    if sqrtw is not None:
+        scale = tree_map(lambda w, s: w * s, sqrtw, scale)
+    return lambda x: tree_map(lambda s, v: s * jnp.abs(v), scale, x)
+
+
+def _excess_norm(x, r, beta, residual_floor):
+    """Norm of the residual left after removing what rounding alone can explain."""
+    if residual_floor is None:
+        return beta
+    return _norm(
+        tree_map(lambda a, f: jnp.maximum(jnp.abs(a) - f, 0.0), r, residual_floor(x))
+    )
 
 
 def _gcrot_init_UC(
@@ -1042,6 +1083,7 @@ def _gcrotmk_solve(
     refine,
     flexible,
     stabilize_every,
+    residual_floor=None,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -1065,6 +1107,8 @@ def _gcrotmk_solve(
     # (it does on GPU), which costs a transposed copy of each that stays live for as
     # long as U and C themselves.
     x, r, beta = _gcrot_initial_projection(x, r, beta, U, C)
+
+    beta_c = _excess_norm(x, r, beta, residual_floor)
     if verbose:
         _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="GCROT  ")
 
@@ -1076,11 +1120,11 @@ def _gcrotmk_solve(
     age = -jnp.arange(k)
 
     def gcrotmk_cond(carry):
-        j_outer, _, _, _, beta, _, _, _, _, _ = carry
-        return jnp.logical_and(j_outer < maxiter, beta > tol)
+        j_outer, _, _, _, _, beta_c, _, _, _, _, _ = carry
+        return jnp.logical_and(j_outer < maxiter, beta_c > tol)
 
     def gcmotmk_loop(carry):
-        j_outer, nmv, x, r, beta, C, U, lc, age, ptol_max_factor = carry
+        j_outer, nmv, x, r, beta, _, C, U, lc, age, ptol_max_factor = carry
 
         v0 = lpsolve(r)
         inner_res_0 = _norm(v0)
@@ -1172,12 +1216,13 @@ def _gcrotmk_solve(
                 safediv(beta, b_norm),
                 pre="GCROT  ",
             )
-        return j_outer + 1, nmv, x, r, beta, C, U, lc, age, ptol_max_factor
+        beta_c = _excess_norm(x, r, beta, residual_floor)
+        return j_outer + 1, nmv, x, r, beta, beta_c, C, U, lc, age, ptol_max_factor
 
-    carry = (0, nmv, x, r, beta, C, U, lc, age, ptol_max_factor)
+    carry = (0, nmv, x, r, beta, beta_c, C, U, lc, age, ptol_max_factor)
     carry = lax.while_loop(gcrotmk_cond, gcmotmk_loop, carry)
-    j_outer, nmv, x, r, beta, C, U, _, age, _ = carry
-    success = beta <= tol
+    j_outer, nmv, x, r, beta, beta_c, C, U, _, age, _ = carry
+    success = beta_c <= tol
     # Include the solution vector to the span, returning the columns newest first
     # and dropping the oldest to make room.
     order = jnp.argsort(-age)[:-1]
@@ -1242,6 +1287,8 @@ def lgmres(
     stabilize_every: ArrayLike = 10,
     throw: bool = False,
     weights: PyTree[ArrayLike] | None = None,
+    residual_floor: PyTree[ArrayLike] | None = None,
+    residual_floor_transpose: PyTree[ArrayLike] | None = None,
 ) -> tuple[PyTree[Array], int, int, Array, Array, PyTree[Array], PyTree[Array]]:
     """
     Solve a matrix equation using the LGMRES algorithm.
@@ -1321,6 +1368,14 @@ def lgmres(
         returned residual refer to this norm. Transposed solves (e.g. for
         derivatives) use the dual weights ``1/w``. ``outer_Av`` is given and
         returned in the unweighted residual space. Default: unweighted.
+    residual_floor, residual_floor_transpose : pytree of jax.Array, optional
+        Nonnegative component-wise scale ``s`` with the structure of ``b``, such that
+        ``s * |x|`` bounds the residual that rounding alone can leave in ``b - A x``.
+        If given, the convergence test is applied to the residual in excess of this
+        bound, ``max(|b - A x| - s * |x|, 0)``, so components that are already at
+        their attainable accuracy count as converged. The returned residual is still
+        that of ``b - A x``. ``residual_floor_transpose`` is the same for ``A^T``, used
+        by transposed solves (e.g. for derivatives). Default: no floor.
 
     Returns
     -------
@@ -1380,9 +1435,14 @@ def lgmres(
         sqrtw = tree_map(lambda w: jnp.sqrt(jnp.asarray(w)), weights)
         sqrtw_t = tree_map(lambda s: 1 / s, sqrtw)
 
-    def _solve_weighted(matvec, b, lpsolve, rpsolve, outer_v, outer_Av, sqrtw, msg):
+    def _solve_weighted(
+        matvec, b, lpsolve, rpsolve, outer_v, outer_Av, sqrtw, msg, transpose
+    ):
         matvec, b, lpsolve, rpsolve, scale, unscale = _weighted_problem(
             matvec, b, lpsolve, rpsolve, sqrtw
+        )
+        floor = _weighted_floor(
+            residual_floor_transpose if transpose else residual_floor, sqrtw
         )
         xsol, (j, nmv, beta, success, ov, oAv) = _lgmres_solve(
             matvec,
@@ -1403,6 +1463,7 @@ def lgmres(
             refine,
             flexible,
             stabilize_every,
+            floor,
         )
         if throw:
             xsol = eqx.error_if(xsol, ~success, msg)
@@ -1418,6 +1479,7 @@ def lgmres(
             outer_Av,
             sqrtw,
             "LGMRES forward solve did not converge",
+            False,
         )
 
     def _transpose_solve(At, b):
@@ -1435,6 +1497,7 @@ def lgmres(
             None,
             sqrtw_t,
             "LGMRES tangent solve did not converge",
+            True,
         )
 
     # custom_linear_solve is unannotated and pyright can infer NoReturn for it
@@ -1466,6 +1529,7 @@ def _lgmres_solve(
     refine,
     flexible,
     stabilize_every,
+    residual_floor=None,
 ):
     print_every = jnp.asarray(print_every)
     print_every = jnp.where(print_every == 0, jnp.inf, print_every)
@@ -1480,17 +1544,18 @@ def _lgmres_solve(
     eps = jnp.finfo(dtype).eps
     nmv = 1
     beta = _norm(r)
+    beta_c = _excess_norm(x, r, beta, residual_floor)
     if verbose:
         _maybe_print(print_every < jnp.inf, 0, safediv(beta, b_norm), pre="LGMRES  ")
 
     outer_v, outer_Av, lv, nmv = _lgmres_Av_init(outer_v, outer_Av, k, matvec, x, nmv)
 
     def lgmres_cond(carry):
-        j_outer, nmv, x, r, beta, _, _, _, _ = carry
-        return jnp.logical_and(j_outer < maxiter, beta > tol)
+        j_outer, _, _, _, _, beta_c, _, _, _, _ = carry
+        return jnp.logical_and(j_outer < maxiter, beta_c > tol)
 
     def lgmres_loop(carry):
-        j_outer, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor = carry
+        j_outer, nmv, x, r, beta, _, outer_v, outer_Av, lv, ptol_max_factor = carry
 
         # -- inner LGMRES iteration
         v0 = lpsolve(r)
@@ -1589,11 +1654,23 @@ def _lgmres_solve(
                 pre="LGMRES  ",
             )
 
-        return j_outer + 1, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor
+        beta_c = _excess_norm(x, r, beta, residual_floor)
+        return (
+            j_outer + 1,
+            nmv,
+            x,
+            r,
+            beta,
+            beta_c,
+            outer_v,
+            outer_Av,
+            lv,
+            ptol_max_factor,
+        )
 
-    carry = (0, nmv, x, r, beta, outer_v, outer_Av, lv, ptol_max_factor)
+    carry = (0, nmv, x, r, beta, beta_c, outer_v, outer_Av, lv, ptol_max_factor)
     carry = lax.while_loop(lgmres_cond, lgmres_loop, carry)
-    j_outer, nmv, x, r, beta, outer_v, outer_Av, _, _ = carry
-    success = beta <= tol
+    j_outer, nmv, x, r, beta, beta_c, outer_v, outer_Av, _, _ = carry
+    success = beta_c <= tol
 
     return x, (j_outer, nmv, beta, success, outer_v, outer_Av)

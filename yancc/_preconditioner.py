@@ -11,7 +11,12 @@ from jaxtyping import Array, ArrayLike, Float
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1M, DEFAULT_P2M, fd_coeffs
-from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
+from ._linalg import (
+    AbstractYanccOperator,
+    DenseLUInverseOperator,
+    LowRankUpdateOperator,
+)
+from ._misc import DKEConstraint, DKESources
 from ._multigrid import (
     MultigridOperator,
     get_dke_operators,
@@ -96,13 +101,14 @@ class MDKEPreconditioner(MultigridOperator):
         smooth_solver = options.pop("smooth_solver", None)
         smooth_weights = options.pop("smooth_weights", None)
         smooth_method = options.pop("smooth_method", "standard")
-        smooth_type = options.pop("smooth_type", "plane,a")
+        smooth_type = options.pop("smooth_type", "plane,a,t,z")
         coarse_method = options.pop("coarse_method", "standard")
         coarse_weight = options.pop("coarse_weight", 1.0)
         interp_method = options.pop("interp_method", "linear")
         v1 = options.pop("v1", 3)
         v2 = options.pop("v2", 3)
         cycle_index = options.pop("cycle_index", 3)
+        as_matrix_chunk = options.pop("as_matrix_chunk", 512)
 
         assert len(options) == 0, "MDKEPreconditioner got unknown option " + str(
             options
@@ -154,6 +160,15 @@ class MDKEPreconditioner(MultigridOperator):
                 operators if (smooth_p1, smooth_p2) == (self.p1, self.p2) else None
             ),
         )
+        # The MDKE has no species mass ratios to badly scale the coarse operator, so
+        # its LU factorization is never the ill-conditioned case iterative refinement
+        # is for; skip it, along with the condition number estimate that decides it.
+        # The dense coarse matrix is built a chunk of columns at a time, which keeps
+        # peak memory near the size of the matrix itself rather than that times the
+        # number of intermediates in a matrix vector product.
+        coarse_opinv = DenseLUInverseOperator(
+            operators[0], refine=0, batch_size=as_matrix_chunk
+        )
         prolongations = get_prolongations(
             fields=fields, pitchgrids=grids, prefix_size=1, method=interp_method
         )
@@ -171,7 +186,7 @@ class MDKEPreconditioner(MultigridOperator):
             v1=v1,
             v2=v2,
             smooth_method=smooth_method,
-            coarse_opinv=None,
+            coarse_opinv=coarse_opinv,
             coarse_method=coarse_method,
             coarse_weight=coarse_weight,
             verbose=max(0, verbose - 2),
@@ -315,7 +330,12 @@ class DKEPreconditioner(MultigridOperator):
 
         self.p1 = options.pop("p1", DEFAULT_P1M)
         self.p2 = options.pop("p2", DEFAULT_P2M)
-        gauge = options.pop("gauge", True)
+        gauge = options.pop("gauge", "shift")
+        if isinstance(gauge, str):
+            if gauge != "shift":
+                raise ValueError(f"gauge must be True, False or 'shift', got {gauge!r}")
+        else:
+            gauge = bool(gauge)
         resolutions = _dke_resolutions(
             field, pitchgrid, speedgrid, species, self.p1, self.p2, options
         )
@@ -352,7 +372,7 @@ class DKEPreconditioner(MultigridOperator):
             potentials=potentials,
             p1=self.p1,
             p2=self.p2,
-            gauge=gauge,
+            gauge=gauge is True,
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
             mesh=mesh,
@@ -367,7 +387,7 @@ class DKEPreconditioner(MultigridOperator):
             potentials=potentials,
             p1=smooth_p1,
             p2=smooth_p2,
-            gauge=gauge,
+            gauge=gauge is True,
             smooth_type=smooth_type,
             smooth_solver=smooth_solver,
             weight=smooth_weights,
@@ -382,17 +402,35 @@ class DKEPreconditioner(MultigridOperator):
             ),
             mesh=mesh,
         )
-        # The direct solve on the coarsest grid needs the operator as a dense matrix.
-        # Building it a chunk of columns at a time keeps peak memory near the size of
-        # the matrix itself, rather than that times the number of intermediates in a
-        # matrix vector product, at the cost of a little speed. The matrix is factored
-        # after row/column equilibration. With several species its entries span many
-        # orders of magnitude, and an unscaled LU has an error floor large enough to
-        # leave the nearly singular heavy-species modes with no correct digits, which
-        # stalls the outer Krylov solve at a residual that depends on floating point
-        # details of the hardware. One step of refinement against the coarse operator
-        # removes most of the remaining error.
-        coarse_opinv = DenseLUInverseOperator(operators[0], batch_size=as_matrix_chunk)
+        # With gauge="shift" the level operators keep the null space of the DKE (a
+        # density and an energy mode for each species) rather than replacing equations
+        # at a grid point to remove it (gauge=True). Every level then has the same null
+        # space, constant in pitch and on the flux surface, which prolongation maps
+        # exactly between levels, and the outer bordered solve removes those
+        # components from the preconditioner's input and output. Replacing equations
+        # at a point instead leaves modes that differ from a null mode only near that
+        # point, which are nearly singular when the point is weakly coupled to its
+        # neighbors, and their shape depends on the grid, so a coarse correction
+        # along them does not match the finer levels. The direct solve on the coarsest
+        # grid needs a nonsingular matrix, so it factors the coarse operator with the
+        # null space shifted away from zero. With gauge=False the coarse matrix is
+        # singular, and its factorization is only useful for verification.
+        #
+        # It also needs the operator as a dense matrix. Building it a chunk of columns
+        # at a time keeps peak memory near the size of the matrix itself, rather than
+        # that times the number of intermediates in a matrix vector product, at the
+        # cost of a little speed. The matrix is factored after row/column
+        # equilibration. With several species its entries span many orders of
+        # magnitude, and an unscaled LU has an error floor large enough to leave the
+        # nearly singular heavy-species modes with no correct digits, which stalls the
+        # outer Krylov solve at a residual that depends on floating point details of
+        # the hardware. One step of refinement against the coarse operator, applied
+        # when the matrix is badly enough conditioned to need it, removes most of the
+        # remaining error.
+        coarse_op = operators[0]
+        if gauge == "shift":
+            coarse_op = _shift_dke_nullspace(coarse_op)
+        coarse_opinv = DenseLUInverseOperator(coarse_op, batch_size=as_matrix_chunk)
         prefix_size = len(species) * speedgrid.nx
         prolongations = get_prolongations(
             fields=fields,
@@ -436,6 +474,31 @@ class DKEPreconditioner(MultigridOperator):
                 for op in ops
             ]
         )
+
+
+def _shift_dke_nullspace(operator: DKE) -> LowRankUpdateOperator:
+    """Ungauged DKE operator with its density and energy null space shifted from zero.
+
+    Returns ``A + L diag(s) R^T``, where the columns of ``R`` span the density and
+    energy modes of each species (the null space of ``A``), the columns of ``L`` span
+    the density and energy moments (approximately the left null space), and ``s`` is
+    the mean magnitude of the diagonal of each species' block of ``A``.
+    """
+    args = (operator.field, operator.pitchgrid, operator.speedgrid, operator.species)
+    # Both have one block of two columns per species, so the orthonormal bases from
+    # QR keep the species separate and each species can be shifted by its own scale.
+    R = jnp.linalg.qr(DKESources(*args).as_matrix())[0]
+    L = jnp.linalg.qr(DKEConstraint(*args, True).as_matrix().T)[0]
+    # For a right hand side in the range of A the solution of the shifted system
+    # solves A x = b, with no component along R, whatever the shift is, as long as L
+    # is not orthogonal to the left null space. So the shift only needs to lift the
+    # null modes well above the small nonzero singular values of A without exceeding
+    # its largest ones. The smallest singular values of the shifted operator stop
+    # changing once the shift is a few orders of magnitude above the nonzero ones,
+    # and the mean diagonal of each species is far above those and below the largest.
+    ns = len(operator.species)
+    scale = jnp.abs(operator.diagonal()).reshape((ns, -1)).mean(axis=1)
+    return LowRankUpdateOperator(operator, L, R, jnp.repeat(scale, 2))
 
 
 class DKEMPreconditioner(AbstractYanccOperator):

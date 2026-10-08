@@ -86,6 +86,16 @@ DKE-only options
    add Krook style diffusion. Use this to selectively turn parts of the operator off
    (e.g. zero out :math:`C_E` and :math:`C_F` to recover a Lorentz operator).
 
+``fluid_correction`` *(bool, default True)*
+   Whether to precede each application of the multigrid preconditioner with an
+   exact correction of the density, energy and parallel momentum of each species
+   at every point of the flux surface. This makes the solve much more robust at high
+   collisionality, at the cost of a setup step and one extra operator application
+   per iteration (usually less than 2% additional cost per iteration, and can reduce
+   the required number of iterations by 5-10x). The correction of each species is
+   weighted smoothly from 0 at low collisionality to 1 at high collisionality, where
+   it is needed most, and it is skipped when no species is collisional.
+
 Warm-starting
 -------------
 
@@ -182,7 +192,7 @@ Cycle and smoothing
    to 4–5 is sometimes the cheapest way to recover convergence on stiff
    problems.
 
-``smooth_type`` *(str, default "plane,s,x,a,l01t,l01z" for DKE, "plane,a" for MDKE)*
+``smooth_type`` *(str, default "plane,s,x,a,l01t,l01z" for DKE, "plane,a,t,z" for MDKE)*
    Comma separated list of the smoothers applied on each multigrid level, in the
    order given. Each entry is one of:
 
@@ -240,9 +250,14 @@ Cycle and smoothing
    preconditioner only needs to be a good approximation, and lower order is
    cheaper.
 
-``gauge`` *(bool, default True)*
-   Whether to fix the gauge of the constraint equations inside the
-   preconditioner. Keep this True; it exists primarily for verification.
+``gauge`` *(default True for the MDKE, "shift" for the DKE)*
+   How the preconditioner handles the null space of the operator (for the DKE, a
+   density and an energy mode for each species). ``True`` fixes it by replacing the
+   equations at one grid point on every level. For the DKE, ``"shift"`` keeps the
+   null space on every level and shifts it away from zero in the direct solve on the
+   coarsest level, which converges more reliably; ``True`` is still accepted.
+   ``False`` leaves the null space in place, so the coarsest solve is singular; it
+   exists primarily for verification. The MDKE accepts only ``True`` or ``False``.
 
 DKE-only multigrid options
 --------------------------

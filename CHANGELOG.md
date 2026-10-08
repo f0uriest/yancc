@@ -1,6 +1,23 @@
 Changelog
 =========
 
+- ``Field`` has a new optional attribute ``g_sup_rr``, the radial metric element
+  ``|grad(rho)|^2``. It is computed automatically when loading from DESC, VMEC,
+  ``booz_xform`` and IPP ``.bc`` files, and can be passed to ``Field`` and
+  ``Field.from_boozer`` directly.
+- New ``DKESolution`` outputs:
+    - ``"<momentum_flux>"``: radial flux of parallel momentum times field strength.
+    - ``"Phi_1"``: variation of the electrostatic potential on the surface from
+      quasi-neutrality.
+    - ``"n1"``, ``"n"``, ``"p1"``, ``"p"``: density and pressure perturbations and
+      totals on the surface, with the totals including the Boltzmann response to
+      ``Phi_1``.
+    - ``"<classical_particle_flux>"`` and ``"<classical_heat_flux>"``: classical
+      transport fluxes, including the effect of ``Phi_1``. The Coulomb logarithm can
+      be overridden with the ``coulomb_log`` keyword.
+    - ``"Vperp"``, ``"V^theta"``, ``"V^zeta"``: perpendicular (diamagnetic and ExB)
+      flow, and the contravariant poloidal and toroidal components of the total flow.
+  ``Vperp`` and the classical fluxes require ``Field.g_sup_rr``.
 
 Unreleased
 ----------
@@ -13,27 +30,63 @@ Unreleased
   smoothers to apply and their order, for both the DKE and MDKE. The new defaults are
   ``"plane,s,x,a,l01t,l01z"`` for the DKE (the frozen plane, block-Jacobi lines in
   species, speed and pitch, and new ``"l01t"`` and ``"l01z"`` theta and zeta line
-  smoothers acting on the lowest two Legendre moments in pitch) and ``"plane,a"`` for
-  the MDKE (the frozen plane and pitch lines). The previous integer values are no
-  longer accepted. See the tuning guide.
+  smoothers acting on the lowest two Legendre moments in pitch) and ``"plane,a,t,z"``
+  for the MDKE (the frozen plane and pitch, theta and zeta lines). The previous integer
+  values are no longer accepted. See the tuning guide.
 - The multigrid option ``smooth_weights`` can now be a dict mapping entries of
   ``smooth_type`` to their relaxation weight, with the other smoothers using their
   defaults. A single value now applies to every smoother.
-- ``solve_dke`` and ``solve_dke_ambipolar`` take a new ``mesh`` argument, a
-  ``jax.sharding.Mesh`` with axes ``"species"`` and/or ``"speed"``, to split a single
-  solve across several devices and reduce the memory needed on each. See the
-  "Multiple devices" section of the performance docs.
 - The recycled Krylov subspace ``info["U"]``, ``info["C"]`` returned by ``solve_dke``
   and ``DKESolution.f1_krylov`` are now tuples of the parts for ``f1`` and for the
   source terms, rather than single stacked arrays. The ``U`` and ``f1`` warm start
   options of ``solve_dke`` accept either form.
+- ``solve_dke`` now stops once the remaining residual is at the level that rounding
+  error in the matrix-vector product can explain. At very high collisionality the large
+  pitch angle scattering frequency at the lowest speed nodes limits the attainable
+  residual, and the solve previously ran to ``maxiter`` and reported failure even
+  though the solution was as accurate as it could be.
+- New ``solve_dke`` option ``fluid_correction`` (default ``True``) that combines the
+  multigrid preconditioner with an exact correction of the density, energy and parallel
+  momentum of each species at every point on the flux surface. This makes the solve
+  much more robust at high collisionality, often cutting the number of iterations by
+  5-10x for less than 2% extra cost per iteration. Each species' correction is weighted
+  smoothly from 0 at low collisionality to 1 at high collisionality, and the correction
+  is skipped entirely when no species is collisional.
+- ``solve_dke`` and ``solve_dke_ambipolar`` take a new ``mesh`` argument, a
+  ``jax.sharding.Mesh`` with axes ``"species"`` and/or ``"speed"``, to split a single
+  solve across several devices and reduce the memory needed on each. See the
+  "Multiple devices" section of the performance docs.
+
 
 ### Performance improvements
+- The DKE multigrid preconditioner no longer fixes the density and energy gauge by
+  replacing equations at a grid point. The levels keep the null space of the DKE, and
+  the direct solve on the coarsest level shifts it away from zero instead. This
+  removes nearly singular coarse modes that slowed or stalled convergence at low
+  collisionality, and reduces the number of iterations on most problems. The point
+  gauge is still available with the multigrid option ``gauge=True``.
 - The direct solve on the coarsest multigrid level now applies a step of iterative
   refinement against the coarse operator, removing most of the error left by the LU
   factorization of badly scaled multispecies coarse matrices.
 - All smoothers on a multigrid level are now built from a single shared operator,
   reducing the compile time of the preconditioner by about a third.
+- Reduced rounding error in the pitch angle scattering operator, which at high
+  collisionality could act as a large spurious sink of isotropic (density and energy)
+  perturbations.
+- The Fokker-Planck collision operator no longer includes the flux surface averaged
+  exchange of density and energy between species (the equilibration of the background
+  Maxwellian temperatures). This happens over the slower transport timescale and
+  doesn't belong in the DKE. Removing it puts each species' surface-constant density
+  and temperature perturbations in the null space of the operator, which makes
+  convergence much smoother at high collisionality. The local exchange between
+  species' temperature perturbations is kept, because it sets the fluxes at high
+  collisionality, so fluxes are unaffected.
+
+### Bug fixes
+- The field particle collision operators now project from pitch nodes to Legendre
+  modes with a weighted Galerkin projection rather than an unweighted least squares
+  fit, so the density and energy moments match the pitch quadrature used elsewhere and
+  unresolved high order modes are not mixed into the low order ones.
 
 
 v0.0.2

@@ -21,7 +21,7 @@ Usage
     python benchmarks/bench_mdke.py run --tier smoke   --out smoke.json
     python benchmarks/bench_mdke.py run --tier nightly --out nightly.json
 
-    # Run specific case(s) by name (overrides --tier); --list shows the names.
+    # Run specific case(s) by name (overrides --tier); --list shows the cases.
     python benchmarks/bench_mdke.py run --list
     python benchmarks/bench_mdke.py run --case w7x_nu1e-3_er0 --out one.json
     python benchmarks/bench_mdke.py run --case w7x_nu1e-3_er0,hsx_nu1e-3_er0
@@ -49,7 +49,12 @@ import jax.numpy as jnp
 
 jax.config.update("jax_enable_x64", True)
 
-from aot import TIMING_HDR, aot_run, format_timing  # noqa: E402  (sibling module)
+from aot import (  # noqa: E402  (sibling module)
+    TIMING_HDR,
+    aot_run,
+    cached_run,
+    format_timing,
+)
 from cases_mdke import (  # noqa: E402  (sibling module)
     CASES,
     Case,
@@ -89,36 +94,45 @@ def _env_header() -> dict:
     }
 
 
-def run_case(case: Case, verbose: int = 0) -> dict:
+def _solve(field, pitchgrid, erhohat, nuhat, rtol, verbose):
+    return solve_mdke(
+        field,
+        pitchgrid,
+        erhohat,
+        nuhat,
+        rtol=rtol,
+        verbose=verbose,
+        # this is the only departure from standard settings. We want things
+        # to converge within 1 restart, so 3 is already more than enough. The
+        # production default is 10 for robustness but if things regress we want to
+        # fail fast.
+        maxiter=3,
+    )
+
+
+def run_case(case: Case, verbose: int = 0, aot: bool = True) -> dict:
     """Solve one case with production defaults; return its metrics.
 
-    The solve is compiled ahead of time and then run once with the compiled executable,
-    so compilation and runtime are timed separately. The compiled memory estimate is
-    recorded too.
+    With ``aot``, the solve is compiled ahead of time and then run once with the
+    compiled executable, so compilation and runtime are timed separately, and the
+    compiled memory estimate is recorded too. Otherwise the solve goes through a jitted
+    function shared by all cases, reusing compiled code from earlier cases where
+    possible, and only the total time is recorded.
 
     The mDKE solves two RHS; combine into a single set of comparable metrics
     (``nmv``/``niter`` summed, ``success`` AND-ed, ``res`` the worse) and keep the
     per-RHS matvec counts for eyeballing.
     """
     field, pitchgrid, erhohat, nuhat = case.build()
-
-    def solve(field, pitchgrid, erhohat, nuhat):
-        return solve_mdke(
-            field,
-            pitchgrid,
-            erhohat,
-            nuhat,
-            rtol=case.rtol,
-            verbose=verbose,
-            # this is the only departure from standard settings. We want things
-            # to converge within 1 restart, so 3 is already more than enough. The
-            # production default is 10 for robustness but if things regress we want to
-            # fail fast.
-            maxiter=3,
-        )
-
-    (_sol, info), timing = aot_run(
-        solve, field, pitchgrid, jnp.asarray(erhohat), jnp.asarray(nuhat)
+    runner = aot_run if aot else cached_run
+    (_sol, info), timing = runner(
+        _solve,
+        field,
+        pitchgrid,
+        jnp.asarray(erhohat),
+        jnp.asarray(nuhat),
+        case.rtol,
+        verbose,
     )
     nmv1, nmv2 = int(info["nmv1"]), int(info["nmv2"])
     return {
@@ -143,8 +157,10 @@ def _split_names(values: list[str]) -> list[str]:
 def cmd_run(args: argparse.Namespace) -> int:
     """Run benchmarks."""
     if args.list:
-        for name in all_case_names():
-            print(name)
+        print(f"  {'case':>26} {_CASE_HDR} {'tier':>8}")
+        for case in CASES:
+            case = case.scaled(args.res_scale)
+            print(f"  {case.name:>26} {_case_cols(case)} {case.tier:>8}")
         return 0
     if args.case:
         names = _split_names(args.case)
@@ -168,6 +184,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     label += suffix
     header = _env_header()
     header["res_scale"] = args.res_scale
+    header["aot"] = args.aot
     print(
         f"# bench_mdke {label}  yancc={header['yancc_version']}  {header['device']}",
         flush=True,
@@ -181,7 +198,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for case in cases:
         t0 = time.perf_counter()
         try:
-            r = run_case(case, verbose=2 if args.verbose else 0)
+            r = run_case(case, verbose=2 if args.verbose else 0, aot=args.aot)
             err = None
         except Exception as e:  # a build/solve blowup is a data point, not a crash
             r = {"nmv": None, "niter": None, "success": False, "res": None}
@@ -199,9 +216,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         if err:
             print(f"      -> {err}", flush=True)
-        # compiled functions are per-case, so drop them rather than let memory grow
-        # over a long run
-        jax.clear_caches()
+        if args.aot:
+            # ahead-of-time compiled functions are never reused, so drop them rather
+            # than let memory grow over a long run
+            jax.clear_caches()
 
     if args.out:
         out = {"header": header, "tier": label, "results": results}
@@ -321,7 +339,7 @@ def main() -> int:
     pr.add_argument(
         "--list",
         action="store_true",
-        help="print every available case name and exit (no solve)",
+        help="print a table of every case and its parameters, then exit (no solve)",
     )
     add_arguments(pr)
     pr.add_argument(
@@ -336,6 +354,16 @@ def main() -> int:
     )
     pr.add_argument(
         "--out", help="results JSON path; if omitted, only print to the terminal"
+    )
+    pr.add_argument(
+        "--no-aot",
+        "--no_aot",
+        dest="aot",
+        action="store_false",
+        help="don't compile each case ahead of time; run all cases through one shared "
+        "jitted solve and keep the compilation cache, reusing compiled code between "
+        "cases where possible. run_s then includes any compilation, and compile_s and "
+        "mem_bytes are not recorded.",
     )
     pr.add_argument(
         "--verbose",

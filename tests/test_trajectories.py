@@ -45,7 +45,8 @@ def test_scipy_operators(p1, p2, erhohat, nuhat, gauge, field, pitchgrid):
     """Test that scipy sparse matrices are the same as jax jacobians."""
     A1 = trajectories_scipy.mdke(field, pitchgrid, erhohat, nuhat, p1, p2, gauge=gauge)
     A2 = trajectories.MDKE(field, pitchgrid, erhohat, nuhat, p1, p2, gauge=gauge)
-    np.testing.assert_allclose(A1.toarray(), A2.as_matrix())
+    A1 = A1.toarray()
+    np.testing.assert_allclose(A1, A2.as_matrix(), atol=1e-12 * np.abs(A1).max())
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -64,13 +65,16 @@ def test_diagonals_dke_speed(
 
     f = trajectories.DKESpeed(field, pitchgrid, speedgrid, species2, Erho, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -98,15 +102,16 @@ def test_diagonals_dke_theta(
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
     np.testing.assert_allclose(
-        B, f.block_diagonal("dense", axorder=axorder), err_msg=axorder
+        B, f.block_diagonal("dense", axorder=axorder), atol=atol, err_msg=axorder
     )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -134,13 +139,16 @@ def test_diagonals_dke_zeta(
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -168,13 +176,16 @@ def test_diagonals_dke_pitch(
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -193,13 +204,16 @@ def test_diagonals_dke_pitch_angle_scattering(
 
     f = PitchAngleScattering(field, pitchgrid, speedgrid, species2, p2=p2, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -217,13 +231,16 @@ def test_diagonals_dke_energy_scattering(
 
     f = EnergyScattering(field, pitchgrid, speedgrid, species2, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -240,13 +257,16 @@ def test_diagonals_dke_CD(
     }
     f = FieldPartCD(field, pitchgrid, speedgrid, species2, potentials2, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -263,13 +283,16 @@ def test_diagonals_dke_CG(
     }
     f = FieldPartCG(field, pitchgrid, speedgrid, species2, potentials2, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -286,13 +309,16 @@ def test_diagonals_dke_CH(
     }
     f = FieldPartCH(field, pitchgrid, speedgrid, species2, potentials2, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -311,13 +337,16 @@ def test_diagonals_dke_CF(
         field, pitchgrid, speedgrid, species2, potentials2, gauge=gauge
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     bw = sizes[axorder[-1]] // 2
     D = f.block_diagonal("banded", bw, axorder)
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -343,13 +372,23 @@ def test_diagonals_dke_FokkerPlanck(
         operator_weights=jnp.linspace(1, 2, 3),
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    # The diagonal and blocks are those of the local terms, while A also holds the
+    # surface averaged exchange, which couples every point of the surface. Its share,
+    # relative to the largest entry of A, is about 1.3e-6 on the diagonal and 1.4e-4
+    # in the blocks for these grids.
+    atol_diag = 1e-5 * np.abs(A).max()
+    atol = 1e-3 * np.abs(A).max()
+    np.testing.assert_allclose(
+        np.diag(A), f.diagonal(), atol=atol_diag, err_msg=axorder
+    )
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     bw = sizes[axorder[-1]] // 2
     D = f.block_diagonal("banded", bw, axorder)
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -379,13 +418,23 @@ def test_diagonals_dke_full(
         operator_weights=jnp.linspace(1, 5, 8),
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    # The diagonal and blocks are those of the local terms, while A also holds the
+    # surface averaged exchange of the collision operator, which couples every point
+    # of the surface. Its share, relative to the largest entry of A, is about 2e-8 on
+    # the diagonal and 3e-6 in the blocks for these grids.
+    atol_diag = 2e-7 * np.abs(A).max()
+    atol = 3e-5 * np.abs(A).max()
+    np.testing.assert_allclose(
+        np.diag(A), f.diagonal(), atol=atol_diag, err_msg=axorder
+    )
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     bw = sizes[axorder[-1]] // 2
     D = f.block_diagonal("banded", bw, axorder)
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
     # if we drop the field term it should have bandwidth 4 for our usual stencils
     f = trajectories.DKE(
@@ -401,17 +450,23 @@ def test_diagonals_dke_full(
         operator_weights=jnp.ones(8).at[-2:].set(0),
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol_diag = 2e-7 * np.abs(A).max()
+    atol = 3e-5 * np.abs(A).max()
+    np.testing.assert_allclose(
+        np.diag(A), f.diagonal(), atol=atol_diag, err_msg=axorder
+    )
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     bw = min(4, sizes[axorder[-1]] // 2)
     D = f.block_diagonal("banded", bw, axorder)
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
     D = f.block_diagonal("banded", axorder=axorder)  # auto-compute bw from FD stencil
     bw_auto = D.shape[1] // 2
     D = banded_to_dense(bw_auto, bw_auto, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 def _species_at_density(n0):
@@ -535,13 +590,16 @@ def test_diagonals_mdke_theta(gauge, axorder, field, pitchgrid, p1):
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -563,13 +621,16 @@ def test_diagonals_mdke_zeta(gauge, axorder, field, pitchgrid, p1):
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -591,13 +652,16 @@ def test_diagonals_mdke_pitch(gauge, axorder, field, pitchgrid, p1):
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -613,13 +677,16 @@ def test_diagonals_mdke_pitch_angle_scattering(gauge, axorder, field, pitchgrid,
 
     f = MDKEPitchAngleScattering(field, pitchgrid, nuhat, p2=p2, gauge=gauge)
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])
@@ -643,13 +710,16 @@ def test_diagonals_mdke_full(gauge, axorder, field, pitchgrid):
         gauge=gauge,
     )
     A = f.as_matrix()
-    np.testing.assert_allclose(np.diag(A), f.diagonal(), err_msg=axorder)
+    atol = 1e-12 * np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), f.diagonal(), atol=atol, err_msg=axorder)
     B = extract_blocks(to_axorder(A, sizes, axorder), sizes[axorder[-1]])
-    np.testing.assert_allclose(B, f.block_diagonal(axorder=axorder), err_msg=axorder)
+    np.testing.assert_allclose(
+        B, f.block_diagonal(axorder=axorder), atol=atol, err_msg=axorder
+    )
     D = f.block_diagonal("banded", axorder=axorder)
     bw = D.shape[1] // 2
     D = banded_to_dense(bw, bw, D)
-    np.testing.assert_allclose(B, D, err_msg=axorder)
+    np.testing.assert_allclose(B, D, atol=atol, err_msg=axorder)
 
 
 @pytest.mark.parametrize("gauge", [True, False])

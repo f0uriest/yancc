@@ -1075,6 +1075,153 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
         )
 
 
+# Largest eigenvalue allowed for the point Jacobi iteration matrix D^-1 K of the
+# collision coupling across speed in the l = 0, 1 line smoothers. Point Jacobi with
+# weight 1 is stable up to 2, so the blocks never amplify collision dominated modes.
+_L01_COLLISION_JACOBI_CAP = 2.0
+
+
+def _power_lambda_max(J, iters=100):
+    """Largest eigenvalue of each matrix in a batch (..., n, n) with real spectra."""
+    # jax doesn't have non-symmetric eig on GPU, but power iteration is cheap for this
+    # and it's only done once at build time.
+    n = J.shape[-1]
+    i = jnp.arange(n)
+    v = jnp.broadcast_to((-1.0) ** i * (1 + i / n), J.shape[:-1])
+
+    def body(_, v):
+        w = jnp.einsum("...ij,...j->...i", J, v)
+        return w / jnp.linalg.norm(w, axis=-1, keepdims=True)
+
+    v = jax.lax.fori_loop(
+        0, iters, body, v / jnp.linalg.norm(v, axis=-1, keepdims=True)
+    )
+    return jnp.einsum("...i,...ij,...j->...", v, J, v)
+
+
+def _l01_line_blocks(operator, W, Q, p1, p2, line):
+    """DKE couplings along one angle line, projected onto the l = 0, 1 subspace.
+
+    Returns dense blocks of shape (ns, nx, nother, 2, 2, n, n), indexed by species,
+    speed, node of the other angle, output and input Legendre index, and output and
+    input node along the line. The spatial diagonal carries the full pointwise
+    diagonal of the operator.
+    """
+    ns, nx = len(operator.species), operator.speedgrid.nx
+    na = operator.pitchgrid.nalpha
+    nt, nz = operator.field.ntheta, operator.field.nzeta
+    n, nother = (nt, nz) if line == "t" else (nz, nt)
+    # pitch is a spectator: leading axes (s, x, other, a). The line operator is a
+    # finite difference stencil, so the blocks are banded and are projected in banded
+    # storage, only expanding the small projected blocks.
+    bw = min(max(fd_coeffs[1][p1].size // 2, fd_coeffs[2][p2].size // 2), n // 2)
+    axD = "sxzat" if line == "t" else "sxtaz"
+    D = operator.block_diagonal("banded", bw=bw, axorder=axD)
+    D = D.reshape(ns, nx, nother, na, 2 * bw + 1, n)
+    t1 = jnp.einsum("la,sxoahj,am->sxolmhj", W, D, Q)
+    del D
+    return banded_to_dense(bw, bw, t1)
+
+
+def _l01_pitch_blocks(operator, W, Q, operator_weights):
+    """Pointwise pitch and collision coupling projected onto the l = 0, 1 subspace.
+
+    Returns blocks of shape (ns, nx, nt, nz, 2, 2) with the pointwise diagonal of the
+    pitch coupling terms removed (it is carried by the line blocks), plus the shift
+    that caps the point Jacobi iteration over speed on the collision terms.
+    """
+    op = operator
+    ow = operator_weights
+    ns, nx = len(op.species), op.speedgrid.nx
+    na, nt, nz = op.pitchgrid.nalpha, op.field.ntheta, op.field.nzeta
+    shape = (ns, nx, na, nt, nz)
+    # Only the pitch, pitch angle scattering and field particle terms couple different
+    # pitch nodes, the rest only add to the diagonal. Rather than forming the (na, na)
+    # blocks, which are dense due to the field particle term, W A Q is found by
+    # applying each term to the columns of Q.
+
+    def pitch_mv(v):
+        return ow[1] * op._opa.mv(v) + ow[4] * op._C.CL.mv(v)
+
+    # pitch and pitch angle scattering terms are block diagonal in (s, x, t, z), so a
+    # single probe per column of Q covers every block at once
+    k2 = jnp.stack(
+        [
+            jnp.einsum(
+                "la,sxatz->sxtzl",
+                W,
+                pitch_mv(
+                    jnp.broadcast_to(Q[None, None, :, m, None, None], shape).reshape(-1)
+                ).reshape(shape),
+            )
+            for m in range(2)
+        ],
+        axis=-1,
+    )
+
+    # field particle term couples all speeds and species, so each (s, x) needs its own
+    # probe. The same probes give the projected collision operator's coupling across
+    # speed within a species, which is the same at every spatial point, so it is read
+    # at a single point away from the gauge rows.
+    def field_particle_probe(idx):
+        s0, x0, m = idx
+        q = jnp.broadcast_to(Q[:, m][:, None, None], (na, nt, nz))
+        v = jnp.zeros(shape).at[s0, x0].set(q).reshape(-1)
+        y = op._C.CF.mv(v).reshape(shape)
+        c = (ow[4] * op._C.CL.mv(v) + ow[5] * op._C.CE.mv(v)).reshape(shape)
+        c = jax.lax.dynamic_index_in_dim(c + ow[6] * y, s0, 0, keepdims=False)
+        y = jax.lax.dynamic_index_in_dim(y, s0, 0, keepdims=False)
+        y = jax.lax.dynamic_index_in_dim(y, x0, 0, keepdims=False)
+        return jnp.einsum("la,atz->tzl", W, y), W @ c[:, :, -1, -1].T
+
+    idx = jnp.stack(
+        jnp.meshgrid(jnp.arange(ns), jnp.arange(nx), jnp.arange(2), indexing="ij"),
+        axis=-1,
+    ).reshape(-1, 3)
+    kf, kc = jax.lax.map(field_particle_probe, idx)
+    kf = kf.reshape(ns, nx, 2, nt, nz, 2)
+    k2 = k2 + ow[6] * jnp.moveaxis(kf, 2, -1)
+    # collision blocks K[s, l, y, x] across speed for each species and l
+    kc = kc.reshape(ns, nx, 2, 2, nx)
+    kc = jnp.stack([kc[:, :, l, l, :] for l in range(2)], axis=1)
+    kc = jnp.swapaxes(kc, 2, 3)
+    diag = (
+        ow[1] * op._opa.diagonal()
+        + ow[4] * op._C.CL.diagonal()
+        + ow[6] * op._C.CF.diagonal()
+    ).reshape(shape)
+    k2 = k2 - jnp.einsum("la,sxatz,am->sxtzlm", W, diag, Q)
+    # The blocks keep only the diagonal of the collision operator across speed, so on
+    # modes where collisions dominate they act as a point Jacobi iteration over speed,
+    # which diverges once an eigenvalue of D^-1 K exceeds 2 (K the projected collision
+    # coupling across speed, D its diagonal). The speed discretization is spectral, so
+    # K is far from diagonally dominant and that eigenvalue grows with the number of
+    # speed nodes, and more so for a species colliding with much slower field
+    # particles. For each species and l, the collision diagonal is scaled up just
+    # enough to cap the largest eigenvalue at _L01_COLLISION_JACOBI_CAP, which leaves
+    # blocks below the cap unchanged.
+    d = jnp.diagonal(kc, axis1=2, axis2=3)
+    lam = _power_lambda_max(kc / d[..., None])
+    scale = jax.lax.stop_gradient(jnp.maximum(1.0, lam / _L01_COLLISION_JACOBI_CAP))
+    shift = (scale[..., None] - 1) * d
+    return k2 + jnp.einsum("slx,lm->sxlm", shift, jnp.eye(2))[:, :, None, None]
+
+
+def _l01_line_streaming_shift(operator, W, Q, operator_weights, line):
+    """Magnitude of the streaming diagonal along a line, projected onto l = 0, 1."""
+    op, ow = operator, operator_weights
+    shape = (
+        len(op.species),
+        op.speedgrid.nx,
+        op.pitchgrid.nalpha,
+        op.field.ntheta,
+        op.field.nzeta,
+    )
+    line_op, line_weight = (op._opt, ow[2]) if line == "t" else (op._opz, ow[3])
+    shift = jnp.abs(line_weight * line_op.diagonal()).reshape(shape)
+    return jnp.einsum("la,sxatz,am->sxtzlm", W, shift, Q)
+
+
 def optimal_smoothing_parameter_3d(p1, p2, nuhat, ax):
     """Approximate best relaxation parameter for block jacobi smoother for MDKE."""
     method = p1  # smoothing seems to be the same for any p2 so ignore that
@@ -1132,11 +1279,20 @@ class DKEL01LineSmoother(AbstractYanccOperator):
     subspace is the ``(2n, 2n)`` block, with ``n`` the number of points on the line,
 
         B[(i, l), (j, m)] = sum_a W[l, a] D_a[i, j] Q[a, m]
-                          + delta_ij sum_{a, b} W[l, a] A'[a, b] Q[b, m],
+                          + delta_ij sum_{a, b} W[l, a] A'[a, b] Q[b, m]
+                          + delta_ij sum_a W[l, a] s_a Q[a, m]
+                          + delta_ij delta_lm (c_l - 1) K_l[x, x],
 
     where ``D_a`` is the DKE operator coupling points ``i, j`` along the line at pitch
-    node ``a``, and ``A'`` is the operator's pitch coupling at point ``i`` with its
-    diagonal removed. The smoother applies ``M r = weight * Q B^-1 W r`` line by line.
+    node ``a``, ``A'`` is the operator's pitch coupling at point ``i`` with its
+    diagonal removed, and ``s_a`` is a diagonal shift at point ``i``: zero, except when
+    the other angle direction has a single node, where it is the magnitude of the
+    streaming diagonal along the line. ``K_l`` is the collision operator of the
+    block's species projected onto ``P_l``, coupling its speed nodes, ``x`` is the
+    block's speed node, and ``c_l = max(1, lambda_max(diag(K_l)^-1 K_l) / 2)``
+    keeps the blocks, which are point Jacobi over speed on the collision terms, from
+    amplifying collision dominated modes.
+    The smoother applies ``M r = weight * Q B^-1 W r`` line by line.
 
     It is a subspace correction: its range is the span of ``P_0`` and ``P_1``, so it is
     meant to be composed with smoothers that act on the full pitch dependence.
@@ -1222,7 +1378,7 @@ class DKEL01LineSmoother(AbstractYanccOperator):
         self.weight = jnp.asarray(1.0 if weight is None else weight)
 
         ns, nx = len(species), speedgrid.nx
-        na, nt, nz = pitchgrid.nalpha, field.ntheta, field.nzeta
+        nt, nz = field.ntheta, field.nzeta
         n = nt if line == "t" else nz
         nother = nz if line == "t" else nt
 
@@ -1249,71 +1405,16 @@ class DKEL01LineSmoother(AbstractYanccOperator):
                 coulomb_log=coulomb_log,
             )
 
-        # line blocks, pitch a spectator: leading axes (s, x, other, a). The line
-        # operator is a finite difference stencil, so the blocks are banded and are
-        # projected in banded storage, only expanding the small projected blocks.
-        bw = min(max(fd_coeffs[1][p1].size // 2, fd_coeffs[2][p2].size // 2), n // 2)
-        axD = "sxzat" if line == "t" else "sxtaz"
-        D = operator.block_diagonal("banded", bw=bw, axorder=axD)
-        D = D.reshape(ns, nx, nother, na, 2 * bw + 1, n)
-        t1 = jnp.einsum("la,sxoahj,am->sxolmhj", W, D, Q)
-        del D
-        t1 = banded_to_dense(bw, bw, t1)
-
-        # projected pitch blocks with the pitch diagonal removed, since the line
-        # blocks already carry the full pointwise diagonal: leading axes (s, x, t, z).
-        # Only the pitch, pitch angle scattering and field particle terms couple
-        # different pitch nodes, the rest only add to the diagonal. Rather than
-        # forming the (na, na) blocks, which are dense due to the field particle
-        # term, W A Q is found by applying each term to the columns of Q.
-        op = operator
-        ow = operator_weights
-        shape = (ns, nx, na, nt, nz)
-
-        def pitch_mv(v):
-            return ow[1] * op._opa.mv(v) + ow[4] * op._C.CL.mv(v)
-
-        # pitch and pitch angle scattering terms are block diagonal in (s, x, t, z),
-        # so a single probe per column of Q covers every block at once
-        k2 = jnp.stack(
-            [
-                jnp.einsum(
-                    "la,sxatz->sxtzl",
-                    W,
-                    pitch_mv(
-                        jnp.broadcast_to(
-                            Q[None, None, :, m, None, None], shape
-                        ).reshape(-1)
-                    ).reshape(shape),
-                )
-                for m in range(2)
-            ],
-            axis=-1,
-        )
-
-        # field particle term couples all speeds and species, so each (s, x) needs
-        # its own probe
-        def field_particle_probe(idx):
-            s0, x0, m = idx
-            q = jnp.broadcast_to(Q[:, m][:, None, None], (na, nt, nz))
-            v = jnp.zeros(shape).at[s0, x0].set(q)
-            y = op._C.CF.mv(v.reshape(-1)).reshape(shape)
-            y = jax.lax.dynamic_index_in_dim(y, s0, 0, keepdims=False)
-            y = jax.lax.dynamic_index_in_dim(y, x0, 0, keepdims=False)
-            return jnp.einsum("la,atz->tzl", W, y)
-
-        idx = jnp.stack(
-            jnp.meshgrid(jnp.arange(ns), jnp.arange(nx), jnp.arange(2), indexing="ij"),
-            axis=-1,
-        ).reshape(-1, 3)
-        kf = jax.lax.map(field_particle_probe, idx).reshape(ns, nx, 2, nt, nz, 2)
-        k2 = k2 + ow[6] * jnp.moveaxis(kf, 2, -1)
-        diag = (
-            ow[1] * op._opa.diagonal()
-            + ow[4] * op._C.CL.diagonal()
-            + ow[6] * op._C.CF.diagonal()
-        ).reshape(shape)
-        k2 = k2 - jnp.einsum("la,sxatz,am->sxtzlm", W, diag, Q)
+        t1 = _l01_line_blocks(operator, W, Q, p1, p2, line)
+        k2 = _l01_pitch_blocks(operator, W, Q, operator_weights)
+        # With several nodes in the other angle direction, the upwind diagonal of that
+        # direction (included in the pointwise diagonal, without its off-diagonal
+        # partners) stiffens the modes that are constant along the line, which keeps
+        # their correction damped. With a single node (axisymmetric fields) that term is
+        # absent, and the magnitude of the streaming diagonal along the line stands in
+        # for it.
+        if nother == 1:
+            k2 = k2 + _l01_line_streaming_shift(operator, W, Q, operator_weights, line)
         # reorder to (s, x, other, line) so the line index is the block-diagonal one
         if line == "t":
             k2 = jnp.moveaxis(k2, 2, 3)

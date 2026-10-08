@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import lineax as lx
 import numpy as np
 from jax.sharding import Mesh
 from jaxtyping import Float
@@ -14,6 +15,7 @@ from scipy.constants import elementary_charge, proton_mass
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1A, DEFAULT_P2A
+from ._fluid import FluidOperator
 from ._krylov import _norm, gcrotmk
 from ._linalg import BorderedOperator, InverseBorderedOperator
 from ._misc import (
@@ -88,7 +90,7 @@ def _build_dke_preconditioner(
     multigrid_options.setdefault("background", background)
     multigrid_options.setdefault("Erho", Erho)
     multigrid_options.setdefault("potentials", potentials)
-    multigrid_options.setdefault("gauge", True)
+    multigrid_options.setdefault("gauge", "shift")
     multigrid_options.setdefault("verbose", verbose)
     multigrid_options.setdefault("coulomb_log", coulomb_log)
     return DKEPreconditioner(**multigrid_options, mesh=mesh)
@@ -385,6 +387,7 @@ def solve_dke(  # noqa: C901
     f1 = options.pop("f1", None)
     coulomb_log = options.pop("coulomb_log", None)
     entropy_norm = options.pop("entropy_norm", True)
+    fluid_correction = options.pop("fluid_correction", True)
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
@@ -449,6 +452,21 @@ def solve_dke(  # noqa: C901
     A, B, C = _shard_dke((A, B, C), mesh)
     operator = BorderedOperator(A, B, C)
     preconditioner = InverseBorderedOperator(M, B, C)
+
+    if fluid_correction:
+        F = FluidOperator(
+            operator,
+            species,
+            speedgrid,
+            pitchgrid,
+            field,
+            background=background,
+            coulomb_log=coulomb_log,
+        )
+        eye = lx.IdentityLinearOperator(operator.in_structure())
+        preconditioner = _freeze_preconditioner(
+            F + preconditioner @ (eye - operator @ F)
+        )
     flexible = not _preconditioner_is_linear(M)
 
     shape = (len(species), speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
@@ -491,6 +509,10 @@ def solve_dke(  # noqa: C901
         flexible=flexible,
         throw=throw,
         weights=split(weights) if entropy_norm else None,
+        residual_floor=split((A._rounding_scale(), jnp.zeros(nsrc))),
+        residual_floor_transpose=split(
+            (A._rounding_scale(transpose=True), jnp.zeros(nsrc))
+        ),
     )
     info = {
         "niter": j1,
