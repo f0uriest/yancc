@@ -7,12 +7,14 @@ from typing import Any, Literal, cast
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import lineax as lx
 import numpy as np
 from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1A, DEFAULT_P2A
+from ._fluid import FluidOperator
 from ._krylov import gcrotmk
 from ._linalg import BorderedOperator, InverseBorderedOperator
 from ._misc import (
@@ -372,6 +374,7 @@ def solve_dke(  # noqa: C901
     f1 = options.pop("f1", None)
     coulomb_log = options.pop("coulomb_log", None)
     entropy_norm = options.pop("entropy_norm", True)
+    fluid_correction = options.pop("fluid_correction", True)
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
 
@@ -431,6 +434,21 @@ def solve_dke(  # noqa: C901
 
     operator = BorderedOperator(A, B, C)
     preconditioner = InverseBorderedOperator(M, B, C)
+
+    if fluid_correction:
+        F = FluidOperator(
+            operator,
+            species,
+            speedgrid,
+            pitchgrid,
+            field,
+            background=background,
+            coulomb_log=coulomb_log,
+        )
+        eye = lx.IdentityLinearOperator(operator.in_structure())
+        preconditioner = _freeze_preconditioner(
+            F + preconditioner @ (eye - operator @ F)
+        )
     flexible = not _preconditioner_is_linear(M)
 
     rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)

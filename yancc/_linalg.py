@@ -1314,6 +1314,96 @@ def cr_block_tridiag_solve(factors, b, *, trans=False) -> jax.Array:
     return _cr_forward_solve(levels, root_inv, s * b)
 
 
+def _block_thomas_solve(lus, L, C, r):
+    """Solve a non-periodic block tridiagonal system from its block LU factors.
+
+    r has shape (m, b, ...). Forward and back substitution are each one loop, so the
+    traced program does not grow with the number of blocks.
+    """
+    # The rhs is the loop carry, overwritten one block at a time, rather than a
+    # scanned input with the solution stacked as scan outputs. jax.linear_transpose
+    # can't transpose a scan whose scanned inputs or outputs are linear, and the
+    # operators using this solve are transposed that way.
+    m = r.shape[0]
+
+    def forward(i, y):
+        lu = jax.tree.map(lambda a: a[i], lus)
+        prev = jnp.where(i > 0, L[i] @ y[jnp.maximum(i - 1, 0)], 0.0)
+        return y.at[i].set(jax.scipy.linalg.lu_solve(lu, y[i] - prev))
+
+    def backward(j, x):
+        i = m - 1 - j
+        nxt = jnp.where(i < m - 1, C[i] @ x[jnp.minimum(i + 1, m - 1)], 0.0)
+        return x.at[i].set(x[i] - nxt)
+
+    y = jax.lax.fori_loop(0, m, forward, r)
+    return jax.lax.fori_loop(0, m, backward, y)
+
+
+@jax.jit
+def block_tridiag_periodic_factor(D, L, U):
+    """Block LU factorization of a periodic block tridiagonal matrix.
+
+    Rows are equilibrated before factoring. Each diagonal block is factored with
+    partial pivoting, but there is no pivoting between blocks.
+
+    Parameters
+    ----------
+    D, L, U : jax.Array, shape (m, b, b)
+        Diagonal, sub- and super-diagonal blocks, so that block row k of the matrix
+        applied to x is ``L[k] x[k-1] + D[k] x[k] + U[k] x[k+1]``, with block indices
+        taken modulo m. Requires m >= 2.
+
+    Returns
+    -------
+    factors : tuple
+        Factors for block_tridiag_periodic_solve.
+    """
+    m, b, _ = D.shape
+    s = _cr_row_scale(D[None], L[None], U[None])[0]
+    D, L, U = D * s[..., None], L * s[..., None], U * s[..., None]
+    # The first m - 1 block rows form a non-periodic block tridiagonal system T,
+    # coupled to the last block through E (rows 0 and m - 2). The last block is then
+    # found from the Schur complement of T.
+    n = m - 1
+    E = jnp.zeros((n, b, b), D.dtype).at[0].set(L[0]).at[n - 1].add(U[n - 1])
+    Lt = L[:n].at[0].set(0.0)
+    Ut = U[:n].at[n - 1].set(0.0)
+
+    def eliminate(c_prev, xs):
+        d, l, u = xs
+        lu = jax.scipy.linalg.lu_factor(d - l @ c_prev)
+        c = jax.scipy.linalg.lu_solve(lu, u)
+        return c, (lu, c)
+
+    _, (lus, C) = jax.lax.scan(eliminate, jnp.zeros((b, b), D.dtype), (D[:n], Lt, Ut))
+    Y = _block_thomas_solve(lus, Lt, C, E)
+    S = D[n] - U[n] @ Y[0] - L[n] @ Y[n - 1]
+    return lus, Lt, C, Y, jax.scipy.linalg.lu_factor(S), U[n], L[n], s
+
+
+def block_tridiag_periodic_solve(factors, r):
+    """Solve a periodic block tridiagonal system.
+
+    Parameters
+    ----------
+    factors : tuple
+        Output of block_tridiag_periodic_factor.
+    r : jax.Array, shape (m, b)
+        Right hand side.
+
+    Returns
+    -------
+    x : jax.Array, shape (m, b)
+    """
+    lus, Lt, C, Y, S, U_last, L_last, s = factors
+    r = s * r
+    y = _block_thomas_solve(lus, Lt, C, r[:-1])
+    x_last = jax.scipy.linalg.lu_solve(S, r[-1] - U_last @ y[0] - L_last @ y[-1])
+    x = y - jnp.einsum("kij,j->ki", Y, x_last)
+    return jnp.concatenate([x, x_last[None]])
+
+
 def _banded_to_blocks(Ab, b, p, q):
     """Non-periodic banded storage (B, p+q+1, N) -> blocks (B, m, b, b).
 

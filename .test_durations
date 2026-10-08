@@ -175,6 +175,7 @@
     "tests/test_finite_diff.py::test_fdfwd_symmetric[6z]": 0.4751357431523502,
     "tests/test_finite_diff.py::test_fdfwd_symmetric[7a]": 0.5173991592600942,
     "tests/test_finite_diff.py::test_fdfwd_symmetric[7b]": 0.5116437911055982,
+    "tests/test_fluid.py::test_fluid_correction": 35.95,
     "tests/test_krylov.py::test_complex_system[gcrotmk]": 0.42,
     "tests/test_krylov.py::test_complex_system[lgmres]": 0.34,
     "tests/test_krylov.py::test_fgmres_base": 0.29,
