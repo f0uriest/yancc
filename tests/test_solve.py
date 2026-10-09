@@ -555,7 +555,7 @@ def test_solve_dke_multispecies_warm_start(field, species2):
     assert info2["nmv"] < info["nmv"]
 
 
-_MULTIDEVICE_SCRIPT = """
+_MULTIDEVICE_PREAMBLE = """
 import json, sys
 import jax
 jax.config.update("jax_num_cpu_devices", 4)
@@ -569,10 +569,15 @@ from yancc import (
 
 field = conftest.field.__wrapped__()
 species = conftest.species2.__wrapped__()
-pitchgrid, speedgrid = UniformPitchAngleGrid(7), MaxwellSpeedGrid(2)
 mesh = jax.make_mesh(
     (2, 2), ("species", "speed"), axis_types=(jax.sharding.AxisType.Auto,) * 2
 )
+"""
+
+_MULTIDEVICE_SCRIPT = (
+    _MULTIDEVICE_PREAMBLE
+    + """
+pitchgrid, speedgrid = UniformPitchAngleGrid(7), MaxwellSpeedGrid(2)
 sol0, info0 = solve_dke(field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10)
 sol1, info1 = solve_dke(
     field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10, mesh=mesh
@@ -590,11 +595,28 @@ amb = [
     for m in (None, mesh)
 ]
 
+print(json.dumps({
+    "nmv": [int(info0["nmv"]), int(info1["nmv"])],
+    "amb_Erho": [float(a[0][0]) for a in amb],
+    "amb_nmv": [int(a[2]["nmv_total"]) for a in amb],
+    "amb_success": [bool(a[2]["success"][0]) for a in amb],
+    "amb_f1_shard": amb[1][1][0].f1.addressable_shards[0].data.size
+    / amb[1][1][0].f1.size,
+    "f1_diff": float(np.abs(sol1.f1 - sol0.f1).max() / np.abs(sol0.f1).max()),
+    "ndevices": len(sol1.f1.sharding.device_set),
+    "f1_shard": sol1.f1.addressable_shards[0].data.size / sol1.f1.size,
+    "U_shard": info1["U"][0].addressable_shards[0].data.size / info1["U"][0].size,
+}))
+"""
+)
 
-# per-device scratch memory, compiled but not run, at a resolution where the fine grids
-# rather than the replicated coarse direct solve dominate memory
-field = field.resample(13, 33)
-pitchgrid, speedgrid = UniformPitchAngleGrid(33), MaxwellSpeedGrid(4)
+_MULTIDEVICE_MEMORY_SCRIPT = (
+    _MULTIDEVICE_PREAMBLE
+    + """
+# compiled but not run, at a resolution where the fine grids rather than the
+# replicated coarse direct solve dominate memory
+field = field.resample(21, 53)
+pitchgrid, speedgrid = UniformPitchAngleGrid(49), MaxwellSpeedGrid(8)
 
 
 def temp_bytes(mesh):
@@ -608,28 +630,15 @@ def temp_bytes(mesh):
     return jax.jit(f1).lower().compile().memory_analysis().temp_size_in_bytes
 
 
-print(json.dumps({
-    "temp_ratio": temp_bytes(mesh) / temp_bytes(None),
-    "nmv": [int(info0["nmv"]), int(info1["nmv"])],
-    "amb_Erho": [float(a[0][0]) for a in amb],
-    "amb_nmv": [int(a[2]["nmv_total"]) for a in amb],
-    "amb_success": [bool(a[2]["success"][0]) for a in amb],
-    "amb_f1_shard": amb[1][1][0].f1.addressable_shards[0].data.size
-    / amb[1][1][0].f1.size,
-    "f1_diff": float(np.abs(sol1.f1 - sol0.f1).max() / np.abs(sol0.f1).max()),
-    "ndevices": len(sol1.f1.sharding.device_set),
-    "f1_shard": sol1.f1.addressable_shards[0].data.size / sol1.f1.size,
-    "U_shard": info1["U"][0].addressable_shards[0].data.size / info1["U"][0].size,
-}))
+print(json.dumps({"temp_ratio": temp_bytes(mesh) / temp_bytes(None)}))
 """
+)
 
 
-def test_solve_dke_mesh_multidevice():
-    """Solves split across 4 CPU devices match unsplit ones, in less memory.
+def _run_multidevice(script):
+    """Run a script on 4 CPU devices in a fresh process, returning its JSON output.
 
-    Covers solve_dke and solve_dke_ambipolar.
-
-    The number of CPU devices is fixed when JAX starts, so this runs in a separate
+    The number of CPU devices is fixed when JAX starts, so these run in a separate
     process to leave the rest of the tests on a single device.
     """
     tests = os.path.dirname(os.path.abspath(__file__))
@@ -638,13 +647,18 @@ def test_solve_dke_mesh_multidevice():
     root = os.path.dirname(os.path.dirname(os.path.abspath(yancc.__file__)))
     env["PYTHONPATH"] = os.pathsep.join([root, env.get("PYTHONPATH", "")])
     out = subprocess.run(
-        [sys.executable, "-c", _MULTIDEVICE_SCRIPT, tests],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
+        [sys.executable, "-c", script, tests], env=env, capture_output=True, text=True
     )
-    res = json.loads(out.stdout.strip().splitlines()[-1])
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_solve_dke_mesh_multidevice():
+    """Solves split across 4 CPU devices match unsplit ones.
+
+    Covers solve_dke and solve_dke_ambipolar.
+    """
+    res = _run_multidevice(_MULTIDEVICE_SCRIPT)
     assert res["nmv"][0] == res["nmv"][1]
     assert all(res["amb_success"])
     assert res["amb_nmv"][0] == res["amb_nmv"][1]
@@ -655,8 +669,14 @@ def test_solve_dke_mesh_multidevice():
     assert res["ndevices"] == 4
     assert res["f1_shard"] == 0.25
     assert res["U_shard"] == 0.25
-    # ideally 1/4, plus memory that doesn't scale with resolution
-    assert res["temp_ratio"] < 0.45
+
+
+def test_solve_dke_mesh_memory():
+    """A solve split across 4 CPU devices needs about a quarter of the memory each."""
+    res = _run_multidevice(_MULTIDEVICE_MEMORY_SCRIPT)
+    # ideally 1/4, plus the coarse direct solve and fluid blocks, which every device
+    # holds whole
+    assert res["temp_ratio"] < 0.35
 
 
 def test_solve_dke_mesh_validation(field, pitchgrid, speedgrid, species2):
