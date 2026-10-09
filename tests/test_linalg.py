@@ -59,8 +59,8 @@ def test_bordered_operator():
     np.testing.assert_allclose(Fi.as_matrix(), np.linalg.inv(Ab), atol=1e-14)
     np.testing.assert_allclose(Fi.T.as_matrix(), np.linalg.inv(Ab.T), atol=1e-14)
 
-    assert Fi.in_structure().shape == (n + k,)
-    assert Fi.out_structure().shape == (n + k,)
+    assert [x.shape for x in Fi.in_structure()] == [(n,), (k,)]
+    assert [x.shape for x in Fi.out_structure()] == [(n,), (k,)]
 
 
 def test_tridiagonal():

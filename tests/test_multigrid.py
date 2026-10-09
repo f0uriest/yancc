@@ -191,9 +191,7 @@ def test_coarse_correction_reduces_error(
         field, pitchgrid, speedgrid, species1
     )
     A_c, A_f = ops[0], ops[1]
-    b = dke_rhs(
-        fields[1], grids[1], speedgrid, species1, Erho, include_constraints=False
-    )
+    b = dke_rhs(fields[1], grids[1], speedgrid, species1, Erho)
     x_true = jnp.linalg.solve(A_f.as_matrix(), b)
     x = jnp.zeros_like(b)
     rk = b - A_f.mv(x)

@@ -23,7 +23,7 @@ Unreleased
 ----------
 ### New features
 - New smoothers, including a theta/zeta plane smoother using surface averaged wind
-  and fast diagonalization via FFT, and theta/zeta line smoothers retaining coupling
+  and fast diagonalization via a 2d Fourier transform, and theta/zeta line smoothers retaining coupling
   between the L0 and L1 Legendre modes in pitch to damp errors that are not smoothed
   by collisions.
 - The multigrid option ``smooth_type`` is now a comma separated string listing the
@@ -36,6 +36,10 @@ Unreleased
 - The multigrid option ``smooth_weights`` can now be a dict mapping entries of
   ``smooth_type`` to their relaxation weight, with the other smoothers using their
   defaults. A single value now applies to every smoother.
+- The recycled Krylov subspace ``info["U"]``, ``info["C"]`` returned by ``solve_dke``
+  and ``DKESolution.f1_krylov`` are now tuples of the parts for ``f1`` and for the
+  source terms, rather than single stacked arrays. The ``U`` and ``f1`` warm start
+  options of ``solve_dke`` accept either form.
 - ``solve_dke`` now stops once the remaining residual is at the level that rounding
   error in the matrix-vector product can explain. At very high collisionality the large
   pitch angle scattering frequency at the lowest speed nodes limits the attainable
@@ -48,6 +52,11 @@ Unreleased
   5-10x for less than 2% extra cost per iteration. Each species' correction is weighted
   smoothly from 0 at low collisionality to 1 at high collisionality, and the correction
   is skipped entirely when no species is collisional.
+- ``solve_dke`` and ``solve_dke_ambipolar`` take a new ``mesh`` argument, a
+  ``jax.sharding.Mesh`` with axes ``"species"`` and/or ``"speed"``, to split a single
+  solve across several devices and reduce the memory needed on each. See the
+  "Multiple devices" section of the performance docs.
+
 
 ### Performance improvements
 - The DKE multigrid preconditioner no longer fixes the density and energy gauge by

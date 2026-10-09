@@ -59,7 +59,7 @@ def test_permutations_mdke(field, pitchgrid):
         )
 
 
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_dke_banded_vs_dense_smoother(
     pitchgrid, speedgrid, species2, field, potentials2, axorder
 ):
@@ -156,7 +156,7 @@ def test_smoothing_dke(field, pitchgrid, v, n, smooth_op):
         gauge=True,
         operator_weights=operator_weights,
     )
-    b = dke_rhs(field, pitchgrid, speedgrid, species, Erho, include_constraints=False)
+    b = dke_rhs(field, pitchgrid, speedgrid, species, Erho)
     x_true = np.linalg.solve(A.as_matrix(), b)
     potentials = A.potentials
     smoothers = get_dke_smoothers(
@@ -317,7 +317,7 @@ def test_get_smoothers_order_and_shared_operator(
         DKEJacobiSmoother,
         DKEL01LineSmoother,
     ]
-    assert group[2].axorder == "atzsx"
+    assert group[2].axorder == "satzx"
     assert [group[0].line, group[3].line] == ["t", "z"]
     # each smoother built on its own, with no shared operator
     kw: dict[str, Any] = dict(
@@ -336,7 +336,7 @@ def test_get_smoothers_order_and_shared_operator(
     direct = [
         DKEL01LineSmoother(**kw, line="t", weight=0.5),
         DKEFrozenPlaneSmoother(**kw),
-        DKEJacobiSmoother(**kw, axorder="atzsx", weight=0.3),
+        DKEJacobiSmoother(**kw, axorder="satzx", weight=0.3),
         DKEL01LineSmoother(**kw, line="z"),
     ]
     _assert_arrays_close(direct, group)
@@ -668,14 +668,15 @@ def test_frozen_plane_dke_default_args(
     assert np.all(np.isfinite(mat))
 
 
-def test_frozen_plane_mdke_matches_dense_block(pitchgrid):
+@pytest.mark.parametrize("nt, nz", [(5, 7), (6, 8)])
+def test_frozen_plane_mdke_matches_dense_block(pitchgrid, nt, nz):
     """On a constant-|B| field the winds are plane-constant so the frozen
     approximation is exact, and each pitch block of the smoother must be
     weight * inv of the true (theta, zeta) sub-block of the MDKE. Also confirms the
     smoother is block-diagonal in pitch and that the plane block has genuine
-    off-diagonal (streaming) coupling for the FFT solve to invert.
+    off-diagonal (streaming) coupling for the plane solve to invert. Even sizes
+    include the Nyquist frequency of the half spectrum.
     """
-    nt, nz = 5, 7
     cfield = _constant_boozer_field(nt, nz)
     erhohat, nuhat, weight = 1e-3, 1e-2, 0.6
     sm = MDKEFrozenPlaneSmoother(

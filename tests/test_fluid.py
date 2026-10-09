@@ -53,8 +53,8 @@ def test_fluid_correction(fluid_field, pitchgrid, speedgrid, species2, monkeypat
     keys = jax.random.split(jax.random.PRNGKey(0), 4)
     c0 = jax.random.normal(keys[0], (ns, 3, field.ntheta, field.nzeta))
     h0 = jax.random.normal(keys[1], (2 * ns,))
-    v = op.mv(jnp.concatenate([fs.prolong(c0), h0]))
-    c1, h1 = fs.solve(fs.restrict(v[:n]), v[n:])
+    v = op.mv((fs.prolong(c0), h0))
+    c1, h1 = fs.solve(fs.restrict(v[0]), v[1])
     np.testing.assert_allclose(c1, c0, rtol=0, atol=1e-8 * float(jnp.max(jnp.abs(c0))))
     # the sources are only weakly determined by the bordered fluid system
     np.testing.assert_allclose(h1, h0, rtol=0, atol=1e-4 * float(jnp.max(jnp.abs(h0))))
@@ -74,17 +74,21 @@ def test_fluid_correction(fluid_field, pitchgrid, speedgrid, species2, monkeypat
     )
 
     # corrected preconditioner around a stand in for the multigrid preconditioner
-    M = lx.DiagonalLinearOperator(1 / jnp.abs(jnp.concatenate([A.diagonal(), h0])))
+    M = lx.DiagonalLinearOperator((1 / jnp.abs(A.diagonal()), 1 / jnp.abs(h0)))
     eye = lx.IdentityLinearOperator(op.in_structure())
 
     def corrected(F):
         return F + M @ (eye - op @ F)
 
-    r = jax.random.normal(keys[0], (n + 2 * ns,))
-    s = jax.random.normal(keys[1], (n + 2 * ns,))
+    r = (jax.random.normal(keys[0], (n,)), jax.random.normal(keys[2], (2 * ns,)))
+    s = (jax.random.normal(keys[1], (n,)), jax.random.normal(keys[3], (2 * ns,)))
     w = jnp.array([0.3, 1.0])
     P = corrected(_fluid.FluidOperator(op, species2, speedgrid, pitchgrid, field, w))
-    np.testing.assert_allclose(jnp.vdot(P.mv(r), s), jnp.vdot(r, P.T.mv(s)), rtol=1e-8)
+
+    def dot(x, y):
+        return jnp.vdot(jnp.concatenate(x), jnp.concatenate(y))
+
+    np.testing.assert_allclose(dot(P.mv(r), s), dot(r, P.T.mv(s)), rtol=1e-8)
 
     # weights only known at run time, all zero turns the correction off
     @jax.jit
@@ -92,8 +96,9 @@ def test_fluid_correction(fluid_field, pitchgrid, speedgrid, species2, monkeypat
         F = _fluid.FluidOperator(op, species2, speedgrid, pitchgrid, field, w)
         return corrected(F).mv(r)
 
-    np.testing.assert_allclose(apply(jnp.zeros(2), r), M.mv(r), rtol=1e-12)
-    np.testing.assert_allclose(apply(jnp.array([0.3, 1.0]), r), P.mv(r), rtol=1e-8)
+    for wr, ref, rtol in [(jnp.zeros(2), M, 1e-12), (jnp.array([0.3, 1.0]), P, 1e-8)]:
+        for x, y in zip(apply(wr, r), ref.mv(r)):
+            np.testing.assert_allclose(x, y, rtol=rtol)
 
     w = _fluid.fluid_weights(species2, field)
     assert jnp.all(((w >= _fluid._MIN_WEIGHT) & (w < 1)) | (w == 0))

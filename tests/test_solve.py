@@ -1,6 +1,9 @@
 """Regression tests comparing yancc to monkes/sfincs etc."""
 
+import json
 import os
+import subprocess
+import sys
 import time
 
 import interpax
@@ -525,9 +528,16 @@ def test_solve_dke_multispecies_warm_start(field, species2):
     f1 = np.asarray(sol.f1).reshape(-1)
     assert f1.size == size
     U = info["U"]
-    assert U.shape[0] == size + 2 * len(species2)
+    assert U[0].shape[0] == size
+    assert U[1].shape[0] == 2 * len(species2)
 
-    # warm-start: feed back the recycled Krylov subspace U and the previous iterate.
+    # warm-start: feed back the recycled Krylov subspace U and the previous iterate,
+    # U as a single stacked array as well as (f, sources) parts are accepted. Also
+    # split over a (single device) mesh, which applies all the sharding constraints
+    # without changing the result.
+    mesh = jax.make_mesh(
+        (1, 1), ("species", "speed"), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    )
     sol2, info2 = solve_dke(
         field,
         pitchgrid,
@@ -537,11 +547,163 @@ def test_solve_dke_multispecies_warm_start(field, species2):
         maxiter=2,
         rtol=1e-12,
         verbose=2,
-        U=U,
+        U=jnp.concatenate(U),
         f1=sol.f1_krylov,
+        mesh=mesh,
     )
     np.testing.assert_allclose(sol.f1, sol2.f1, atol=1e-12, rtol=1e-8)
     assert info2["nmv"] < info["nmv"]
+
+
+_MULTIDEVICE_PREAMBLE = """
+import json, sys
+import jax
+jax.config.update("jax_num_cpu_devices", 4)
+jax.config.update("jax_enable_x64", True)
+import numpy as np
+sys.path.insert(0, sys.argv[1])
+import conftest
+from yancc import (
+    MaxwellSpeedGrid, UniformPitchAngleGrid, solve_dke, solve_dke_ambipolar
+)
+
+field = conftest.field.__wrapped__()
+species = conftest.species2.__wrapped__()
+mesh = jax.make_mesh(
+    (2, 2), ("species", "speed"), axis_types=(jax.sharding.AxisType.Auto,) * 2
+)
+"""
+
+_MULTIDEVICE_SCRIPT = (
+    _MULTIDEVICE_PREAMBLE
+    + """
+pitchgrid, speedgrid = UniformPitchAngleGrid(7), MaxwellSpeedGrid(2)
+sol0, info0 = solve_dke(field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10)
+sol1, info1 = solve_dke(
+    field, pitchgrid, speedgrid, species, 100.0, rtol=1e-10, mesh=mesh
+)
+
+# ambipolar root search around the ion root, with the preconditioner built on the mesh
+# once and reused for every solve. Fewer speeds don't resolve that root.
+Escale = float(field.a_minor * species[0].v_thermal * field.Bmag_fsa)
+bounds = (-4e-2 * Escale, -2e-2 * Escale)
+amb = [
+    solve_dke_ambipolar(
+        field, pitchgrid, MaxwellSpeedGrid(4), species, 1, bounds=bounds,
+        reuse_preconditioner=True, mesh=m,
+    )
+    for m in (None, mesh)
+]
+
+print(json.dumps({
+    "nmv": [int(info0["nmv"]), int(info1["nmv"])],
+    "amb_Erho": [float(a[0][0]) for a in amb],
+    "amb_nmv": [int(a[2]["nmv_total"]) for a in amb],
+    "amb_success": [bool(a[2]["success"][0]) for a in amb],
+    "amb_f1_shard": amb[1][1][0].f1.addressable_shards[0].data.size
+    / amb[1][1][0].f1.size,
+    "f1_diff": float(np.abs(sol1.f1 - sol0.f1).max() / np.abs(sol0.f1).max()),
+    "ndevices": len(sol1.f1.sharding.device_set),
+    "f1_shard": sol1.f1.addressable_shards[0].data.size / sol1.f1.size,
+    "U_shard": info1["U"][0].addressable_shards[0].data.size / info1["U"][0].size,
+}))
+"""
+)
+
+_MULTIDEVICE_MEMORY_SCRIPT = (
+    _MULTIDEVICE_PREAMBLE
+    + """
+# compiled but not run, at a resolution where the fine grids rather than the
+# replicated coarse direct solve dominate memory
+field = field.resample(21, 53)
+pitchgrid, speedgrid = UniformPitchAngleGrid(49), MaxwellSpeedGrid(8)
+
+
+def temp_bytes(mesh):
+    def f1():
+        sol, _ = solve_dke(
+            field, pitchgrid, speedgrid, species, 100.0, mesh=mesh,
+            multigrid_options={"coarse_N": 1000},
+        )
+        return sol.f1
+
+    return jax.jit(f1).lower().compile().memory_analysis().temp_size_in_bytes
+
+
+print(json.dumps({"temp_ratio": temp_bytes(mesh) / temp_bytes(None)}))
+"""
+)
+
+
+def _run_multidevice(script):
+    """Run a script on 4 CPU devices in a fresh process, returning its JSON output.
+
+    The number of CPU devices is fixed when JAX starts, so these run in a separate
+    process to leave the rest of the tests on a single device.
+    """
+    tests = os.path.dirname(os.path.abspath(__file__))
+    env = dict(os.environ)
+    # run against the same yancc as this process
+    root = os.path.dirname(os.path.dirname(os.path.abspath(yancc.__file__)))
+    env["PYTHONPATH"] = os.pathsep.join([root, env.get("PYTHONPATH", "")])
+    out = subprocess.run(
+        [sys.executable, "-c", script, tests], env=env, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_solve_dke_mesh_multidevice():
+    """Solves split across 4 CPU devices match unsplit ones.
+
+    Covers solve_dke and solve_dke_ambipolar.
+    """
+    res = _run_multidevice(_MULTIDEVICE_SCRIPT)
+    assert res["nmv"][0] == res["nmv"][1]
+    assert all(res["amb_success"])
+    assert res["amb_nmv"][0] == res["amb_nmv"][1]
+    np.testing.assert_allclose(res["amb_Erho"][0], res["amb_Erho"][1], rtol=1e-10)
+    assert res["amb_f1_shard"] == 0.25
+    assert res["f1_diff"] < 1e-10
+    # split by species and speed, so each device holds a quarter of f1 and of U
+    assert res["ndevices"] == 4
+    assert res["f1_shard"] == 0.25
+    assert res["U_shard"] == 0.25
+
+
+def test_solve_dke_mesh_memory():
+    """A solve split across 4 CPU devices needs about a quarter of the memory each."""
+    res = _run_multidevice(_MULTIDEVICE_MEMORY_SCRIPT)
+    # ideally 1/4, plus the coarse direct solve and fluid blocks, which every device
+    # holds whole
+    assert res["temp_ratio"] < 0.35
+
+
+def test_solve_dke_mesh_validation(field, pitchgrid, speedgrid, species2):
+    """Meshes that can't split the problem evenly by species and speed are rejected.
+
+    Validation only needs the mesh shape, so a single device repeated stands in for
+    several.
+    """
+    Auto = jax.sharding.AxisType.Auto
+
+    def mesh(shape, names, types=None):
+        devices = np.array(jax.devices()[:1] * int(np.prod(shape))).reshape(shape)
+        types = (Auto,) * len(names) if types is None else types
+        return jax.sharding.Mesh(devices, names, axis_types=types)
+
+    ns, nx = len(species2), speedgrid.nx
+    bad = [
+        (jax.devices()[0], "must be a jax.sharding.Mesh"),
+        (mesh((1,), ("pitch",)), "unknown axis names"),
+        (mesh((1,), ("species",), (jax.sharding.AxisType.Explicit,)), "Auto"),
+        (mesh((ns + 1,), ("species",)), "doesn't divide the number of species"),
+        (mesh((ns, nx + 1), ("species", "speed")), "doesn't divide the number of"),
+        (mesh((nx,), ("speed",)), "one device per species"),
+    ]
+    for m, match in bad:
+        with pytest.raises((ValueError, TypeError), match=match):
+            solve_dke(field, pitchgrid, speedgrid, species2, 1e3, mesh=m)
 
 
 def test_solve_dke_derivatives(field, pitchgrid, speedgrid):

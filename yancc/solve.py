@@ -9,13 +9,14 @@ import jax
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
+from jax.sharding import Mesh
 from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1A, DEFAULT_P2A
 from ._fluid import FluidOperator
-from ._krylov import gcrotmk
+from ._krylov import _norm, gcrotmk
 from ._linalg import BorderedOperator, InverseBorderedOperator
 from ._misc import (
     DKEConstraint,
@@ -30,6 +31,7 @@ from ._preconditioner import (
     _print_dke_resolution_summary,
 )
 from ._root import deflated_root_scalar
+from ._sharding import _shard_dke, _shard_state, _shard_sx, _validate_mesh
 from ._trajectories import DKE, MDKE
 from .field import _FIELD_SOURCE_NAMES, Field
 from .solution import DKESolution, MDKESolution
@@ -76,6 +78,7 @@ def _build_dke_preconditioner(
     coulomb_log,
     verbose,
     multigrid_options,
+    mesh=None,
 ):
     """Build the default multigrid preconditioner for the DKE at a given Erho."""
     multigrid_options = copy.copy(multigrid_options)
@@ -90,7 +93,7 @@ def _build_dke_preconditioner(
     multigrid_options.setdefault("gauge", "shift")
     multigrid_options.setdefault("verbose", verbose)
     multigrid_options.setdefault("coulomb_log", coulomb_log)
-    return DKEPreconditioner(**multigrid_options)
+    return DKEPreconditioner(**multigrid_options, mesh=mesh)
 
 
 def _make_dke_solution(
@@ -300,6 +303,7 @@ def solve_dke(  # noqa: C901
     verbose: bool | int = False,
     multigrid_options: dict | None = None,
     throw: bool = False,
+    mesh: Mesh | None = None,
     **options,
 ) -> tuple[DKESolution, dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
@@ -338,6 +342,12 @@ def solve_dke(  # noqa: C901
     throw : bool, optional
         If True, raise a runtime error if the Krylov solver fails to converge
         (forward solve or tangent solve). Default False.
+    mesh : jax.sharding.Mesh, optional
+        Devices to split the problem across for explicit multi-device parallelism. The
+        mesh axes must be named ``"species"`` and/or ``"speed"`` and have axis type
+        ``jax.sharding.AxisType.Auto``, with sizes dividing the number of species and
+        the number of speed grid points. Speed can only be split when there is one
+        device per species along the ``"species"`` axis. Default is to not split.
 
     Returns
     -------
@@ -346,7 +356,10 @@ def solve_dke(  # noqa: C901
         for computing fluxes and other moments.
     info : dict
         Info about the solve, such as number of iterations, number of matrix-vector
-        products, final residual etc.
+        products, final residual etc. ``info["U"]`` and ``info["C"]`` are the
+        recycled Krylov subspace, as tuples of the parts for ``f1`` and for the source
+        terms, and ``info["U"]`` can be passed back as ``U`` to warm start another
+        solve.
 
     """
     # create a copy so we don't modify user input for repeated calls
@@ -380,6 +393,8 @@ def solve_dke(  # noqa: C901
 
     if background is None:
         background = []
+    ns, nx = len(species), speedgrid.nx
+    _validate_mesh(mesh, ns, nx)
 
     Erho = jnp.asarray(Erho)
     EparB = jnp.asarray(EparB)
@@ -406,8 +421,10 @@ def solve_dke(  # noqa: C901
             coulomb_log,
             verbose,
             multigrid_options,
+            mesh,
         )
-    M = _freeze_preconditioner(M)
+    # a no-op for a preconditioner already built on the mesh, otherwise moves it there
+    M = _shard_dke(_freeze_preconditioner(M), mesh)
 
     if verbose and not skip_init_print:
         M.print_resolution_summary()
@@ -432,6 +449,7 @@ def solve_dke(  # noqa: C901
         coulomb_log=coulomb_log,
     )
 
+    A, B, C = _shard_dke((A, B, C), mesh)
     operator = BorderedOperator(A, B, C)
     preconditioner = InverseBorderedOperator(M, B, C)
 
@@ -444,6 +462,7 @@ def solve_dke(  # noqa: C901
             field,
             background=background,
             coulomb_log=coulomb_log,
+            mesh=mesh,
         )
         eye = lx.IdentityLinearOperator(operator.in_structure())
         preconditioner = _freeze_preconditioner(
@@ -451,33 +470,34 @@ def solve_dke(  # noqa: C901
         )
     flexible = not _preconditioner_is_linear(M)
 
-    rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB, True, True)
     shape = (len(species), speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
-    size = np.prod(shape)
+    size = int(np.prod(shape))
+    nsrc = 2 * len(species)
+    # the constraint equations have zero rhs
+    rhs = (dke_rhs(field, pitchgrid, speedgrid, species, Erho, EparB), jnp.zeros(nsrc))
+    # The bordered operators act on (f, sources) tuples, so f stays a separate array
+    # that can be split across devices along with the operators acting on it.
     if f1 is None:
-        f1 = jnp.zeros(size + 2 * len(species))
+        f1 = (jnp.zeros(size), jnp.zeros(nsrc))
     else:
-        f1 = f1.flatten()
-        assert (f1.shape[0] == size) or (f1.shape[0] == (size + 2 * len(species)))
-        # maybe pad with zeros for sources
-        f1 = jnp.pad(f1, [(0, size + 2 * len(species) - f1.shape[0])])
+        f1 = _krylov_parts(f1, size, nsrc, columns=False)
     if U is None:
-        U = jnp.zeros((size + 2 * len(species), k))
+        U = (jnp.zeros((size, k)), jnp.zeros((nsrc, k)))
     else:
-        assert (U.shape[0] == size) or (U.shape[0] == (size + 2 * len(species)))
-        U = U.reshape((U.shape[0], -1))
-        # maybe pad with zeros for sources
-        U = jnp.pad(U, [(0, size + 2 * len(species) - U.shape[0]), (0, 0)])
+        U = _krylov_parts(U, size, nsrc, columns=True)
 
     if entropy_norm:
         weights = _dke_entropy_weights(species, speedgrid, pitchgrid, field)
     else:
-        weights = jnp.ones_like(rhs)
+        weights = jax.tree.map(jnp.ones_like, rhs)
+
+    def split(v):
+        return (_shard_state(v[0], mesh), v[1])
 
     f1, j1, nmv1, res1, success, C1, U1 = gcrotmk(
         operator,
-        rhs,
-        x0=f1,
+        split(rhs),
+        x0=split(f1),
         MR=preconditioner,
         m=m,
         k=k,
@@ -486,21 +506,19 @@ def solve_dke(  # noqa: C901
         maxiter=jnp.asarray(maxiter),
         verbose=verbose > 1,
         print_every_inner=jnp.asarray(print_every),
-        U=U,
+        U=split(U),
         flexible=flexible,
         throw=throw,
-        weights=weights if entropy_norm else None,
-        residual_floor=jnp.concatenate(
-            [A._rounding_scale(), jnp.zeros(2 * len(species))]
-        ),
-        residual_floor_transpose=jnp.concatenate(
-            [A._rounding_scale(transpose=True), jnp.zeros(2 * len(species))]
+        weights=split(weights) if entropy_norm else None,
+        residual_floor=split((A._rounding_scale(), jnp.zeros(nsrc))),
+        residual_floor_transpose=split(
+            (A._rounding_scale(transpose=True), jnp.zeros(nsrc))
         ),
     )
     info = {
         "niter": j1,
         "nmv": nmv1,
-        "res": res1 / jnp.linalg.norm(jnp.sqrt(weights) * rhs),
+        "res": res1 / _norm(jax.tree.map(lambda w, b: jnp.sqrt(w) * b, weights, rhs)),
         "success": success,
         "C": C1,
         "U": U1,
@@ -515,8 +533,9 @@ def solve_dke(  # noqa: C901
         )
 
     sol = _make_dke_solution(
-        f1, rhs, field, pitchgrid, speedgrid, species, Erho, EparB, background
+        f1, rhs[0], field, pitchgrid, speedgrid, species, Erho, EparB, background
     )
+    sol = eqx.tree_at(lambda s: s.f1, sol, _shard_sx(sol.f1, mesh))
 
     if verbose:
         sol.print_summary()
@@ -527,8 +546,34 @@ def solve_dke(  # noqa: C901
     )
 
 
+def _krylov_parts(v, size, nsrc, columns):
+    """Split a vector or matrix of the bordered DKE system into (f, sources) parts.
+
+    ``v`` is either a tuple of the two parts, or a single array holding the parts
+    stacked along its first dim, in which case the sources may be left off and are
+    then taken to be zero. With ``columns=True``, ``v`` holds a matrix of vectors in
+    its trailing dim.
+    """
+    if isinstance(v, (tuple, list)):
+        f, sources = v
+    else:
+        v = jnp.asarray(v)
+        v = v.reshape((v.shape[0], -1)) if columns else v.flatten()
+        assert v.shape[0] in (size, size + nsrc)
+        f, sources = v[:size], v[size:]
+    tail = (-1,) if columns else ()
+    f = jnp.reshape(f, (size, *tail))
+    if sources.shape[0] == 0:
+        sources = jnp.zeros((nsrc, *f.shape[1:]), dtype=f.dtype)
+    sources = jnp.reshape(sources, (nsrc, *tail))
+    return f, sources
+
+
 def _dke_entropy_weights(species, speedgrid, pitchgrid, field):
-    """Residual weights for the bordered DKE system in the entropy norm."""
+    """Residual weights for the (f, sources) parts of the bordered DKE system.
+
+    The weights are those of the entropy norm.
+    """
     # The linearized collision operator is self-adjoint (and streaming/drifts are
     # anti-self-adjoint) in the inner product sum_s T_s int d^3v f_s g_s / F_Ms.
     # Keeping only the species-dependent constant of that weight, T_s vth_s^6 / n_s,
@@ -543,7 +588,7 @@ def _dke_entropy_weights(species, speedgrid, pitchgrid, field):
     ws = T * vth**6 / n
     ws = ws / ws.max()
     nf = speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
-    return jnp.concatenate([jnp.repeat(ws, nf), jnp.repeat(ws, 2)])
+    return jnp.repeat(ws, nf), jnp.repeat(ws, 2)
 
 
 # Loosest linear solve tolerance used while the radial current is far from zero, and
@@ -580,6 +625,7 @@ class _AmbipolarResidual(eqx.Module):
     verbose: int = eqx.field(static=True)
     throw: bool = eqx.field(static=True)
     adaptive_rtol: bool = eqx.field(static=True)
+    mesh: Mesh | None = eqx.field(static=True)
 
     def solve(self, Erho, f1, U, rtol, verbose):
         return solve_dke(
@@ -596,6 +642,7 @@ class _AmbipolarResidual(eqx.Module):
             f1=f1,
             U=U,
             rtol=rtol,
+            mesh=self.mesh,
             **self.options,
         )
 
@@ -648,6 +695,7 @@ def solve_dke_ambipolar(  # noqa: C901
     scale: Literal["auto"] | float | jax.Array = "auto",
     adaptive_rtol: bool = True,
     root_options: dict | None = None,
+    mesh: Mesh | None = None,
     **options,
 ) -> tuple[jax.Array, list[DKESolution], dict[str, jax.Array]]:
     """Find ambipolar radial electric fields and the corresponding DKE solutions.
@@ -722,6 +770,8 @@ def solve_dke_ambipolar(  # noqa: C901
         Volts), ``maxiter`` (maximum iterations per search) and ``method``
         (``"secant"`` or ``"newton"``). See the Advanced Tuning page of the
         documentation for the full list; the defaults suit most cases.
+    mesh : jax.sharding.Mesh, optional
+        Devices to split each DKE solve across, as in ``solve_dke``.
     **options : dict, optional
         Additional options passed to ``solve_dke``. The Krylov tolerance ``rtol``
         defaults to ``1e-2 * ftol``, and sets the accuracy of the converged roots. The
@@ -770,6 +820,7 @@ def solve_dke_ambipolar(  # noqa: C901
             raise ValueError(f"root_options does not accept option '{key}'")
     if background is None:
         background = []
+    _validate_mesh(mesh, len(species), speedgrid.nx)
 
     if bounds is None:
         # E* = Erho / Escale, normalized to the thermal speed of species[0] at x = 1
@@ -846,6 +897,7 @@ def solve_dke_ambipolar(  # noqa: C901
                 options.get("coulomb_log"),
                 verbose,
                 multigrid_options,
+                mesh,
             )
         )
     options["skip_init_print"] = True
@@ -875,12 +927,14 @@ def solve_dke_ambipolar(  # noqa: C901
         verbose=int(verbose),
         throw=throw,
         adaptive_rtol=adaptive_rtol,
+        mesh=mesh,
     )
 
     ns = len(species)
-    size = ns * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta + 2 * ns
-    f10 = jnp.zeros(size)
-    U0 = jnp.zeros((size, k))
+    size = ns * speedgrid.nx * pitchgrid.nalpha * field.ntheta * field.nzeta
+    # (f, sources) parts, as solve_dke takes and returns them
+    f10 = (jnp.zeros(size), jnp.zeros(2 * ns))
+    U0 = (jnp.zeros((size, k)), jnp.zeros((2 * ns, k)))
     nmv0 = jnp.array(0)
     if scale0 is None:
         # The scale must be the same for every search, so an automatic scale has to be
@@ -922,8 +976,8 @@ def solve_dke_ambipolar(  # noqa: C901
 
     sols = []
     for j in range(num_roots):
-        rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erhos[j], EparB, True, True)
-        f1 = jnp.where(success[j], f1s[j], jnp.nan)
+        rhs = dke_rhs(field, pitchgrid, speedgrid, species, Erhos[j], EparB)
+        f1 = jax.tree.map(lambda x: jnp.where(success[j], x[j], jnp.nan), f1s)
         sols.append(
             _make_dke_solution(
                 f1,

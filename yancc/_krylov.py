@@ -1,8 +1,9 @@
 """GCROT(m,k) and LGMRES krylov solvers."""
 
+import math
 import operator
 from collections.abc import Callable
-from functools import partial
+from functools import partial, reduce
 from typing import Any, cast
 
 import equinox as eqx
@@ -10,7 +11,6 @@ import jax
 import jax.flatten_util
 import jax.numpy as jnp
 import lineax as lx
-import numpy as np
 from jax import lax
 from jax import scipy as jsp
 from jax.tree_util import tree_leaves, tree_map
@@ -40,15 +40,17 @@ def _norm(x: PyTree[Array], axis=None) -> jax.Array:
 ########
 
 
-def _tree_vdot(x, y):
-    xs = tree_leaves(x)
-    ys = tree_leaves(y)
-    return sum(map(_vdot, xs, ys))
+def _tree_vdot(x, y) -> Array:
+    return reduce(operator.add, map(_vdot, tree_leaves(x), tree_leaves(y)))
 
 
 _add = partial(tree_map, operator.add)
 _sub = partial(tree_map, operator.sub)
-_mul = partial(tree_map, operator.mul)
+
+
+def _mul(a, x):
+    """Scalar a times every leaf of the pytree x."""
+    return tree_map(lambda y: a * y, x)
 
 
 def _safe_normalize(x, thresh=None):
@@ -245,65 +247,58 @@ def _gram_schmidt(Q, x, k, method="cgs2"):
         Stores the overlaps of x with the fist k vectors in Q.
     """
     assert method in ["cgs", "cgs2", "mgs"]
-    # flatten trees into dense 1D/2D arrays
-    leaves_Q, treedef_Q = jax.tree_util.tree_flatten(Q)
+    # Each leaf is handled separately, with overlaps summed over leaves, rather than
+    # concatenating the leaves into one matrix. Concatenating would copy the whole
+    # basis, and when the leaves are split across devices it would also gather them.
+    # The column (basis-vector) axis stays last: [N_leaf, ncols], so no [ncols, N]
+    # transpose is ever materialized.
+    Qs = [jnp.reshape(l, (-1, l.shape[-1])) for l in tree_leaves(Q)]
     leaves_x, treedef_x = jax.tree_util.tree_flatten(x)
+    xs = [jnp.reshape(l, (-1,)) for l in leaves_x]
 
-    def prepare_Q_leaf(leaf):
-        # keep the column (basis-vector) axis last: [N_leaf, ncols]. This is a
-        # view of the basis, so we never materialize a [ncols, N] transpose.
-        return jnp.reshape(leaf, (-1, leaf.shape[-1]))
+    def overlaps(xs):
+        # .conj() ensures complex numbers are handled correctly
+        return sum(xl @ Ql.conj() for xl, Ql in zip(xs, Qs))
 
-    Q_mat = jnp.concatenate([prepare_Q_leaf(l) for l in leaves_Q], axis=0)
-    x_flat = jnp.concatenate([jnp.reshape(l, (-1,)) for l in leaves_x], axis=-1)
+    def subtract(xs, h):
+        return [xl - Ql @ h for xl, Ql in zip(xs, Qs)]
 
-    max_k = Q_mat.shape[1]
+    max_k = Qs[0].shape[1]
     if method in ["cgs", "cgs2"]:
         # dynamic mask to handle the dynamic k
         mask = jnp.arange(max_k) < k
 
         # --- PASS 1: Classical Gram-Schmidt ---
-        # .conj() ensures complex numbers are handled correctly. Contracting the
-        # N axis (axis 0 of Q_mat) keeps the basis in its natural [N, ncols]
-        # layout -- no transpose materialized.
-        h1 = x_flat @ Q_mat.conj()
-        h1 = jnp.where(mask, h1, 0.0)  # Apply mask for dynamic k
-        x1 = x_flat - (Q_mat @ h1)  # Vectorized subtraction
+        h1 = jnp.where(mask, overlaps(xs), 0.0)
+        x1 = subtract(xs, h1)
 
         if method == "cgs":
             h_final = h1
-            x_flat_final = x1
+            xs_final = x1
         else:
             # --- PASS 2: Re-orthogonalization ("Twice is Enough") ---
-            h2 = x1 @ Q_mat.conj()
-            h2 = jnp.where(mask, h2, 0.0)  # Apply mask for dynamic k
-            x_flat_final = x1 - (Q_mat @ h2)
+            h2 = jnp.where(mask, overlaps(x1), 0.0)
+            xs_final = subtract(x1, h2)
 
             h_final = h1 + h2
 
     else:  # method == "mgs"
-        h = jnp.zeros(max_k, dtype=Q_mat.dtype)
+        h = jnp.zeros(max_k, dtype=jnp.result_type(*Qs))
 
         def loop(i, carry):
             h_carry, x_carry = carry
-            q_i = Q_mat[:, i]
-            alpha = jnp.vdot(q_i, x_carry)
+            q_i = [Ql[:, i] for Ql in Qs]
+            alpha = sum(jnp.vdot(ql, xl) for ql, xl in zip(q_i, x_carry))
             h_carry = h_carry.at[i].set(alpha)
-            x_carry = x_carry - alpha * q_i
+            x_carry = [xl - alpha * ql for xl, ql in zip(x_carry, q_i)]
 
             return h_carry, x_carry
 
-        h_final, x_flat_final = jax.lax.fori_loop(0, k, loop, (h, x_flat))
-
-    # 3. Unflatten using numpy for static indices
-    split_indices = np.cumsum([l.size for l in leaves_x])[:-1]
-    x_flat_split = jnp.split(x_flat_final, split_indices)
+        h_final, xs_final = jax.lax.fori_loop(0, k, loop, (h, xs))
 
     x_final_leaves = [
-        jnp.reshape(flat_leaf, orig_leaf.shape)
-        for flat_leaf, orig_leaf in zip(x_flat_split, leaves_x)
+        jnp.reshape(xl, orig.shape) for xl, orig in zip(xs_final, leaves_x)
     ]
-
     x_final = jax.tree_util.tree_unflatten(treedef_x, x_final_leaves)
 
     return x_final, h_final
@@ -506,12 +501,12 @@ def _fgmres(  # noqa: C901
     res_arr = jnp.full(size, res)
 
     # Orthogonal projection coefficients
-    B = jnp.zeros((tree_leaves(C)[0].shape[1], size), dtype=v0.dtype)
+    B = jnp.zeros((tree_leaves(C)[0].shape[1], size), dtype=dtype)
 
     # H=QR. We only need R here but need H itself in outer loop, never need Q, we only
     # store Q*e1*beta = beta_vec
-    R = jnp.eye(size, size + 1, dtype=v0.dtype)
-    H = jnp.zeros((size, size + 1), dtype=v0.dtype)
+    R = jnp.eye(size, size + 1, dtype=dtype)
+    H = jnp.zeros((size, size + 1), dtype=dtype)
     beta_vec = jnp.zeros((size + 1), dtype=dtype).at[0].set(res.astype(dtype))
     givens = jnp.zeros((size, 2), dtype=dtype)
 
@@ -936,6 +931,56 @@ def gcrotmk(
     return x, j_outer, nmv, res, success, C, U
 
 
+def _tsqr_blocks(n: int, k: int) -> int:
+    """Number of equal row blocks to split an (n, k) matrix into for a block QR."""
+    # Block boundaries line up with an even split of the rows across devices when the
+    # device count divides the number of blocks. Device counts are usually products
+    # of small primes, so use the part of n made of those.
+    # TODO: can we just use the actual shard sizes here?
+    nb = math.gcd(n, 2**10 * 3**3 * 5**2 * 7**2)
+    # every block needs at least k rows for its R factor to be square
+    while nb > 1 and n // nb < k:
+        nb //= min(p for p in (2, 3, 5, 7) if nb % p == 0)
+    return nb
+
+
+def _tsqr_pivoted(X: PyTree[Array]) -> tuple[Callable, Array, Array]:
+    """Column pivoted QR of the columns of X, stacked over all leaves.
+
+    X is a pytree whose leaves have shape (n_i, k). Returns ``(Q, R, P)`` with
+    ``X[:, P] = Q R`` for the leaves stacked in order, where ``Q`` is given as a
+    function ``Q(M)`` returning the pytree ``Q @ M`` for a (k, k) matrix ``M``.
+    """
+    # Tall skinny QR: a QR of each block of rows, then a pivoted QR of the stacked
+    # small R factors. Since the stacked block Q factors have orthonormal columns
+    # this gives the same R and pivots as a pivoted QR of the whole matrix. A QR of
+    # the whole matrix can't be split across devices, so when X is sharded it would
+    # be gathered in full onto every device, while the block QRs are independent and
+    # only the small stacked R needs gathering.
+    leaves, treedef = jax.tree_util.tree_flatten(X)
+    k = leaves[0].shape[-1]
+    Qbs, Rbs = [], []
+    for x in leaves:
+        n = x.shape[0]
+        nb = _tsqr_blocks(n, k)
+        Qb, Rb = jnp.linalg.qr(x.reshape(nb, n // nb, k))
+        Qbs.append(Qb)
+        Rbs.append(Rb.reshape(-1, k))
+    Q2, R, P = jsp.linalg.qr(jnp.concatenate(Rbs), mode="economic", pivoting=True)
+
+    def Q(M):
+        Q2M = _dot(Q2, M)
+        out, start = [], 0
+        for x, Qb in zip(leaves, Qbs):
+            nb, _, r = Qb.shape
+            Mb = Q2M[start : start + nb * r].reshape(nb, r, -1)
+            start += nb * r
+            out.append(_einsum("bir,brj->bij", Qb, Mb).reshape(x.shape[0], -1))
+        return jax.tree_util.tree_unflatten(treedef, out)
+
+    return Q, R, P
+
+
 def _weighted_floor(scale, sqrtw):
     """Map from x to the floor ``scale * |x|`` in the weighted residual space."""
     if scale is None:
@@ -976,16 +1021,11 @@ def _gcrot_init_UC(
             nmv += nmv_C
         C = tree_map(lambda x: jnp.atleast_2d(x.T).T, C)
         # re-orthogonalize old vectors
-        c = tree_map(lambda x: x[..., 0], C)
-        unflatten = jax.flatten_util.ravel_pytree(c)[1]
-        Carr: jax.Array = jax.vmap(
-            lambda x: jax.flatten_util.ravel_pytree(x)[0], in_axes=1, out_axes=1
-        )(C)
-
-        Q, R, P = jsp.linalg.qr(Carr, mode="economic", pivoting=True)
+        Qblocks, R, P = _tsqr_pivoted(C)
         #   AUP = CP = Q R
         #   U' = U P R^-1
-        tol = jnp.finfo(R.dtype).eps * jnp.abs(R[0, 0]) * max(Q.shape)
+        nrows = sum(x.shape[0] for x in tree_leaves(C))
+        tol = jnp.finfo(R.dtype).eps * jnp.abs(R[0, 0]) * max(nrows, R.shape[1])
         mask = jnp.abs(jnp.diag(R)) > tol
         # Columns of Q beyond the rank of C are orthonormal but not the image of
         # anything in U, so they are dropped from both. Leaving them in C would let the
@@ -1004,7 +1044,7 @@ def _gcrot_init_UC(
         Rinv_D = jax.lax.linalg.triangular_solve(R, D, left_side=True, lower=False)
         M = jnp.zeros_like(Rinv_D).at[P].set(Rinv_D)
         U = tree_map(lambda x: _dot(x, M), U)
-        C = jax.vmap(unflatten, in_axes=1, out_axes=1)(_dot(Q, D))
+        C = Qblocks(D)
         # pad to full size
         U = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), U)
         C = tree_map(lambda x: jnp.pad(x, ((0, 0), (0, k - lc))), C)
@@ -1139,9 +1179,11 @@ def _gcrotmk_solve(
             # decrease the residual. In that case we do a simple line search
             # to damp the update and ensure the residual doesn't increase.
             Au = matvec(u)
-            damp = jnp.linalg.lstsq(Au[:, None], r)[0][0]
-            u = damp * u
-            c = damp * c
+            # least squares step length min_d ||r - d A u||, as an inner product
+            # ratio so a distributed vector needs no gather
+            damp = safediv(_tree_vdot(Au, r), _tree_vdot(Au, Au))
+            u = _mul(damp, u)
+            c = _mul(damp, c)
             x = _add(x, u)
             r = _sub(b, matvec(x))
             beta = _norm(r)
@@ -1567,9 +1609,11 @@ def _lgmres_solve(
             # decrease the residual. In that case we do a simple line search
             # to damp the update and ensure the residual doesn't increase.
             Adx = matvec(dx)
-            damp = jnp.linalg.lstsq(Adx[:, None], r)[0][0]
-            dx = damp * dx
-            ax = damp * ax
+            # least squares step length min_d ||r - d A dx||, as an inner product
+            # ratio so a distributed vector needs no gather
+            damp = safediv(_tree_vdot(Adx, r), _tree_vdot(Adx, Adx))
+            dx = _mul(damp, dx)
+            ax = _mul(damp, ax)
             x = _add(x, dx)
             r = _sub(b, matvec(x))
             beta = _norm(r)
