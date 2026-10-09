@@ -462,6 +462,7 @@ def solve_dke(  # noqa: C901
             field,
             background=background,
             coulomb_log=coulomb_log,
+            mesh=mesh,
         )
         eye = lx.IdentityLinearOperator(operator.in_structure())
         preconditioner = _freeze_preconditioner(

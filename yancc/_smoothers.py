@@ -1178,7 +1178,16 @@ def _l01_pitch_blocks(operator, W, Q, operator_weights):
         jnp.meshgrid(jnp.arange(ns), jnp.arange(nx), jnp.arange(2), indexing="ij"),
         axis=-1,
     ).reshape(-1, 3)
-    kf, kc = jax.lax.map(field_particle_probe, idx)
+    out = jax.eval_shape(field_particle_probe, idx[0])
+    out = jax.tree.map(lambda a: jnp.zeros((idx.shape[0],) + a.shape, a.dtype), out)
+
+    def _body(i, out):
+        res = field_particle_probe(idx[i])
+        return jax.tree.map(
+            lambda o, r: jax.lax.dynamic_update_index_in_dim(o, r, i, 0), out, res
+        )
+
+    kf, kc = jax.lax.fori_loop(jnp.int32(0), jnp.int32(idx.shape[0]), _body, out)
     kf = kf.reshape(ns, nx, 2, nt, nz, 2)
     k2 = k2 + ow[6] * jnp.moveaxis(kf, 2, -1)
     # collision blocks K[s, l, y, x] across speed for each species and l
