@@ -555,10 +555,14 @@ def test_solve_dke_multispecies_warm_start(field, species2):
     assert info2["nmv"] < info["nmv"]
 
 
+# The mesh uses 4 of 8 CPU devices. XLA's CPU runtime has a thread per device or per
+# core, whichever is more, and when a mesh spans every one of those threads they can
+# all block in collectives waiting on a device that never gets to run. Spare devices
+# keep threads free.
 _MULTIDEVICE_PREAMBLE = """
 import json, sys
 import jax
-jax.config.update("jax_num_cpu_devices", 4)
+jax.config.update("jax_num_cpu_devices", 8)
 jax.config.update("jax_enable_x64", True)
 import numpy as np
 sys.path.insert(0, sys.argv[1])
@@ -570,7 +574,10 @@ from yancc import (
 field = conftest.field.__wrapped__()
 species = conftest.species2.__wrapped__()
 mesh = jax.make_mesh(
-    (2, 2), ("species", "speed"), axis_types=(jax.sharding.AxisType.Auto,) * 2
+    (2, 2),
+    ("species", "speed"),
+    axis_types=(jax.sharding.AxisType.Auto,) * 2,
+    devices=jax.devices()[:4],
 )
 """
 
@@ -636,7 +643,7 @@ print(json.dumps({"temp_ratio": temp_bytes(mesh) / temp_bytes(None)}))
 
 
 def _run_multidevice(script):
-    """Run a script on 4 CPU devices in a fresh process, returning its JSON output.
+    """Run a script on many CPU devices in a fresh process, returning its JSON output.
 
     The number of CPU devices is fixed when JAX starts, so these run in a separate
     process to leave the rest of the tests on a single device.
@@ -646,9 +653,23 @@ def _run_multidevice(script):
     # run against the same yancc as this process
     root = os.path.dirname(os.path.dirname(os.path.abspath(yancc.__file__)))
     env["PYTHONPATH"] = os.pathsep.join([root, env.get("PYTHONPATH", "")])
-    out = subprocess.run(
-        [sys.executable, "-c", script, tests], env=env, capture_output=True, text=True
-    )
+
+    # Despite the spare devices, XLA's CPU runtime may still deadlock in a collective
+    # and abort the process once its rendezvous timeout expires. That is independent of
+    # the script, so such an abort is retried.
+    def run():
+        return subprocess.run(
+            [sys.executable, "-c", script, tests],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+    out = run()
+    for _ in range(2):
+        if out.returncode == 0 or "rendezvous" not in out.stderr:
+            break
+        out = run()
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
 
