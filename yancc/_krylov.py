@@ -53,6 +53,18 @@ def _mul(a, x):
     return tree_map(lambda y: a * y, x)
 
 
+def _couple_leaves(x):
+    """Return x unchanged, with every leaf depending on every other.
+
+    A solution leaf that nothing downstream depends on gets a symbolic zero cotangent
+    in reverse mode, which the custom_linear_solve transpose rule of some supported
+    JAX versions passes on to the transposed solve as an invalid argument. Coupling
+    the leaves gives each one a concrete cotangent whenever any of them has one.
+    """
+    z = 0.0 * reduce(operator.add, (jnp.sum(leaf) for leaf in tree_leaves(x)))
+    return tree_map(lambda leaf: leaf + z, x)
+
+
 def _safe_normalize(x, thresh=None):
     """
     Returns the L2-normalized vector (which can be a pytree) x, and optionally
@@ -928,7 +940,7 @@ def gcrotmk(
             A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
         ),
     )
-    return x, j_outer, nmv, res, success, C, U
+    return _couple_leaves(x), j_outer, nmv, res, success, C, U
 
 
 def _tsqr_blocks(n: int, k: int) -> int:
@@ -1507,7 +1519,7 @@ def lgmres(
             A.mv, b, _solve, _transpose_solve, symmetric=False, has_aux=True
         ),
     )
-    return x, j_outer, nmv, res, success, outer_v, outer_Av
+    return _couple_leaves(x), j_outer, nmv, res, success, outer_v, outer_Av
 
 
 def _lgmres_solve(
