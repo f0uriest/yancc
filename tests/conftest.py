@@ -2,7 +2,16 @@
 
 import functools
 import inspect
+import os
 import warnings
+
+# XLA's concurrency-optimized CPU scheduler can deadlock its thread pool when there are
+# few cores, with tasks blocked waiting on work queued behind them in the same pool.
+# This must be set before the XLA backend initializes, and is inherited by subprocesses.
+os.environ["XLA_FLAGS"] = (
+    os.environ.get("XLA_FLAGS", "")
+    + " --xla_cpu_enable_concurrency_optimized_scheduler=false"
+).strip()
 
 _original_warn = warnings.warn
 
