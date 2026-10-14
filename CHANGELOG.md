@@ -1,6 +1,9 @@
 Changelog
 =========
 
+v0.0.3
+------
+### New features
 - ``Field`` has a new optional attribute ``g_sup_rr``, the radial metric element
   ``|grad(rho)|^2``. It is computed automatically when loading from DESC, VMEC,
   ``booz_xform`` and IPP ``.bc`` files, and can be passed to ``Field`` and
@@ -18,10 +21,6 @@ Changelog
     - ``"Vperp"``, ``"V^theta"``, ``"V^zeta"``: perpendicular (diamagnetic and ExB)
       flow, and the contravariant poloidal and toroidal components of the total flow.
   ``Vperp`` and the classical fluxes require ``Field.g_sup_rr``.
-
-Unreleased
-----------
-### New features
 - New smoothers, including a theta/zeta plane smoother using surface averaged wind
   and fast diagonalization via a 2d Fourier transform, and theta/zeta line smoothers retaining coupling
   between the L0 and L1 Legendre modes in pitch to damp errors that are not smoothed
