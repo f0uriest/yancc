@@ -603,7 +603,7 @@ def build_advection_matrix(
             # matters when a stencil reaches past the half-period (very coarse
             # grids); otherwise it is identical, and it matches the
             # convolution-based fdfwd/fdbwd there.
-            n_wrap = jnp.floor(raw_idx / N)
+            n_wrap = (raw_idx // N).astype(x.dtype)
             dx = x[idx] + period * n_wrap - x[i]
         elif bc_type == "symmetric":
             idx = jnp.where(

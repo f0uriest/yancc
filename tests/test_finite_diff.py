@@ -187,7 +187,9 @@ def test_advection_uniform(direction, p, bc):
     else:
         fdfun = fdbwd
 
-    n = 101
+    # n = 49 is a size where a floating-point periodic wrap count rounds below the
+    # integer, so it also guards the periodic seam rows
+    n = 49
     if bc == "periodic":
         a_uni = np.linspace(0, 2 * np.pi, n, endpoint=False)
         domain = (0, 2 * np.pi)
