@@ -265,3 +265,36 @@ def test_composite_newton_cotes_default_limits():
     np.testing.assert_allclose(w_default, w_explicit, atol=1e-12)
     # weights of a quadrature rule on [-1, 1] sum to the interval length.
     np.testing.assert_allclose(jnp.sum(w_default), 2.0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "grid",
+    [
+        # maximally packed quadratic pitch grid: spacing ratio 7 next to xi=0
+        lambda n: QuadraticPitchAngleGrid(n, 1.0).xi,
+        # nodes clustered strongly at the center
+        lambda n: jnp.sinh(6 * (jnp.arange(n) + 0.5) / n * 2 - 6) / jnp.sinh(6),
+        # nodes clustered strongly at the ends
+        lambda n: jnp.tanh(6 * (jnp.arange(n) + 0.5) / n * 2 - 6) / jnp.tanh(6),
+    ],
+    ids=["quadratic_c1", "center_packed", "end_packed"],
+)
+@pytest.mark.parametrize("order", [2, 4, 6])
+def test_newton_cotes_stretched_grids(grid, order):
+    """Stretched grids give positive, symmetric weights that converge at full order."""
+    fun = lambda x: jnp.exp(-((3 * x) ** 2)) * jnp.cos(5 * x)
+    integral_exact = scipy.integrate.quad(fun, -1, 1, epsabs=1e-14, epsrel=1e-14)[0]
+
+    Ns = [31, 61, 121, 241]
+    errs = []
+    for N in Ns:
+        x = grid(N)
+        w = _composite_newton_cotes_weights(x, order=order, global_limits=(-1, 1))
+        assert np.all(w > 0), f"N={N}: min weight {w.min()}"
+        np.testing.assert_allclose(jnp.sum(w), 2.0, rtol=1e-12)
+        # all grids here are symmetric about 0, so the weights should be too
+        np.testing.assert_allclose(w, w[::-1], atol=1e-14)
+        errs.append(np.abs(jnp.sum(w * fun(x)) - integral_exact))
+
+    observed_order, _ = np.polyfit(np.log(Ns), -np.log(errs), deg=1)
+    assert observed_order >= order

@@ -1,5 +1,6 @@
 """Velocity grids for yancc."""
 
+import functools
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import cast
@@ -365,7 +366,12 @@ class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
     """
 
     def __init__(self, nalpha: int):
-        super().__init__(nalpha, _linear_map)
+        self.nalpha = nalpha
+        self.map_func = _MapFunction(_linear_map)
+        self.alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (
+            2 * nalpha
+        )
+        self.xi = -jnp.cos(self.alpha)
         # uniform in a means chebyshev nodes in xi, so we can do better than
         # newton-cotes: fejer type 1 quadrature
         self.wxi = _fejer_type_1_weights(nalpha)
@@ -419,6 +425,7 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
         return self.__class__(nalpha, self.c)
 
 
+@functools.partial(jax.jit, static_argnames="order")
 def _composite_newton_cotes_weights(
     x: jax.Array, order: int, global_limits: tuple | None = None
 ):
@@ -427,7 +434,7 @@ def _composite_newton_cotes_weights(
     Parameters
     ----------
     x : jax.Array
-        Sample points. May be non-uniform
+        Sorted sample points. May be non-uniform.
     order : int
         Formal order of accuracy desired.
     global_limits : tuple of floats
@@ -436,60 +443,111 @@ def _composite_newton_cotes_weights(
     Returns
     -------
     w : jax.Array
-        Quadrature weights.
+        Quadrature weights. All weights are non-negative, and symmetric for nodes
+        symmetric about the center of the integration limits.
     """
     N = x.shape[0]
-    points_per_panel = order + 1
-    R = N % points_per_panel
-    num_main_panels = N // points_per_panel
-
-    # 1. Calculate interior edges exactly as before
-    # This slicing elegantly captures boundaries between main panels AND
-    # the boundary between the last main panel and the remainder panel.
-    end_of_panels = x[points_per_panel - 1 : N - 1 : points_per_panel]
-    start_of_next = x[points_per_panel:N:points_per_panel]
-    interior_edges = (end_of_panels + start_of_next) / 2.0
-
-    # 2. Assign global limits
     if global_limits is not None:
         a, b = global_limits
     else:
         a, b = x[0], x[-1]
 
-    panel_edges = jnp.concatenate([jnp.array([a]), interior_edges, jnp.array([b])])
+    # Each interval between neighboring nodes (and the gaps from the limits to the
+    # end nodes) is integrated with the interpolant through the `order + 1` nodes
+    # nearest to it. Overlapping stencils keep every interval inside its own stencil, so
+    # interior intervals never extrapolate; disjoint panels on strongly non-uniform
+    # nodes extrapolate across the gaps between panels and produce large weights of
+    # both signs. Only the end gaps extrapolate.
+    left = jnp.concatenate([jnp.atleast_1d(a), x])
+    right = jnp.concatenate([x, jnp.atleast_1d(b)])
+    length = right - left
+    center = (left + right) / 2
+    k = jnp.arange(N + 1)
+    max_npts = min(order + 1, N)
 
-    weights = []
+    # The weights are the integrals of the Lagrange basis polynomials through the used
+    # points; unused points are left out of every product and get zero weight.
+    #
+    # Interval k lies between nodes k-1 and k, so an odd number of points can't be
+    # centered on it; averaging the two stencils shifted one node either way keeps
+    # the rule exact to the same degree and makes the weights of a symmetric grid
+    # symmetric.
+    i = jnp.arange(max_npts)
+    npts = i[:, None, None] + 1
+    shifts = jnp.stack([npts // 2, (npts + 1) // 2], axis=1)[..., 0]
+    start = jnp.clip(k - shifts, 0, N - npts)
+    used = i < npts[..., None]
+    idx = jnp.minimum(start[..., None] + i, N - 1)
+    # local scaled coordinate keeps the polynomial coefficients well scaled
+    h = jnp.maximum((x[start + npts - 1] - x[start]) / 2, jnp.abs(length))
+    t = (x[idx] - center[:, None]) / h[..., None]
+    tlo, thi = (left - center) / h, (right - center) / h
+    # root[..., m, j]: t[j] is a root of the m-th basis polynomial
+    root = (i[:, None] != i[None, :]) & used[..., None, :]
+    # ascending monomial coefficients of prod_j (s - t[j]) over the roots of each
+    # basis polynomial. Its degree is at most max_npts - 1, so multiplying by s never
+    # drops a nonzero coefficient.
+    coef = jnp.broadcast_to((i == 0).astype(x.dtype), (*t.shape, max_npts))
+    for j in range(max_npts):
+        times_s = jnp.pad(coef[..., :-1], [(0, 0)] * (coef.ndim - 1) + [(1, 0)])
+        coef = jnp.where(
+            root[..., j, None], times_s - t[..., j, None, None] * coef, coef
+        )
+    denom = jnp.prod(jnp.where(root, t[..., :, None] - t[..., None, :], 1), axis=-1)
+    moments = (
+        h[..., None] * (thi[..., None] ** (i + 1) - tlo[..., None] ** (i + 1)) / (i + 1)
+    )
+    w = jnp.where(used, jnp.einsum("...mp,...p->...m", coef, moments) / denom, 0)
+    # (npts, shift, interval, point) -> (npts * interval, shift * point), so a rule is
+    # looked up with a single flat index (npts - 1) * (N + 1) + interval
+    rules_idx = idx.transpose(0, 2, 1, 3).reshape(max_npts * (N + 1), -1)
+    rules_w = w.transpose(0, 2, 1, 3).reshape(max_npts * (N + 1), -1) / 2
 
-    # 3. Vectorize and compute the main uniform panels
-    if num_main_panels > 0:
-        x_main = x[: N - R].reshape((num_main_panels, points_per_panel))
-        A_main = panel_edges[:num_main_panels]
-        B_main = panel_edges[1 : num_main_panels + 1]
+    def select(npts, rules_w):
+        rule = (npts - 1) * (N + 1) + k
+        return (
+            rules_idx.at[rule].get(mode="promise_in_bounds"),
+            rules_w.at[rule].get(mode="promise_in_bounds"),
+        )
 
-        def vmap_helper(xp, a_edge, b_edge):
-            j = jnp.arange(points_per_panel)
-            V_T = xp[None, :] ** j[:, None]
-            rhs = (b_edge ** (j + 1) - a_edge ** (j + 1)) / (j + 1)
-            return jnp.linalg.solve(V_T, rhs)
+    def assemble(idx, w):
+        return (
+            jnp.zeros(N, dtype=x.dtype)
+            .at[idx.ravel()]
+            .add(w.ravel(), mode="promise_in_bounds")
+        )
 
-        w_main = jax.vmap(vmap_helper)(x_main, A_main, B_main)
-        weights.append(w_main.flatten())
+    # Local rules of degree >= 2 have negative weights even on uniform grids, and on
+    # stretched grids neighboring intervals no longer cancel them, so some summed
+    # weights can come out negative. Starting from full degree everywhere, while any
+    # node has a negative weight, lower the degree of each interval that contributes a
+    # negative local weight to it. A negative summed weight always has a negative
+    # contribution, so the loop stops exactly when all weights are non-negative.
+    # Non-negative weights summing to b - a also have the smallest possible sum of
+    # absolute weights, so this is the only stability safeguard needed, including for
+    # the extrapolating end gaps. This terminates: two-point rules on interior
+    # intervals and one-point rules on the end gaps have only positive weights. The
+    # degree choice is discrete, so it is made on constant weights and the final
+    # weights stay differentiable in x.
+    frozen = jax.lax.stop_gradient(rules_w)
 
-    # 4. Compute the leftover remainder panel
-    if R > 0:
-        x_rem = x[N - R :]
-        A_rem = panel_edges[-2]
-        B_rem = panel_edges[-1]
+    def lower_degree(carry):
+        npts, _ = carry
+        idx, w = select(npts, frozen)
+        weights = assemble(idx, w)
+        bad = jnp.any(
+            (weights.at[idx].get(mode="promise_in_bounds") < 0) & (w < 0), axis=1
+        )
+        return jnp.where(bad, npts - 1, npts), jnp.any(bad)
 
-        # Determine the polynomial degree based on the number of leftover points
-        j = jnp.arange(R)
-        V_T_rem = x_rem[None, :] ** j[:, None]
-        rhs_rem = (B_rem ** (j + 1) - A_rem ** (j + 1)) / (j + 1)
-        w_rem = jnp.linalg.solve(V_T_rem, rhs_rem)
+    npts, _ = jax.lax.while_loop(
+        lambda carry: carry[1],
+        lower_degree,
+        (jnp.full(N + 1, max_npts), jnp.array(True)),
+    )
+    weights = assemble(*select(npts, rules_w))
 
-        weights.append(w_rem)
-
-    return jnp.concatenate(weights)
+    return weights
 
 
 def _fejer_type_1_weights(n):
