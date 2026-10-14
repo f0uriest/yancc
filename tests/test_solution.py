@@ -107,7 +107,12 @@ def test_dkesolution_f1_with_sources_roundtrips(dummy_field, species2):
     sol, _, _ = _make_dke_solution(dummy_field, species2, f1)
     np.testing.assert_allclose(np.asarray(sol.get("particle_source")), particle)
     np.testing.assert_allclose(np.asarray(sol.get("heat_source")), heat)
-    np.testing.assert_allclose(np.asarray(sol.f1_krylov), np.asarray(f1))
+    np.testing.assert_allclose(np.concatenate(sol.f1_krylov), np.asarray(f1))
+    # the same solution from the (f1, sources) parts the Krylov solver works with
+    sol2, _, _ = _make_dke_solution(dummy_field, species2, sol.f1_krylov)
+    np.testing.assert_allclose(sol2.f1, sol.f1)
+    np.testing.assert_allclose(sol2.get("particle_source"), particle)
+    np.testing.assert_allclose(sol2.get("heat_source"), heat)
 
     # nx=5 makes the Maxwell quadrature exact for the density/energy moments
     speedgrid = MaxwellSpeedGrid(5)

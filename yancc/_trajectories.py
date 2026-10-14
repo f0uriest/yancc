@@ -18,6 +18,7 @@ from ._linalg import (
     banded_to_dense,
     dense_to_banded,
 )
+from ._sharding import _shard_sx_leaves
 from ._utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _to_axorder
 from .field import Field
 from .species import LocalMaxwellian
@@ -1660,6 +1661,9 @@ class DKE(AbstractDKEOperator):
             operator_weights=self.operator_weights[4:7],
             coulomb_log=coulomb_log,
         )
+
+    def _shard(self, mesh):
+        return _shard_sx_leaves(self, mesh, len(self.species), self.speedgrid.nx)
 
     def _rounding_scale(self, transpose=False) -> Float[Array, " nf"]:
         """Componentwise scale of the change in ``mv`` when its input is rounded.

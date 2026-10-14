@@ -200,7 +200,8 @@ Cycle and smoothing
      and zeta. The DKE also has ``"x"`` and ``"s"``, line smoothers along speed and
      species.
    - ``"plane"``: a (theta, zeta)-plane smoother that uses only the surface averaged
-     drift and diagonalizes via FFT so it is fast and memory efficient.
+     drift and diagonalizes via a 2d Fourier transform so it is fast and memory
+     efficient.
    - ``"l01t"``, ``"l01z"``: theta and zeta line smoothers acting only on the
      lowest two Legendre moments in pitch (the flux-surface density- and
      flow-like parts of the distribution).

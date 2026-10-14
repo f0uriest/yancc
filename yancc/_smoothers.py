@@ -7,6 +7,7 @@ import equinox as eqx
 import interpax
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import config
 from jaxtyping import ArrayLike, Bool, Float
 
@@ -24,6 +25,7 @@ from ._linalg import (
     lu_solve_banded,
     lu_solve_banded_periodic,
 )
+from ._sharding import _is_array, _shard_leading, _shard_state
 from ._trajectories import (
     DKE,
     MDKE,
@@ -568,6 +570,28 @@ class DKEJacobiSmoother(AbstractYanccOperator):
         else:
             self.mats = jnp.linalg.inv(mats)
 
+    def _shard(self, mesh):
+        # the factors are batched over every coordinate except the line one, in
+        # axorder order
+        sizes = {
+            "s": len(self.species),
+            "x": self.speedgrid.nx,
+            "a": self.pitchgrid.nalpha,
+            "t": self.field.ntheta,
+            "z": self.field.nzeta,
+        }
+        nbatch = self.weight.size // sizes[self.axorder[-1]]
+        mats = jax.tree.map(
+            lambda x: (
+                _shard_leading(x, mesh, self.axorder[:-1])
+                if _is_array(x) and x.shape[0] == nbatch
+                else x
+            ),
+            self.mats,
+        )
+        out = eqx.tree_at(lambda m: m.mats, self, mats)
+        return eqx.tree_at(lambda m: m.weight, out, _shard_state(self.weight, mesh))
+
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
@@ -643,8 +667,51 @@ class DKEJacobiSmoother(AbstractYanccOperator):
         )
 
 
+def _plane_dft_solve(x, invsym):
+    """Apply a (theta, zeta) circulant inverse given by its half-spectrum symbol.
+
+    ``x`` has shape (n1, nt, nz) and ``invsym`` shape (n1, nt, nz//2 + 1), the inverse
+    symbol at the 2d rfft frequencies. Equivalent to
+    ``irfft2(rfft2(x) * invsym, s=(nt, nz))``.
+    """
+    n1, nt, nz = x.shape
+    nq = nz // 2 + 1
+    # The transforms are applied as dense real DFT matrices rather than FFTs. XLA's
+    # SPMD partitioner can't split an FFT along its batch axes, so when the state is
+    # sharded an FFT gathers the whole array onto every device, while batched matmuls
+    # partition along the batch axis with no communication. The dense form is also
+    # faster than XLA's FFT at the plane sizes used here. Complex values are carried
+    # as stacked (real, imaginary) parts so every product is a real matmul.
+    Ft = np.fft.fft(np.eye(nt), axis=0)
+    Fti = np.fft.ifft(np.eye(nt), axis=0)
+    Fz = np.fft.rfft(np.eye(nz), axis=0)
+    # rfft along zeta: (nz,) -> (re, im) of the nq non-negative frequencies
+    Fz2 = np.concatenate([Fz.real, Fz.imag], axis=0)
+    # complex theta DFTs acting on stacked (re, im) parts
+    Ft2 = np.block([[Ft.real, -Ft.imag], [Ft.imag, Ft.real]])
+    Fti2 = np.block([[Fti.real, -Fti.imag], [Fti.imag, Fti.real]])
+    # irfft is real-linear in the (re, im) parts of the half spectrum
+    G2 = np.concatenate(
+        [
+            np.fft.irfft(np.eye(nq), n=nz, axis=0),
+            np.fft.irfft(1j * np.eye(nq), n=nz, axis=0),
+        ],
+        axis=1,
+    )
+    dtype = x.dtype
+    a = jnp.einsum("btz,pz->btp", x, Fz2.astype(dtype))
+    a = a.reshape(n1, nt, 2, nq).transpose(0, 2, 1, 3).reshape(n1, 2 * nt, nq)
+    z = jnp.einsum("kt,btq->bkq", Ft2.astype(dtype), a).reshape(n1, 2, nt, nq)
+    zr, zi = z[:, 0], z[:, 1]
+    sr, si = invsym.real, invsym.imag
+    z = jnp.stack([zr * sr - zi * si, zr * si + zi * sr], axis=1)
+    w = jnp.einsum("kt,btq->bkq", Fti2.astype(dtype), z.reshape(n1, 2 * nt, nq))
+    w = w.reshape(n1, 2, nt, nq).transpose(0, 2, 1, 3).reshape(n1, nt, 2 * nq)
+    return jnp.einsum("btp,zp->btz", w, G2.astype(dtype))
+
+
 class DKEFrozenPlaneSmoother(AbstractYanccOperator):
-    """Frozen (theta, zeta)-plane smoother for DKE, applied via FFT.
+    """Frozen (theta, zeta)-plane smoother for DKE, applied via 2d DFT.
 
     The exact (theta, zeta) plane block couples the two angle directions through the
     variable-coefficient streaming/ExB winds, giving distinct (nt*nz)^2 dense blocks per
@@ -652,9 +719,10 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
     This smoother freezes the winds to their flux-surface average c_theta, c_zeta so
     the block becomes a single constant-coefficient operator
     ``c_theta Dtheta + c_zeta Dzeta + d I`` shared across (theta, zeta). Because Dtheta,
-    Dzeta are periodic-circulant, it is diagonalized by the 2d FFT: only the
-    per-(s, x, a) inverse symbol 1/lambda(k_theta, k_zeta) is stored (O(N) memory) and
-    the solve is FFT2 / divide / IFFT2 (O(N log(nt*nz))). The collision part enters
+    Dzeta are periodic-circulant, it is diagonalized by the 2d discrete Fourier
+    transform: only the per-(s, x, a) inverse symbol 1/lambda(k_theta, k_zeta) is
+    stored (O(N) memory) and the solve is DFT2 / divide / IDFT2, applied as dense
+    transform matrices (O(N (nt + nz))). The collision part enters
     exactly through the operator diagonal; only the geometry winds are frozen to their
     mean. It does not couple different pitch, speed or species nodes, so it is meant to
     be composed with smoothers that do. The exact theta and zeta lines can additionally
@@ -781,6 +849,11 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
             jnp.abs(lam) > jnp.finfo(lam.real.dtype).eps, 1.0 / lam, 0.0
         )
 
+    def _shard(self, mesh):
+        return eqx.tree_at(
+            lambda m: m.invsym, self, _shard_leading(self.invsym, mesh, "sx")
+        )
+
     @eqx.filter_jit
     def mv(self, vector):
         """Matrix vector product."""
@@ -788,9 +861,7 @@ class DKEFrozenPlaneSmoother(AbstractYanccOperator):
             n1, nt, nz = self.invsym.shape[0], self.field.ntheta, self.field.nzeta
             # native sxatz flatten -> (ns*nx*na, nt, nz); theta, zeta are inner axes
             x = vector.reshape(n1, nt, nz)
-            y = jnp.fft.irfft2(
-                jnp.fft.rfft2(x, axes=(1, 2)) * self.invsym, s=(nt, nz), axes=(1, 2)
-            )
+            y = _plane_dft_solve(x, self.invsym)
             return (self.weight * y).reshape(-1)
 
     def in_structure(self):
@@ -885,7 +956,7 @@ class DKELaplacian(AbstractYanccOperator):
 
 
 class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
-    """Frozen (theta, zeta)-plane smoother for MDKE, applied via FFT.
+    """Frozen (theta, zeta)-plane smoother for MDKE, applied via 2d DFT.
 
     The monoenergetic analog of :class:`DKEFrozenPlaneSmoother`. The exact
     (theta, zeta) plane block couples the two angle directions through the
@@ -894,9 +965,10 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
     This smoother freezes the winds to their flux-surface average c_theta, c_zeta so
     the block becomes a single constant-coefficient operator
     ``c_theta Dtheta + c_zeta Dzeta + d I`` shared across (theta, zeta). Because Dtheta,
-    Dzeta are periodic-circulant, it is diagonalized by the 2d FFT: only the per-pitch
-    inverse symbol 1/lambda(k_theta, k_zeta) is stored (O(N) memory) and the solve is
-    FFT2 / divide / IFFT2 (O(N log(nt*nz))). The pitch-angle scattering enters exactly
+    Dzeta are periodic-circulant, it is diagonalized by the 2d discrete Fourier
+    transform: only the per-pitch inverse symbol 1/lambda(k_theta, k_zeta) is stored
+    (O(N) memory) and the solve is DFT2 / divide / IDFT2, applied as dense transform
+    matrices (O(N (nt + nz))). The pitch-angle scattering enters exactly
     through the operator diagonal; only the geometry winds are frozen to their mean.
     It does not couple different pitch nodes, so it is meant to be composed with
     smoothers that do. The exact theta and zeta lines can additionally damp the
@@ -992,9 +1064,7 @@ class MDKEFrozenPlaneSmoother(AbstractYanccOperator):
             na, nt, nz = self.invsym.shape[0], self.field.ntheta, self.field.nzeta
             # native atz flatten -> (na, nt, nz); theta, zeta are inner axes
             x = vector.reshape(na, nt, nz)
-            y = jnp.fft.irfft2(
-                jnp.fft.rfft2(x, axes=(1, 2)) * self.invsym, s=(nt, nz), axes=(1, 2)
-            )
+            y = _plane_dft_solve(x, self.invsym)
             return (self.weight * y).reshape(-1)
 
     def in_structure(self):
@@ -1108,7 +1178,16 @@ def _l01_pitch_blocks(operator, W, Q, operator_weights):
         jnp.meshgrid(jnp.arange(ns), jnp.arange(nx), jnp.arange(2), indexing="ij"),
         axis=-1,
     ).reshape(-1, 3)
-    kf, kc = jax.lax.map(field_particle_probe, idx)
+    out = jax.eval_shape(field_particle_probe, idx[0])
+    out = jax.tree.map(lambda a: jnp.zeros((idx.shape[0],) + a.shape, a.dtype), out)
+
+    def _body(i, out):
+        res = field_particle_probe(idx[i])
+        return jax.tree.map(
+            lambda o, r: jax.lax.dynamic_update_index_in_dim(o, r, i, 0), out, res
+        )
+
+    kf, kc = jax.lax.fori_loop(jnp.int32(0), jnp.int32(idx.shape[0]), _body, out)
     kf = kf.reshape(ns, nx, 2, nt, nz, 2)
     k2 = k2 + ow[6] * jnp.moveaxis(kf, 2, -1)
     # collision blocks K[s, l, y, x] across speed for each species and l
@@ -1357,6 +1436,11 @@ class DKEL01LineSmoother(AbstractYanccOperator):
             "bilm,ij->biljm", k2, jnp.eye(n)
         )
         self._inv = jnp.linalg.inv(B.reshape(nblk, 2 * n, 2 * n))
+
+    def _shard(self, mesh):
+        return eqx.tree_at(
+            lambda m: m._inv, self, _shard_leading(self._inv, mesh, "sx")
+        )
 
     @eqx.filter_jit
     def mv(self, vector):

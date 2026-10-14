@@ -2,12 +2,14 @@
 
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
 from jaxtyping import Float
 from scipy.constants import elementary_charge
 
+from ._sharding import _shard_state
 from .field import Field
 from .species import LocalMaxwellian
 from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
@@ -85,6 +87,10 @@ class DKESources(lx.MatrixLinearOperator):
         sa = [jnp.concatenate([s1s, s2s]).T for s1s, s2s in zip(s1a, s2a)]
         super().__init__(jax.scipy.linalg.block_diag(*sa))
 
+    def _shard(self, mesh):
+        # rows are the flattened (species, speed, ...) state
+        return eqx.tree_at(lambda m: m.matrix, self, _shard_state(self.matrix, mesh, 0))
+
 
 class DKEConstraint(lx.MatrixLinearOperator):
     """Constraints to fix gauge freedom in density and energy.
@@ -146,6 +152,10 @@ class DKEConstraint(lx.MatrixLinearOperator):
         Ia = [jnp.concatenate([Ips, Ies]) for Ips, Ies in zip(Ipa, Iea)]
         super().__init__(jax.scipy.linalg.block_diag(*Ia))
 
+    def _shard(self, mesh):
+        # columns are the flattened (species, speed, ...) state
+        return eqx.tree_at(lambda m: m.matrix, self, _shard_state(self.matrix, mesh, 1))
+
 
 def radial_magnetic_drift(
     field: Field,
@@ -190,7 +200,6 @@ def dke_rhs(
     species: list[LocalMaxwellian],
     Erho: float | Float[Any, ""],
     EparB: float | Float[Any, ""] = 0.0,
-    include_constraints: bool = True,
     single_rhs: bool = True,
 ) -> jax.Array:
     """RHS of DKE as solved in SFINCS.
@@ -209,8 +218,6 @@ def dke_rhs(
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
     EparB : float
         <E||B>, flux surface average of parallel electric field times B.
-    include_constraints : bool
-        Whether to append zeros to the rhs for constraint equations.
     single_rhs : bool
         If True, return a single combined rhs vector. If False, return ns*3 rhs, each
         unit drive, for computing the transport matrix.
@@ -218,7 +225,7 @@ def dke_rhs(
     Returns
     -------
     f : jax.Array
-        RHS of linear DKE.
+        RHS of linear DKE, with the distribution function flattened in its last dim.
     """
     rhs = _dke_rhs_3(field, pitchgrid, speedgrid, species)
     if single_rhs:
@@ -230,8 +237,6 @@ def dke_rhs(
         rhs = jnp.swapaxes(rhs, 0, 1)
         rhs = rhs.reshape((3 * len(species), -1))
 
-    if include_constraints:
-        rhs = jnp.pad(rhs, [(0, 0), (0, 2 * len(species))])
     return rhs.squeeze()
 
 

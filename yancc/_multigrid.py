@@ -12,6 +12,7 @@ import numpy as np
 from jaxtyping import Array, Float, Int
 
 from ._linalg import AbstractYanccOperator, DenseLUInverseOperator
+from ._sharding import _shard_dke
 from ._smoothers import (
     DKEFrozenPlaneSmoother,
     DKEJacobiSmoother,
@@ -39,7 +40,7 @@ def get_mdke_operators(fields, pitchgrids, erhohat, nuhat, p1, p2, gauge, **opti
     return operators
 
 
-@functools.partial(jax.jit, static_argnames=["p1", "p2"])
+@functools.partial(jax.jit, static_argnames=["p1", "p2", "mesh"])
 @jax.named_call
 def get_dke_operators(
     fields,
@@ -53,9 +54,13 @@ def get_dke_operators(
     p2,
     gauge,
     coulomb_log=None,
+    mesh=None,
     **options,
 ):
-    """Get multigrid operators for each field, pitchgrid."""
+    """Get multigrid operators for each field, pitchgrid.
+
+    If ``mesh`` is given, the operators are split across it by species and speed.
+    """
     operators = []
     for field, pitchgrid in zip(fields, pitchgrids):
         op = DKE(
@@ -72,17 +77,21 @@ def get_dke_operators(
             coulomb_log=coulomb_log,
             **options,
         )
-        operators.append(op)
+        operators.append(_shard_dke(op, mesh))
     return operators
 
 
-# Axorder for each DKE line smoother; the last axis is the relaxed direction.
+# Axorder for each DKE line smoother; the last axis is the relaxed direction. The
+# lines are solved independently so the order of the batch axes doesn't change the
+# result, but keeping species and speed leading (where possible) keeps the stored
+# factors and the state vector aligned when the batch is split across devices by
+# species and speed.
 _DKE_LINE_AXORDERS = {
-    "x": "atzsx",
-    "a": "tzsxa",
+    "x": "satzx",
+    "a": "sxtza",
     "s": "xatzs",
     "z": "sxatz",
-    "t": "zsxat",
+    "t": "sxazt",
 }
 _DKE_SMOOTHER_TOKENS = (*_DKE_LINE_AXORDERS, "plane", "l01t", "l01z")
 
@@ -137,6 +146,7 @@ def get_dke_smoothers(
     operator_weights=None,
     coulomb_log=None,
     operators=None,
+    mesh=None,
     **options,
 ):
     """Get the multigrid smoothers for each field, pitchgrid.
@@ -153,6 +163,8 @@ def get_dke_smoothers(
 
     ``operators``, if given, are the DKE operator on each level built from the same
     arguments, and are shared by the smoothers rather than building new ones.
+
+    If ``mesh`` is given, the smoothers are split across it by species and speed.
     """
     tokens = _parse_smooth_type(smooth_type, _DKE_SMOOTHER_TOKENS)
     weights = _smoother_weights(weight, tokens)
@@ -206,7 +218,7 @@ def get_dke_smoothers(
                 smoother = DKEFrozenPlaneSmoother(**common, weight=w)
             else:  # tok in ("l01t", "l01z"), the only remaining valid token
                 smoother = DKEL01LineSmoother(**common, line=tok[-1], weight=w)
-            group.append(smoother)
+            group.append(_shard_dke(smoother, mesh))
         smoothers.append(group)
     return smoothers
 

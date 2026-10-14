@@ -50,7 +50,7 @@ def test_scipy_operators(p1, p2, erhohat, nuhat, gauge, field, pitchgrid):
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_speed(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -79,7 +79,7 @@ def test_diagonals_dke_speed(
 
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("p1", ["2d", "4d"])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_theta(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
@@ -116,7 +116,7 @@ def test_diagonals_dke_theta(
 
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("p1", ["2d", "4d"])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_zeta(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
@@ -153,7 +153,7 @@ def test_diagonals_dke_zeta(
 
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("p1", ["2d", "4d"])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_pitch(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p1
 ):
@@ -190,7 +190,7 @@ def test_diagonals_dke_pitch(
 
 @pytest.mark.parametrize("gauge", [True, False])
 @pytest.mark.parametrize("p2", [2, 4])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_pitch_angle_scattering(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2, p2
 ):
@@ -217,7 +217,7 @@ def test_diagonals_dke_pitch_angle_scattering(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_energy_scattering(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -244,7 +244,7 @@ def test_diagonals_dke_energy_scattering(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_CD(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -270,7 +270,7 @@ def test_diagonals_dke_CD(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_CG(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -296,7 +296,7 @@ def test_diagonals_dke_CG(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_CH(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -322,7 +322,7 @@ def test_diagonals_dke_CH(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_CF(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -350,7 +350,7 @@ def test_diagonals_dke_CF(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_FokkerPlanck(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):
@@ -392,7 +392,7 @@ def test_diagonals_dke_FokkerPlanck(
 
 
 @pytest.mark.parametrize("gauge", [True, False])
-@pytest.mark.parametrize("axorder", ["sxatz", "zsxat", "tzsxa", "atzsx", "xatzs"])
+@pytest.mark.parametrize("axorder", ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"])
 def test_diagonals_dke_full(
     gauge, axorder, field, pitchgrid, speedgrid, species2, potentials2
 ):

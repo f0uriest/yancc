@@ -9,10 +9,12 @@ import numpy as np
 from ._finite_diff import fd_coeffs
 from ._linalg import (
     TransposedLinearOperator,
+    _bordered_as_matrix,
     _ruiz_scale,
     block_tridiag_periodic_factor,
     block_tridiag_periodic_solve,
 )
+from ._sharding import _replicate
 from .species import _nustar_species
 
 
@@ -172,7 +174,7 @@ class _FluidSolver(eqx.Module):
     nborder: int = eqx.field(static=True)
     dense: bool = eqx.field(static=True)
 
-    def __init__(self, A, B, C, species, speedgrid, pitchgrid, field):
+    def __init__(self, A, B, C, species, speedgrid, pitchgrid, field, mesh=None):
         ns, nx = len(species), speedgrid.nx
         na, nt, nz = pitchgrid.nalpha, field.ntheta, field.nzeta
         self.shape = (ns, nx, na, nt, nz)
@@ -192,6 +194,8 @@ class _FluidSolver(eqx.Module):
         # line terms: (s, i', i, z, t, t') and (s, i', i, t, z, z')
         Kt = _line_blocks(A._opt, "t", w[2], V, Psi)
         Kz = _line_blocks(A._opz, "z", w[3], V, Psi)
+        if mesh is not None:
+            Kloc, Kt, Kz = _replicate((Kloc, Kt, Kz), mesh)
 
         bw = _stencil_halfwidth(A)
         groups = _plane_groups(nz, bw if nz > 1 else 1)
@@ -240,9 +244,7 @@ class _FluidSolver(eqx.Module):
                 len(offsets), m, g * b0, g * b0
             )
 
-        # diagonal blocks first, then the sub- and super-diagonal ones if needed
-        blocks = group_blocks([0] if self.dense else [0, -1, 1])
-        D = blocks[0]
+        D = group_blocks([0])[0]
 
         # pin the fluid density and energy of each species at one point, removing the
         # null space of the ungauged operator; the pins are undone in the Schur step
@@ -256,7 +258,9 @@ class _FluidSolver(eqx.Module):
             lu = jax.scipy.linalg.lu_factor(r[:, None] * D[0] * c[None, :])
             self.factors = (lu, r, c)
         else:
-            self.factors = block_tridiag_periodic_factor(D, blocks[1], blocks[2])
+            self.factors = block_tridiag_periodic_factor(
+                D, group_blocks([-1])[0], group_blocks([1])[0]
+            )
 
         # low rank border: sources/constraints, pins and the surface exchange term
         Bm = B.as_matrix().T.reshape(-1, *self.shape)  # (nb, ns, nx, na, nt, nz)
@@ -368,6 +372,7 @@ class FluidOperator(lx.AbstractLinearOperator):
         weights=None,
         background=(),
         coulomb_log=None,
+        mesh=None,
     ):
         if weights is None:
             weights = jax.lax.stop_gradient(
@@ -380,22 +385,23 @@ class FluidOperator(lx.AbstractLinearOperator):
         # and the sources and constraints of the bordered system are what make it
         # invertible, so the fluid projection includes them. This makes F the exact
         # Galerkin inverse of the operator the Krylov solver sees.
-        self.fluid = _FluidSolver(A.A, A.B, A.C, species, speedgrid, pitchgrid, field)
+        self.fluid = _FluidSolver(
+            A.A, A.B, A.C, species, speedgrid, pitchgrid, field, mesh=mesh
+        )
 
     def mv(self, vector):
         """Matrix vector product."""
         fluid = self.fluid
-        n = int(np.prod(fluid.shape))
+        f, h = vector
         # each species has 3 fluid amplitudes per point and 2 sources
         wc = self.weights[:, None, None, None]
         wh = jnp.repeat(self.weights, fluid.nborder // self.weights.size)
-        c, h = fluid.solve(fluid.restrict(vector[:n]), vector[n:])
-        return jnp.concatenate([fluid.prolong(wc * c), wh * h])
+        c, h = fluid.solve(fluid.restrict(f), h)
+        return (fluid.prolong(wc * c), wh * h)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""

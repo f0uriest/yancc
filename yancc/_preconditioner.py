@@ -6,6 +6,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import lineax as lx
+from jax.sharding import Mesh
 from jaxtyping import Array, ArrayLike, Float
 
 from ._collisions import RosenbluthPotentials
@@ -27,6 +28,7 @@ from ._multigrid import (
     get_prolongations,
     get_restrictions,
 )
+from ._sharding import _validate_mesh
 from ._trajectories import DKE, MDKE
 from .field import Field
 from .species import LocalMaxwellian, _collisionality
@@ -287,6 +289,11 @@ class DKEPreconditioner(MultigridOperator):
         Radial electric field, Erho = -∂Φ/∂ρ, in Volts (ρ dimensionless).
     background : list of LocalMaxwellian, optional
         Background species for inter-species collisions.
+    potentials : RosenbluthPotentials
+        Rosenbluth potentials for the collision operator.
+    mesh : jax.sharding.Mesh, optional
+        Devices to split the preconditioner across, with axes named ``"species"``
+        and/or ``"speed"``.
     """
 
     field: Field
@@ -308,8 +315,10 @@ class DKEPreconditioner(MultigridOperator):
         background: list[LocalMaxwellian] | None,
         potentials: RosenbluthPotentials,
         verbose: bool | int = False,
+        mesh: Mesh | None = None,
         **options,
     ):
+        _validate_mesh(mesh, len(species), speedgrid.nx)
         self.field = field
         self.pitchgrid = pitchgrid
         self.speedgrid = speedgrid
@@ -366,6 +375,7 @@ class DKEPreconditioner(MultigridOperator):
             gauge=gauge is True,
             operator_weights=operator_weights,
             coulomb_log=coulomb_log,
+            mesh=mesh,
         )
         smoothers = get_dke_smoothers(
             fields=fields,
@@ -390,6 +400,7 @@ class DKEPreconditioner(MultigridOperator):
                 and smoother_weights is operator_weights
                 else None
             ),
+            mesh=mesh,
         )
         # With gauge="shift" the level operators keep the null space of the DKE (a
         # density and an energy mode for each species) rather than replacing equations
