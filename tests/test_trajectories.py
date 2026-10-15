@@ -20,7 +20,7 @@ from yancc._collisions import (
 from yancc._finite_diff import build_advection_matrix, fd_kwargs
 from yancc._linalg import banded_to_dense
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen, _Estar, _nustar
-from yancc.velocity_grids import QuadraticPitchAngleGrid
+from yancc.velocity_grids import MDKEGaussianPitchAngleGrid
 
 
 def extract_blocks(a, m):
@@ -50,7 +50,7 @@ def test_pitch_operator_nonuniform(field, p1):
     operator must build its forward/backward matrices from ``pitchgrid.a`` with
     symmetric BCs on [0, pi] (not the uniform ``h = pi/na`` assumption).
     """
-    grid = QuadraticPitchAngleGrid(31, 0.6)
+    grid = MDKEGaussianPitchAngleGrid(31, field, 0.0, 1e-4)
     op = trajectories.MDKEPitch(field, grid, erhohat=0.0, p1=p1)
 
     kwargs = fd_kwargs[p1]

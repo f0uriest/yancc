@@ -28,7 +28,7 @@ from yancc.field import Field
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen, LocalMaxwellian
 from yancc.velocity_grids import (
     MaxwellSpeedGrid,
-    QuadraticPitchAngleGrid,
+    MDKEGaussianPitchAngleGrid,
     UniformPitchAngleGrid,
 )
 
@@ -43,7 +43,9 @@ def test_dkelaplacian_requires_uniform(field, pitchgrid, speedgrid, species2):
     DKELaplacian(field, pitchgrid, speedgrid, species2)
     # non-uniform grid is rejected
     with pytest.raises(AssertionError):
-        DKELaplacian(field, QuadraticPitchAngleGrid(9, 0.5), speedgrid, species2)
+        DKELaplacian(
+            field, MDKEGaussianPitchAngleGrid(9, field, 0.0, 1e-4), speedgrid, species2
+        )
 
 
 def test_permutations_mdke(field, pitchgrid):

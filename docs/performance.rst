@@ -61,14 +61,6 @@ of how those points are *distributed* in :math:`\alpha`:
   class: pass it your own smooth, positive node density as a function of
   :math:`\xi = v_\parallel / v` to place nodes wherever your problem needs
   resolution.
-- :class:`~yancc.QuadraticPitchAngleGrid` packs points more
-  densely near :math:`v_\parallel = 0` (:math:`\alpha = \pi/2`), where the sharp
-  trapped/passing boundary layers form at low collisionality. It can resolve
-  those layers with fewer total points than a uniform grid, so it is often the
-  better choice when :math:`\nu^* \to 0`. It takes a second argument ``c`` in
-  :math:`[0, 1)` controlling how strongly nodes are packed: ``c=0`` recovers
-  uniform spacing and packing increases with ``c``;
-  ``c = 0.5`` to ``0.8`` works well at low collisionality.
 - :class:`~yancc.DKEGaussianPitchAngleGrid` chooses the packing for you in
   :func:`~yancc.solve.solve_dke`: pass it the same ``field``, ``species``,
   ``Erho`` (and ``background``) you give the solver. It clusters points in the
@@ -87,10 +79,10 @@ rest of a convergence study:
 
 .. code-block:: python
 
-    from yancc.velocity_grids import QuadraticPitchAngleGrid
+    from yancc import MDKEGaussianPitchAngleGrid
 
     def D11(na):
-        pitchgrid = QuadraticPitchAngleGrid(na, c=0.6)
+        pitchgrid = MDKEGaussianPitchAngleGrid(na, field, erhohat, nuhat)
         sol, _ = solve_mdke(field, pitchgrid, erhohat, nuhat)
         return sol.get("Dij")[0, 0]
 

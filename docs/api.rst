@@ -25,7 +25,6 @@ Fields and Velocity Grids
     yancc.AbstractPitchAngleGrid     -- Base class for pitch angle coordinate grids.
     yancc.UniformPitchAngleGrid      -- Finite difference grid with uniform spacing for pitch angle coordinate.
     yancc.NonUniformPitchAngleGrid   -- Finite difference grid with node spacing set by a custom node density.
-    yancc.QuadraticPitchAngleGrid    -- Finite difference grid that packs nodes near v|| = 0 to resolve low-collisionality features.
     yancc.MDKEGaussianPitchAngleGrid -- Finite difference grid for the MDKE that clusters nodes in a layer set by collisionality and electric field.
     yancc.DKEGaussianPitchAngleGrid  -- Finite difference grid for the DKE that clusters nodes in the layers of all species, set by collisionality and electric field.
 

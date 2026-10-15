@@ -18,7 +18,7 @@ from yancc.solve import solve_dke, solve_dke_ambipolar, solve_mdke
 from yancc.species import _JOULE_PER_EV, LocalMaxwellian
 from yancc.velocity_grids import (
     MaxwellSpeedGrid,
-    QuadraticPitchAngleGrid,
+    MDKEGaussianPitchAngleGrid,
     UniformPitchAngleGrid,
 )
 
@@ -204,7 +204,9 @@ def test_solve_mdke_nonuniform_pitch(field, nuhat):
     na = 31
     erhohat = 0.0
     sol_u, info_u = solve_mdke(field, UniformPitchAngleGrid(na), erhohat, nuhat)
-    sol_q, info_q = solve_mdke(field, QuadraticPitchAngleGrid(na, 0.6), erhohat, nuhat)
+    # clustered as for a much lower collisionality, so the grid is strongly non-uniform
+    grid = MDKEGaussianPitchAngleGrid(na, field, erhohat, 1e-4)
+    sol_q, info_q = solve_mdke(field, grid, erhohat, nuhat)
     assert info_u["success1"] and info_u["success2"]
     assert info_q["success1"] and info_q["success2"]
     Du = sol_u.get("Dij")

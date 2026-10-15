@@ -400,59 +400,6 @@ class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
         return self.__class__(nalpha)
 
 
-def _quadratic_density(xi, c):
-    # Nodes uniformly spaced in u are mapped to alpha = pi/2 (c u^3 + (1 - c) u + 1),
-    # so the node density per unit alpha is 1/(3 c u^2 + 1 - c) at the u solving
-    # c u^3 + (1 - c) u = t, t = 2 alpha / pi - 1. The cubic has a single real root,
-    # written in hyperbolic form, which stays accurate as c -> 0.
-    t = 2 * jnp.arccos(-xi) / jnp.pi - 1
-    c_safe = cast(jax.Array, jnp.where(c > 0, c, 1.0))
-    p = (1 - c_safe) / c_safe
-    s = 2 * jnp.sqrt(p / 3)
-    # trigonometric-hyperbolic root of the depressed cubic u^3 + p u - t / c = 0 via
-    # sinh(3 phi) = 4 sinh^3(phi) + 3 sinh(phi); the 1/3 sits between sinh and arcsinh.
-    u = s * jnp.sinh(jnp.arcsinh(3 * t / (c_safe * p * s)) / 3)
-    u = cast(jax.Array, jnp.where(c > 0, u, t))
-    return 1 / (3 * c * u**2 + 1 - c)
-
-
-class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
-    r"""Pitch angle grid with quadratic spacing near :math:`v_{||} = 0`
-
-    At low collisionality, the DKE develops very sharp features near
-    :math:`v_{||}=0`  (:math:`\alpha=\pi/2`).
-    This grid packs nodes closer to that region to resolve it more accurately,
-    while sacrificing nodes near the endpoints where the solution varies less.
-
-    Nodes are the image of uniformly spaced points :math:`u \in (-1, 1)` under
-    :math:`\alpha = \frac{\pi}{2} (c u^3 + (1 - c) u + 1)`.
-
-    Parameters
-    ----------
-    nalpha : int
-        Number of points in pitch angle coordinate.
-    c : float in [0,1)
-        Grid packing parameter. ``c=0`` means nodes uniformly spaced in a, and
-        packing near :math:`\alpha=\pi/2` (:math:`v_{||}=0`) increases with ``c``.
-        Recommended values are in the range ``c=[0.5, 0.8]`` at low collisionality.
-    """
-
-    c: jax.Array
-
-    def __init__(self, nalpha: int, c: Float[ArrayLike, ""]):
-        c = jnp.asarray(c)
-        c = eqx.error_if(c, jnp.logical_or(c >= 1, c < 0), "c must be in [0,1)")
-        # error_if loses the static type, so reassert it (c is an array post-asarray)
-        self.c = cast(jax.Array, c)
-        # pass c as a dynamic param (not baked into a static callable) so the
-        # grid can be traced and differentiated through jit.
-        super().__init__(nalpha, _quadratic_density, (self.c,))
-
-    def resample(self, nalpha: int) -> "QuadraticPitchAngleGrid":
-        """Resample grid to a lower or higher resolution."""
-        return self.__class__(nalpha, self.c)
-
-
 # Cluster sharpness: a = coef * nustar^(-1/3) is the coefficient of a Gaussian cluster
 # exp(-a xi^2) that narrows with the collisional boundary layer. Both the exponent and
 # the coefficients are empirical fits to the pitch resolution error of the transport

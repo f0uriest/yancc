@@ -35,7 +35,6 @@ from .velocity_grids import (
     MaxwellSpeedGrid,
     MDKEGaussianPitchAngleGrid,
     NonUniformPitchAngleGrid,
-    QuadraticPitchAngleGrid,
     UniformPitchAngleGrid,
 )
 
@@ -57,7 +56,6 @@ __all__ = [
     "AbstractPitchAngleGrid",
     "UniformPitchAngleGrid",
     "NonUniformPitchAngleGrid",
-    "QuadraticPitchAngleGrid",
     "MDKEGaussianPitchAngleGrid",
     "DKEGaussianPitchAngleGrid",
     # species
