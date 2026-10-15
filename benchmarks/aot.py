@@ -1,11 +1,14 @@
-"""Ahead-of-time compilation with compile and run timed separately.
+"""Timed execution of a benchmark solve, either compiled ahead of time or cached.
 
-Used by the benchmark harnesses so that compilation cost, warm runtime and the size of
-the compiled program are reported as separate quantities.
+Ahead-of-time mode reports compilation cost, warm runtime and the size of the compiled
+program as separate quantities. Cached mode runs through a jitted function shared
+between calls, so compiled code is reused whenever the static configuration and array
+shapes match an earlier call.
 """
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable
 from typing import Any
@@ -59,6 +62,31 @@ def aot_run(fn: Callable, *args: Any) -> tuple[Any, dict[str, float | int | None
         "run_s": round(run_s, 1),
         "mem_bytes": _memory_bytes(compiled.compiled),
     }
+
+
+@functools.cache
+def _jitted(fn: Callable) -> Any:
+    # one jitted wrapper per function, so its compilation cache persists across calls
+    return eqx.filter_jit(fn)
+
+
+def cached_run(fn: Callable, *args: Any) -> tuple[Any, dict[str, float | int | None]]:
+    """Run ``fn(*args)`` through a jitted function shared between calls.
+
+    ``fn`` is jitted with ``equinox.filter_jit``, so array arguments are traced and
+    everything else is static. Compiled code is reused whenever the static arguments
+    and array shapes match an earlier call with the same ``fn``, as long as the JAX
+    caches have not been cleared. Returns ``(output, timings)``, where ``timings`` has
+
+    - ``compile_s``: None, compilation is not timed separately
+    - ``run_s``: wall time of the call until its outputs are ready, including tracing
+      and compilation when no compiled version could be reused
+    - ``mem_bytes``: None
+    """
+    t0 = time.perf_counter()
+    out = jax.block_until_ready(_jitted(fn)(*args))
+    run_s = time.perf_counter() - t0
+    return out, {"compile_s": None, "run_s": round(run_s, 1), "mem_bytes": None}
 
 
 # Columns for the results table: compile time, run time (s) and memory estimate (GiB).

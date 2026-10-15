@@ -1,0 +1,1344 @@
+Commence .bash_profile.ext
+ ****************************************************************************
+ SFINCS: Stellarator Fokker-Plank Iterative Neoclassical Conservative Solver
+ Version 3
+ Using double precision.
+ Parallel job ( 128 processes) detected.
+ Successfully read parameters from general namelist in input.namelist.
+ Successfully read parameters from geometryParameters namelist in input.namelist.
+ Successfully read parameters from speciesParameters namelist in input.namelist.
+ Successfully read parameters from physicsParameters namelist in input.namelist.
+ Successfully read parameters from resolutionParameters namelist in input.namelist.
+ Successfully read parameters from otherNumericalParameters namelist in input.namelist.
+ Successfully read parameters from preconditionerOptions namelist in input.namelist.
+ Successfully read parameters from export_f namelist in input.namelist.
+ mumps detected
+ superlu_dist not detected
+ ---- Physics parameters: ----
+ Number of particle species =            1
+ Delta (rho* at reference parameters)          =    4.5694000000000004E-003
+ alpha (e Phi / T at reference parameters)     =    1.0000000000000000
+ nu_n (collisionality at reference parameters) =    8.3300000000000006E-003
+ Linear run
+ ---- Numerical parameters: ----
+ Ntheta             =           25
+ Nzeta              =           81
+ Nxi                =          140
+ NL                 =            4
+ Nx                 =            7
+ solverTolerance    =    9.9999999999999995E-008
+ Theta derivative: centered finite differences, 5-point stencil
+ Zeta derivative: centered finite differences, 5-point stencil
+ For solving large linear systems, an iterative Krylov solver will be used.
+ Processor    0 owns theta indices   1 to  25 and zeta indices   1 to   1
+ Processor    1 owns theta indices   1 to  25 and zeta indices   2 to   2
+ Processor    2 owns theta indices   1 to  25 and zeta indices   3 to   3
+ Processor    3 owns theta indices   1 to  25 and zeta indices   4 to   4
+ Processor    4 owns theta indices   1 to  25 and zeta indices   5 to   5
+ Processor    5 owns theta indices   1 to  25 and zeta indices   6 to   6
+ Processor    6 owns theta indices   1 to  25 and zeta indices   7 to   7
+ Processor    7 owns theta indices   1 to  25 and zeta indices   8 to   8
+ Processor    8 owns theta indices   1 to  25 and zeta indices   9 to   9
+ Processor    9 owns theta indices   1 to  25 and zeta indices  10 to  10
+ Processor   10 owns theta indices   1 to  25 and zeta indices  11 to  11
+ Processor   11 owns theta indices   1 to  25 and zeta indices  12 to  12
+ Processor   12 owns theta indices   1 to  25 and zeta indices  13 to  13
+ Processor   13 owns theta indices   1 to  25 and zeta indices  14 to  14
+ Processor   14 owns theta indices   1 to  25 and zeta indices  15 to  15
+ Processor   15 owns theta indices   1 to  25 and zeta indices  16 to  16
+ Processor   16 owns theta indices   1 to  25 and zeta indices  17 to  17
+ Processor   17 owns theta indices   1 to  25 and zeta indices  18 to  18
+ Processor   18 owns theta indices   1 to  25 and zeta indices  19 to  19
+ Processor   19 owns theta indices   1 to  25 and zeta indices  20 to  20
+ Processor   20 owns theta indices   1 to  25 and zeta indices  21 to  21
+ Processor   21 owns theta indices   1 to  25 and zeta indices  22 to  22
+ Processor   22 owns theta indices   1 to  25 and zeta indices  23 to  23
+ Processor   23 owns theta indices   1 to  25 and zeta indices  24 to  24
+ Processor   24 owns theta indices   1 to  25 and zeta indices  25 to  25
+ Processor   25 owns theta indices   1 to  25 and zeta indices  26 to  26
+ Processor   26 owns theta indices   1 to  25 and zeta indices  27 to  27
+ Processor   27 owns theta indices   1 to  25 and zeta indices  28 to  28
+ Processor   28 owns theta indices   1 to  25 and zeta indices  29 to  29
+ Processor   29 owns theta indices   1 to  25 and zeta indices  30 to  30
+ Processor   30 owns theta indices   1 to  25 and zeta indices  31 to  31
+ Processor   31 owns theta indices   1 to  25 and zeta indices  32 to  32
+ Processor   32 owns theta indices   1 to  25 and zeta indices  33 to  33
+ Processor   33 owns theta indices   1 to  25 and zeta indices  34 to  34
+ Processor   34 owns theta indices   1 to  25 and zeta indices  35 to  35
+ Processor   35 owns theta indices   1 to  25 and zeta indices  36 to  36
+ Processor   36 owns theta indices   1 to  25 and zeta indices  37 to  37
+ Processor   37 owns theta indices   1 to  25 and zeta indices  38 to  38
+ Processor   38 owns theta indices   1 to  25 and zeta indices  39 to  39
+ Processor   39 owns theta indices   1 to  25 and zeta indices  40 to  40
+ Processor   40 owns theta indices   1 to  25 and zeta indices  41 to  41
+ Processor   41 owns theta indices   1 to  25 and zeta indices  42 to  42
+ Processor   42 owns theta indices   1 to  25 and zeta indices  43 to  43
+ Processor   43 owns theta indices   1 to  25 and zeta indices  44 to  44
+ Processor   44 owns theta indices   1 to  25 and zeta indices  45 to  45
+ Processor   45 owns theta indices   1 to  25 and zeta indices  46 to  46
+ Processor   46 owns theta indices   1 to  25 and zeta indices  47 to  47
+ Processor   47 owns theta indices   1 to  25 and zeta indices  48 to  48
+ Processor   48 owns theta indices   1 to  25 and zeta indices  49 to  49
+ Processor   49 owns theta indices   1 to  25 and zeta indices  50 to  50
+ Processor   50 owns theta indices   1 to  25 and zeta indices  51 to  51
+ Processor   51 owns theta indices   1 to  25 and zeta indices  52 to  52
+ Processor   52 owns theta indices   1 to  25 and zeta indices  53 to  53
+ Processor   53 owns theta indices   1 to  25 and zeta indices  54 to  54
+ Processor   54 owns theta indices   1 to  25 and zeta indices  55 to  55
+ Processor   55 owns theta indices   1 to  25 and zeta indices  56 to  56
+ Processor   56 owns theta indices   1 to  25 and zeta indices  57 to  57
+ Processor   57 owns theta indices   1 to  25 and zeta indices  58 to  58
+ Processor   58 owns theta indices   1 to  25 and zeta indices  59 to  59
+ Processor   59 owns theta indices   1 to  25 and zeta indices  60 to  60
+ Processor   60 owns theta indices   1 to  25 and zeta indices  61 to  61
+ Processor   61 owns theta indices   1 to  25 and zeta indices  62 to  62
+ Processor   62 owns theta indices   1 to  25 and zeta indices  63 to  63
+ Processor   63 owns theta indices   1 to  25 and zeta indices  64 to  64
+ Processor   64 owns theta indices   1 to  25 and zeta indices  65 to  65
+ Processor   65 owns theta indices   1 to  25 and zeta indices  66 to  66
+ Processor   66 owns theta indices   1 to  25 and zeta indices  67 to  67
+ Processor   67 owns theta indices   1 to  25 and zeta indices  68 to  68
+ Processor   68 owns theta indices   1 to  25 and zeta indices  69 to  69
+ Processor   69 owns theta indices   1 to  25 and zeta indices  70 to  70
+ Processor   70 owns theta indices   1 to  25 and zeta indices  71 to  71
+ Processor   71 owns theta indices   1 to  25 and zeta indices  72 to  72
+ Processor   72 owns theta indices   1 to  25 and zeta indices  73 to  73
+ Processor   73 owns theta indices   1 to  25 and zeta indices  74 to  74
+ Processor   74 owns theta indices   1 to  25 and zeta indices  75 to  75
+ Processor   75 owns theta indices   1 to  25 and zeta indices  76 to  76
+ Processor   76 owns theta indices   1 to  25 and zeta indices  77 to  77
+ Processor   77 owns theta indices   1 to  25 and zeta indices  78 to  78
+ Processor   78 owns theta indices   1 to  25 and zeta indices  79 to  79
+ Processor   79 owns theta indices   1 to  25 and zeta indices  80 to  80
+ Processor   80 owns theta indices   1 to  25 and zeta indices  81 to  81
+ Processor   81 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   82 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   83 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   84 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   85 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   86 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   87 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   88 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   89 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   90 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   91 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   92 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   93 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   94 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   95 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   96 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   97 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   98 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor   99 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  100 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  101 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  102 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  103 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  104 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  105 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  106 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  107 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  108 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  109 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  110 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  111 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  112 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  113 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  114 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  115 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  116 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  117 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  118 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  119 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  120 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  121 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  122 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  123 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  124 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  125 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  126 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Processor  127 owns theta indices   1 to  25 and zeta indices  82 to  81
+ Nxi_for_x_option:           1
+ x:   6.3716484606701013E-002  0.31819201888861848       0.72419898925837300        1.2380355992150891        1.8385282202709461        2.5314881513276766        3.3734564301245800
+ Nxi for each x:          18          34          59          91         129         140         140
+ min_x_for_L:           1           1           1           1           1           1           1           1           1           1           1           1           1           1           1           1           1           1           2           2           2           2           2           2           2           2           2           2           2           2           2           2           2           2           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           3           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           4           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           5           6           6           6           6           6           6           6           6           6           6           6
+ The matrix is      1237277 x     1237277  elements.
+ Selecting the flux surface to use based on rN_wish =   0.50000000000000000
+ Reading VMEC geometry from file /pscratch/sd/l/landrema/20251212-01-sfincs_for_yancc_benchmarks//wout_NCSX.nc
+ Using radial index  33 of 128 from vmec's half mesh.
+ Including  213 of  221 stellarator-symmetric modes from the VMEC file.
+ Equilibrium is stellarator-symmetric.
+ Successfully read VMEC geometry file /pscratch/sd/l/landrema/20251212-01-sfincs_for_yancc_benchmarks//wout_NCSX.nc
+ ---- Geometry parameters: ----
+ Geometry scheme =            5
+ psiAHat (Normalized toroidal flux at the last closed flux surface) =    7.9111180348606772E-002
+ aHat (Radius of the last closed flux surface in units of RHat) =   0.32263403817640657
+ GHat (Boozer component multiplying grad zeta) =    2.3203011774859217
+ IHat (Boozer component multiplying grad theta) =    3.3412089914728804E-003
+ iota (Rotational transform) =   0.46825939689977847
+ ---- Geometry parameters: ----
+ Geometry scheme =            5
+ psiAHat (Normalized toroidal flux at the last closed flux surface) =    7.9111180348606772E-002
+ aHat (Radius of the last closed flux surface in units of RHat) =   0.32263403817640657
+ GHat (Boozer component multiplying grad zeta) =    2.3203011774859217
+ IHat (Boozer component multiplying grad theta) =    3.3412089914728804E-003
+ iota (Rotational transform) =   0.46825939689977847
+ ------------------------------------------------------
+ Done creating grids.
+ Requested/actual flux surface for this calculation, in various radial coordinates:
+   psiHat =    1.9777795087151693E-002 /   1.9622064417174120E-002
+   psiN   =   0.25000000000000000      /  0.24803149606299213
+   rHat   =   0.16131701908820328      /  0.16068065755800051
+   rN     =   0.50000000000000000      /  0.49802760572381138
+ Selecting the input gradients of n & T from the specified ddrHat values.
+ Selecting the input gradient of Phi from the specified Er.
+ Entering main solver loop.
+ Initializing f0
+ Beginning preallocation for whichMatrix =            1
+ Beginning preallocation for whichMatrix =            0
+ Since this is a linear run, we will only take a single step, and not iterate Newton's method.
+ Solver package which will be used: mumps
+ ------------------------------------------------------
+ Finished initialization.
+ Beginning the main solve.  This could take a while ...
+ evaluateResidual called.
+ State vector is 0 so I will skip building the first matrix when evaluating the residual.
+--------- Residual function norm:  6.0883332E-03 -----------------------------
+ evaluateJacobian called.
+ Running populateMatrix with whichMatrix =            0
+ Time to pre-assemble Jacobian preconditioner matrix:   0.35730307199992239       seconds.
+ Time to assemble Jacobian preconditioner matrix:   0.15427404599995498       seconds.
+ # of nonzeros in Jacobian preconditioner matrix:    33192601 , allocated:   175740734 , mallocs:           0  (should be 0)
+ Running populateMatrix with whichMatrix =            1
+ Time to pre-assemble Jacobian matrix:   0.36397639599999820       seconds.
+ Time to assemble Jacobian matrix:   0.22900769900024898       seconds.
+ # of nonzeros in Jacobian matrix:    49824155 , allocated:   175740734 , mallocs:           0  (should be 0)
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   1     1237277
+      executing #MPI =    128 and #OMP =      2
+
+ =================================================
+ MUMPS compiled with option -Dmetis
+ MUMPS compiled with option -Dparmetis
+ MUMPS compiled with option -Dpord
+ MUMPS compiled with option -Dptscotch
+ MUMPS compiled with option -Dscotch
+ =================================================
+L U Solver for unsymmetric matrices
+Type of parallelism: Working host
+
+ ****** ANALYSIS STEP ********
+
+ ** Maximum transversal (ICNTL(6)) not allowed because matrix is distributed
+ Processing a graph of size:   1237277 with      31969492 edges
+ Ordering based on SCOTCH
+ ELAPSED TIME SPENT IN SCOTCH reordering =     40.3695
+ A root of estimated size         2027  has been selected for Scalapack.
+
+Leaving analysis phase with  ...
+ INFOG(1)                                       =               0
+ INFOG(2)                                       =               0
+ -- (20) Number of entries in factors (estim.)  =      3146983033
+ --  (3) Real space for factors    (estimated)  =      3169169965
+ --  (4) Integer space for factors (estimated)  =        22944718
+ --  (5) Maximum frontal size      (estimated)  =            6361
+ --  (6) Number of nodes in the tree            =           15702
+ -- (32) Type of analysis effectively used      =               1
+ --  (7) Ordering option effectively used       =               3
+ ICNTL (6) Maximum transversal option           =               0
+ ICNTL (7) Pivot order option                   =               3
+ ICNTL(13) Parallelism/splitting of root node   =               0
+ ICNTL(14) Percentage of memory relaxation      =              50
+ ICNTL(15) Analysis by block effectively used   =               0
+ ICNTL(18) Distributed input matrix (on if >0)  =               3
+ ICNTL(58) Symbolic factorization option        =               2
+ Number of level 2 nodes                        =             500
+ Number of split nodes                          =             314
+ RINFOG(1) Operations during elimination (estim)= 8.340D+12
+ Distributed matrix entry format (ICNTL(18))    =               3
+
+ MEMORY ESTIMATIONS ...
+ Estimations with standard Full-Rank (FR) factorization:
+    Maximum estim. space in Mbytes, IC facto.    (INFOG(16)):         915
+    Total space in MBytes, IC factorization      (INFOG(17)):       70526
+    Maximum estim. space in Mbytes, OOC facto.   (INFOG(26)):         426
+    Total space in MBytes,  OOC factorization    (INFOG(27)):       47593
+
+ Elapsed time in analysis driver=      41.4303
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   2     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+****** FACTORIZATION STEP ********
+
+ GLOBAL STATISTICS PRIOR NUMERICAL FACTORIZATION ...
+ Number of working processes                =             128
+ ICNTL(22) Out-of-core option               =               0
+ ICNTL(35) BLR activation (eff. choice)     =               0
+ ICNTL(37) BLR CB compression (eff. choice) =               0
+ ICNTL(49) Compact workarray S (end facto.) =               0
+ ICNTL(14) Memory relaxation                =              50
+ INFOG(3) Real space for factors (estimated)=      3169169965
+ INFOG(4) Integer space for factors (estim.)=        22944718
+ Maximum frontal size (estimated)           =            6361
+ Number of nodes in the tree                =           15702
+ ICNTL(23) Memory allowed (value on host)   =               0
+           Sum over all procs               =               0
+ Memory provided by user, sum of LWK_USER   =               0
+ Effective threshold for pivoting, CNTL(1)  =      0.1000D-02
+ Max difference from 1 after scaling the entries for ONE-NORM (option 7/8)   = 0.65D+01
+ Average Effective size of S     (based on INFO(39))=             44455964
+
+ Redistrib: total data local/sent           =         1354937       176730440
+
+ Elapsed time to reformat/distribute matrix =      0.1589
+ ** Memory allocated, max in Mbytes             (INFOG(18)):         915
+
+ ** Memory allocated, total in Mbytes           (INFOG(19)):       70526
+ ** Memory effectively used, max in  Mbytes     (INFOG(21)):         673
+ ** Memory effectively used, total in Mbytes    (INFOG(22)):       56999
+
+ Elapsed time to process root node                  =      0.0544
+
+ Elapsed time for factorization                     =      9.8889
+
+Leaving factorization with ...
+ RINFOG (2) Operations in node assembly             = 1.175D+10
+ ------ (3) Operations in node elimination          = 8.341D+12
+ ICNTL  (8) Scaling effectively used                =               7
+ INFOG  (9) Real space for factors                  =      3147634051
+ INFOG (10) Integer space for factors               =        21651562
+ INFOG (11) Maximum front size                      =            6361
+ INFOG (29) Number of entries in factors            =      3147634051
+ INFOG (12) Number of off diagonal pivots           =           14474
+ INFOG (13) Number of delayed pivots                =             920
+ INFOG (14) Number of memory compress               =             280
+
+ Elapsed time in factorization driver               =     10.5018
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.013043
+ Time in solution step (fwd/bwd)  =       0.163920
+  .. Time in forward (fwd) step   =          0.079767
+  .. Time in ScaLAPACK root       =          0.002675
+  .. Time in backward (bwd) step  =          0.081466
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000771
+
+ Elapsed time in solve driver=       0.3290
+    0 KSP Residual norm 8.442264922407e-02
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002366
+ Time in solution step (fwd/bwd)  =       0.153216
+  .. Time in forward (fwd) step   =          0.078230
+  .. Time in ScaLAPACK root       =          0.001565
+  .. Time in backward (bwd) step  =          0.073109
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000501
+
+ Elapsed time in solve driver=       0.3072
+    1 KSP Residual norm 5.543359390663e-02
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002104
+ Time in solution step (fwd/bwd)  =       0.142364
+  .. Time in forward (fwd) step   =          0.075463
+  .. Time in ScaLAPACK root       =          0.001511
+  .. Time in backward (bwd) step  =          0.065368
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000478
+
+ Elapsed time in solve driver=       0.2964
+    2 KSP Residual norm 3.757607658399e-02
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002162
+ Time in solution step (fwd/bwd)  =       0.142543
+  .. Time in forward (fwd) step   =          0.076023
+  .. Time in ScaLAPACK root       =          0.001522
+  .. Time in backward (bwd) step  =          0.064976
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000482
+
+ Elapsed time in solve driver=       0.2963
+    3 KSP Residual norm 1.811057894112e-02
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001976
+ Time in solution step (fwd/bwd)  =       0.143173
+  .. Time in forward (fwd) step   =          0.075750
+  .. Time in ScaLAPACK root       =          0.001531
+  .. Time in backward (bwd) step  =          0.065873
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000500
+
+ Elapsed time in solve driver=       0.2935
+    4 KSP Residual norm 6.180120010922e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002053
+ Time in solution step (fwd/bwd)  =       0.145293
+  .. Time in forward (fwd) step   =          0.075630
+  .. Time in ScaLAPACK root       =          0.001491
+  .. Time in backward (bwd) step  =          0.068152
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000469
+
+ Elapsed time in solve driver=       0.2950
+    5 KSP Residual norm 5.630291234218e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002010
+ Time in solution step (fwd/bwd)  =       0.144142
+  .. Time in forward (fwd) step   =          0.076555
+  .. Time in ScaLAPACK root       =          0.001511
+  .. Time in backward (bwd) step  =          0.066050
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000483
+
+ Elapsed time in solve driver=       0.2937
+    6 KSP Residual norm 5.399018339984e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001942
+ Time in solution step (fwd/bwd)  =       0.142781
+  .. Time in forward (fwd) step   =          0.075253
+  .. Time in ScaLAPACK root       =          0.001507
+  .. Time in backward (bwd) step  =          0.066001
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000476
+
+ Elapsed time in solve driver=       0.2932
+    7 KSP Residual norm 5.391959559705e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001967
+ Time in solution step (fwd/bwd)  =       0.141378
+  .. Time in forward (fwd) step   =          0.075058
+  .. Time in ScaLAPACK root       =          0.001535
+  .. Time in backward (bwd) step  =          0.064758
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000492
+
+ Elapsed time in solve driver=       0.2940
+    8 KSP Residual norm 4.931526092431e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001990
+ Time in solution step (fwd/bwd)  =       0.144268
+  .. Time in forward (fwd) step   =          0.076273
+  .. Time in ScaLAPACK root       =          0.001807
+  .. Time in backward (bwd) step  =          0.066166
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000483
+
+ Elapsed time in solve driver=       0.2992
+    9 KSP Residual norm 2.671901054992e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001930
+ Time in solution step (fwd/bwd)  =       0.143423
+  .. Time in forward (fwd) step   =          0.074719
+  .. Time in ScaLAPACK root       =          0.001510
+  .. Time in backward (bwd) step  =          0.067171
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000479
+
+ Elapsed time in solve driver=       0.2943
+   10 KSP Residual norm 1.731037718190e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001953
+ Time in solution step (fwd/bwd)  =       0.142395
+  .. Time in forward (fwd) step   =          0.074740
+  .. Time in ScaLAPACK root       =          0.001501
+  .. Time in backward (bwd) step  =          0.066134
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000473
+
+ Elapsed time in solve driver=       0.2945
+   11 KSP Residual norm 1.263954271404e-03
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001924
+ Time in solution step (fwd/bwd)  =       0.144006
+  .. Time in forward (fwd) step   =          0.075208
+  .. Time in ScaLAPACK root       =          0.001479
+  .. Time in backward (bwd) step  =          0.067291
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000476
+
+ Elapsed time in solve driver=       0.2954
+   12 KSP Residual norm 4.533429066730e-04
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002333
+ Time in solution step (fwd/bwd)  =       0.144017
+  .. Time in forward (fwd) step   =          0.075628
+  .. Time in ScaLAPACK root       =          0.001470
+  .. Time in backward (bwd) step  =          0.066894
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000483
+
+ Elapsed time in solve driver=       0.2964
+   13 KSP Residual norm 2.190652197179e-04
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001903
+ Time in solution step (fwd/bwd)  =       0.141327
+  .. Time in forward (fwd) step   =          0.074817
+  .. Time in ScaLAPACK root       =          0.001486
+  .. Time in backward (bwd) step  =          0.065006
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000483
+
+ Elapsed time in solve driver=       0.2914
+   14 KSP Residual norm 8.144943227815e-05
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001985
+ Time in solution step (fwd/bwd)  =       0.142290
+  .. Time in forward (fwd) step   =          0.074676
+  .. Time in ScaLAPACK root       =          0.001499
+  .. Time in backward (bwd) step  =          0.066086
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000472
+
+ Elapsed time in solve driver=       0.2939
+   15 KSP Residual norm 3.042450682238e-05
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002029
+ Time in solution step (fwd/bwd)  =       0.143192
+  .. Time in forward (fwd) step   =          0.075929
+  .. Time in ScaLAPACK root       =          0.001456
+  .. Time in backward (bwd) step  =          0.065790
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000471
+
+ Elapsed time in solve driver=       0.2944
+   16 KSP Residual norm 9.558230541412e-06
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001951
+ Time in solution step (fwd/bwd)  =       0.141948
+  .. Time in forward (fwd) step   =          0.075033
+  .. Time in ScaLAPACK root       =          0.001482
+  .. Time in backward (bwd) step  =          0.065415
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000491
+
+ Elapsed time in solve driver=       0.2918
+   17 KSP Residual norm 4.925772226548e-06
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001952
+ Time in solution step (fwd/bwd)  =       0.143439
+  .. Time in forward (fwd) step   =          0.074871
+  .. Time in ScaLAPACK root       =          0.001686
+  .. Time in backward (bwd) step  =          0.066856
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000480
+
+ Elapsed time in solve driver=       0.2969
+   18 KSP Residual norm 2.428302924006e-06
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002002
+ Time in solution step (fwd/bwd)  =       0.142620
+  .. Time in forward (fwd) step   =          0.076022
+  .. Time in ScaLAPACK root       =          0.001488
+  .. Time in backward (bwd) step  =          0.065096
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000466
+
+ Elapsed time in solve driver=       0.2931
+   19 KSP Residual norm 1.054149167523e-06
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001996
+ Time in solution step (fwd/bwd)  =       0.143869
+  .. Time in forward (fwd) step   =          0.076619
+  .. Time in ScaLAPACK root       =          0.001488
+  .. Time in backward (bwd) step  =          0.065741
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000485
+
+ Elapsed time in solve driver=       0.2957
+   20 KSP Residual norm 4.974105454192e-07
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001976
+ Time in solution step (fwd/bwd)  =       0.141035
+  .. Time in forward (fwd) step   =          0.074940
+  .. Time in ScaLAPACK root       =          0.001553
+  .. Time in backward (bwd) step  =          0.064508
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000484
+
+ Elapsed time in solve driver=       0.2951
+   21 KSP Residual norm 2.272154740310e-07
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001892
+ Time in solution step (fwd/bwd)  =       0.143326
+  .. Time in forward (fwd) step   =          0.075416
+  .. Time in ScaLAPACK root       =          0.001501
+  .. Time in backward (bwd) step  =          0.066380
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000474
+
+ Elapsed time in solve driver=       0.3285
+   22 KSP Residual norm 1.063014486880e-07
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.002077
+ Time in solution step (fwd/bwd)  =       0.141657
+  .. Time in forward (fwd) step   =          0.074924
+  .. Time in ScaLAPACK root       =          0.001463
+  .. Time in backward (bwd) step  =          0.065250
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000500
+
+ Elapsed time in solve driver=       0.2910
+   23 KSP Residual norm 5.191903477804e-08
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001984
+ Time in solution step (fwd/bwd)  =       0.142068
+  .. Time in forward (fwd) step   =          0.075821
+  .. Time in ScaLAPACK root       =          0.001472
+  .. Time in backward (bwd) step  =          0.064755
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000479
+
+ Elapsed time in solve driver=       0.2933
+   24 KSP Residual norm 2.582550518746e-08
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.064991
+ Time in solution step (fwd/bwd)  =       0.141579
+  .. Time in forward (fwd) step   =          0.074486
+  .. Time in ScaLAPACK root       =          0.001512
+  .. Time in backward (bwd) step  =          0.065555
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000470
+
+ Elapsed time in solve driver=       0.3606
+   25 KSP Residual norm 9.895136327186e-09
+
+Entering DMUMPS 5.6.2 from C interface with JOB, N =   3     1237277
+      executing #MPI =    128 and #OMP =      2
+
+
+
+ ****** SOLVE & CHECK STEP ********
+
+ GLOBAL STATISTICS PRIOR SOLVE PHASE ...........
+ Number of right-hand-sides                    =           1
+ Blocking factor for multiple rhs              =           1
+ ICNTL (9)                                     =           1
+  --- (10)                                     =           0
+  --- (11)                                     =           0
+  --- (20)                                     =          10
+  --- (21)                                     =           1
+  --- (30)                                     =           0
+  --- (35)                                     =           0
+ WARNING: original distributed matrix is not allocated
+ ** Rank of processor needing largest memory in solve     :       125
+ ** Space in MBYTES used by this processor for solve      :       774
+ ** Avg. Space in MBYTES per working proc during solve    :       413
+
+ Leaving solve with ...
+ Time to build/scatter RHS        =       0.001983
+ Time in solution step (fwd/bwd)  =       0.143557
+  .. Time in forward (fwd) step   =          0.076074
+  .. Time in ScaLAPACK root       =          0.001482
+  .. Time in backward (bwd) step  =          0.065978
+ Time to gather solution(cent.sol)=       0.000000
+ Time to copy/scale dist. solution=       0.000472
+
+ Elapsed time in solve driver=       0.2948
+   26 KSP Residual norm 3.909122289789e-09
+KSP Object: 128 MPI processes
+  type: gmres
+    restart=2000, using Classical (unmodified) Gram-Schmidt Orthogonalization with no iterative refinement
+    happy breakdown tolerance 1e-30
+  maximum iterations=10000, initial guess is zero
+  tolerances: relative=1e-07, absolute=1e-50, divergence=10000.
+  left preconditioning
+  using PRECONDITIONED norm type for convergence test
+PC Object: 128 MPI processes
+  type: lu
+    out-of-place factorization
+    tolerance for zero pivot 2.22045e-14
+    matrix ordering: external
+    factor fill ratio given 0., needed 0.
+      Factored matrix follows:
+        Mat Object: 128 MPI processes
+          type: mumps
+          rows=1237277, cols=1237277
+          package used to perform factorization: mumps
+          total: nonzeros=-1148967296, allocated nonzeros=-1148967296
+            MUMPS run parameters:
+              Use -ksp_view ::ascii_info_detail to display information for all processes
+              RINFOG(1) (global estimated flops for the elimination after analysis): 8.33966e+12
+              RINFOG(2) (global estimated flops for the assembly after factorization): 1.17528e+10
+              RINFOG(3) (global estimated flops for the elimination after factorization): 8.34054e+12
+              (RINFOG(12) RINFOG(13))*2^INFOG(34) (determinant): (0.,0.)*(2^0)
+              INFOG(3) (estimated real workspace for factors on all processors after analysis): -3169
+              INFOG(4) (estimated integer workspace for factors on all processors after analysis): 22944718
+              INFOG(5) (estimated maximum front size in the complete tree): 6361
+              INFOG(6) (number of nodes in the complete tree): 15702
+              INFOG(7) (ordering option effectively used after analysis): 3
+              INFOG(8) (structural symmetry in percent of the permuted matrix after analysis): -1
+              INFOG(9) (total real/complex workspace to store the matrix factors after factorization): -3147
+              INFOG(10) (total integer space store the matrix factors after factorization): 21651562
+              INFOG(11) (order of largest frontal matrix after factorization): 6361
+              INFOG(12) (number of off-diagonal pivots): 14474
+              INFOG(13) (number of delayed pivots after factorization): 920
+              INFOG(14) (number of memory compress after factorization): 280
+              INFOG(15) (number of steps of iterative refinement after solution): 0
+              INFOG(16) (estimated size (in MB) of all MUMPS internal data for factorization after analysis: value on the most memory consuming processor): 915
+              INFOG(17) (estimated size of all MUMPS internal data for factorization after analysis: sum over all processors): 70526
+              INFOG(18) (size of all MUMPS internal data allocated during factorization: value on the most memory consuming processor): 915
+              INFOG(19) (size of all MUMPS internal data allocated during factorization: sum over all processors): 70526
+              INFOG(20) (estimated number of entries in the factors): -3146
+              INFOG(21) (size in MB of memory effectively used during factorization - value on the most memory consuming processor): 673
+              INFOG(22) (size in MB of memory effectively used during factorization - sum over all processors): 56999
+              INFOG(23) (after analysis: value of ICNTL(6) effectively used): 0
+              INFOG(24) (after analysis: value of ICNTL(12) effectively used): 1
+              INFOG(25) (after factorization: number of pivots modified by static pivoting): 0
+              INFOG(28) (after factorization: number of null pivots encountered): 0
+              INFOG(29) (after factorization: effective number of entries in the factors (sum over all processors)): -3147
+              INFOG(30, 31) (after solution: size in Mbytes of memory used during solution phase): 774, 52911
+              INFOG(32) (after analysis: type of analysis done): 1
+              INFOG(33) (value used for ICNTL(8)): 7
+              INFOG(34) (exponent of the determinant if determinant is requested): 0
+              INFOG(35) (after factorization: number of entries taking into account BLR factor compression - sum over all processors): -3147
+              INFOG(36) (after analysis: estimated size of all MUMPS internal data for running BLR in-core - value on the most memory consuming processor): 0
+              INFOG(37) (after analysis: estimated size of all MUMPS internal data for running BLR in-core - sum over all processors): 0
+              INFOG(38) (after analysis: estimated size of all MUMPS internal data for running BLR out-of-core - value on the most memory consuming processor): 0
+              INFOG(39) (after analysis: estimated size of all MUMPS internal data for running BLR out-of-core - sum over all processors): 0
+  linear system matrix followed by preconditioner matrix:
+  Mat Object: 128 MPI processes
+    type: mpiaij
+    rows=1237277, cols=1237277
+    total: nonzeros=49824155, allocated nonzeros=175740734
+    total number of mallocs used during MatSetValues calls=0
+      not using I-node (on process 0) routines
+  Mat Object: 128 MPI processes
+    type: mpiaij
+    rows=1237277, cols=1237277
+    total: nonzeros=33192601, allocated nonzeros=175740734
+    total number of mallocs used during MatSetValues calls=0
+      not using I-node (on process 0) routines
+ evaluateResidual called.
+ Beginning preallocation for whichMatrix =            3
+ Running populateMatrix with whichMatrix =            3
+ Time to pre-assemble residual f1 matrix:   0.38429513699975359       seconds.
+ Time to assemble residual f1 matrix:   0.21796241800029748       seconds.
+ # of nonzeros in residual f1 matrix:    49824155 , allocated:   175740734 , mallocs:           0  (should be 0)
+--------- Completed iteration    1 of SNES -----------------------------------
+--------- Residual function norm:  1.0205455E-08 -----------------------------
+ Linear iteration (KSP) converged.  KSPConvergedReason =            2
+   KSP_CONVERGED_RTOL: Norm decreased by rtol.
+ Computing diagnostics.
+ Initializing f0
+    FSADensityPerturbation:     2.1276900364100184E-013
+    FSABFlow:                  -2.3361272691255340E-002
+    max and min Mach #:        -1.8966034560431871E-002  -2.7270823513653276E-002
+    FSAPressurePerturbation:    1.4247031199453664E-012
+    NTV:                        0.0000000000000000
+    particleFlux_vm0_psiHat     4.0633593230442378E-020
+    particleFlux_vm_psiHat      2.7428292545651213E-007
+    classicalParticleFlux       0.0000000000000000
+    classicalHeatFlux           1.5367716476429862E-008
+    momentumFlux_vm0_psiHat     0.0000000000000000
+    momentumFlux_vm_psiHat      1.1363903215343172E-008
+    heatFlux_vm0_psiHat         4.2285059323404498E-020
+    heatFlux_vm_psiHat          8.6606587177233822E-007
+    particle source             4.3171987716864517E-009
+    heat source                -1.9584280501298341E-006
+ FSABjHat (bootstrap current):   -2.3361272691255340E-002
+ Saving diagnostics to h5 file for iteration            1
+ Done with the main solve.  Time to solve:    62.111757353999565       seconds.
+
+Entering DMUMPS 5.6.2 from C interface with JOB =  -2
+      executing #MPI =    128 and #OMP =      2
+ Goodbye!

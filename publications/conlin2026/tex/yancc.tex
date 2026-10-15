@@ -11,13 +11,16 @@
 \usepackage[colorlinks=true,allcolors=blue]{hyperref}
 \usepackage{authblk}
 
-\graphicspath{{./}{figures/}}
+\graphicspath{{images/}}
 
 \newcommand{\yancc}{\texttt{yancc}}
+\newcommand{\fsa}[1]{\left\langle #1 \right\rangle}
 
 \title{\yancc: A GPU-accelerated, differentiable solver for neoclassical transport in
 tokamaks and stellarators}
-\author[1]{Rory Conlin}
+\author[1]{Rory Conlin\thanks{Corresponding author:
+\href{mailto:william.conlin@ipp.mpg.de}{william.conlin@ipp.mpg.de}. Present address:
+Max-Planck-Institut f\"ur Plasmaphysik, 17491 Greifswald, Germany}}
 \author[1]{Matt Landreman}
 \affil[1]{Institute for Research in Electronics and Applied Physics,
 University of Maryland, College Park, MD 20742, USA}
@@ -32,8 +35,10 @@ We present \yancc, a new GPU-accelerated solver for the drift kinetic
 equation that computes neoclassical transport fluxes, flows, and currents in
 tokamaks and stellarators. The drift kinetic equation is challenging to solve
 numerically due to strong advection-dominance, recirculating flows, internal
-boundary layers, severe anisotropy, and high dimensionality. The code solves
-both the full four-dimensional drift kinetic equation (retaining
+boundary layers, severe anisotropy, and high dimensionality. Fast and accurate
+solutions to the drift kinetic equation are required for high fidelity optimization,
+profile prediction, and analysis of experiments with uncertainty quantification.
+\yancc{} solves both the full four-dimensional drift kinetic equation (retaining
 speed-dependent collisions, energy scattering, and full interspecies
 coupling), and the reduced monoenergetic form. The discretization combines a
 Maxwell polynomial collocation grid in speed with finite differences in pitch angle
@@ -46,9 +51,7 @@ agreement within 1\% across a range of collisionalities, geometries, and
 multi-species configurations. \yancc{} achieves roughly an order of magnitude
 speedup over SFINCS on a per-scan basis while using an order of magnitude less
 memory, with runtime remaining nearly flat across the full range of
-collisionality. The combination of speed, low memory footprint, and
-differentiability makes \yancc{} well suited for integration into stellarator
-optimization workflows, uncertainty quantification, and profile prediction.
+collisionality.
 \end{abstract}
 
 \section{Introduction}
@@ -65,10 +68,9 @@ However, the three-dimensional magnetic geometry of stellarators makes the
 dynamics of confined particles significantly more complex than in axisymmetric
 devices such as tokamaks.
 
-Neoclassical transport theory describes the collisional transport of
-particles, heat, and momentum in these devices, extending classical transport
-to account for the effects of toroidal geometry. The inhomogeneous magnetic
-field in a torus causes particle drifts that produce populations of trapped
+Neoclassical transport theory extends classical transport theory to account for
+the effects of toroidal geometry. The inhomogeneous magnetic
+field in a torus causes populations of trapped
 particles that bounce between magnetic field maxima. These trapped particles,
 combined with guiding center drifts of the passing population, yield transport
 that exceeds classical predictions and depends sensitively on the
@@ -85,7 +87,9 @@ additional ripple-trapped particle populations that can dominate transport at
 certain collisionalities. The radial electric field plays a crucial role:
 sufficiently strong $E\times B$ rotation suppresses ripple-induced transport,
 producing electron-root and ion-root solutions for the ambipolar electric
-field with transitions between them as plasma parameters vary. Accurate
+field with transitions between them as plasma parameters vary. This ambipolar
+electric field must be determined self-consistently with the transport, unlike
+in a tokamak where ambipolarity is an intrinsic property. Accurate
 computation thus requires a solver that handles the full 3D geometry while
 resolving the sharp boundary layers that develop between different classes of
 trapped particles at low collisionality.
@@ -93,18 +97,21 @@ trapped particles at low collisionality.
 The numerical solution of the DKE is challenging due to the high resolution
 required for the boundary layers, the high-dimensional phase space, strong
 advection, anisotropic diffusion, and the need to solve the equation
-repeatedly for optimization or parameter scans. To carry out high-resolution solves of
-the DKE efficiently, a promising option is a multigrid approach. Multigrid methods
+repeatedly for optimization or parameter scans. We therefore need a method that
+scales well to very high numbers of degrees of freedom, and can handle advection
+and anisotropic diffusion. A promising option in this direction is a multigrid
+approach. Multigrid methods
 achieve rapid convergence by operating on a hierarchy of discretizations: classical
 iterations efficiently damp high-frequency error but stall on low-frequency
 components, while multigrid overcomes this by recursively solving coarse-grid
 representations where low-frequency fine-grid errors appear high-frequency and
-are rapidly damped. Originally developed for elliptic problems
+are rapidly damped. Originally developed as geometric methods for elliptic problems
 \cite{trottenberg_multigrid_2007, bramble_multigrid_1993,
 wesseling_introduction_1995},
-multigrid has been extended through algebraic multigrid
-\cite{mccormick_algebraic_1987, stuben_review_2001} and geometric
-approaches. Advection-diffusion equations present particular difficulties. At
+multigrid has since been extended to problems without a natural grid hierarchy
+through algebraic multigrid
+\cite{mccormick_algebraic_1987, stuben_review_2001}. Multigrid for advection-diffusion
+equations like the DKE requires additional considerations. At
 high P\'eclet numbers, strong advective coupling renders standard smoothers
 ineffective, motivating upwinded discretizations, line smoothers,
 operator-dependent transfer operators, or algebraic multigrid approaches
@@ -125,9 +132,9 @@ for the monoenergetic form, eliminating the speed coordinate and thereby
 dropping energy scattering and momentum conservation in exchange for
 performance. SFINCS \cite{landreman_comparison_2014} solves the full
 four-dimensional DKE (dropping only radial coupling) with the full linearized
-Fokker-Planck collision operator using a mixture of finite difference and spectral
+Fokker--Planck collision operator using a mixture of finite difference and spectral
 methods and a sparse direct preconditioner, providing high accuracy across
-collisionality regimes at the cost of substantial computational cost. NEO
+collisionality regimes at the expense of substantial computational cost. NEO
 \cite{belli_eulerian_2009, belli_full_2012, belli_kinetic_2008} adopts a
 similar approach and is primarily focused on tokamak geometry, though
 extensions to 3D fields also exist \cite{belli_neoclassical_2015}. FORTEC-3D
@@ -137,7 +144,7 @@ full orbit width effects. PIC codes such as Euterpe \cite{kleiber_euterpe_2024,
 kuczynski_self-consistent_2024} can also be used to
 solve the global drift kinetic equation, though the cost is significantly
 higher than 4D codes such as SFINCS, making it impractical for optimization or
-large database studies. KNOSOS \cite{velasco_knosos_2020} uses a bounce averaged
+large database studies. KNOSOS \cite{velasco_knosos_2020} uses a bounce-averaged
 approach to
 reduce the dimensionality, making it extremely fast, but contains only pitch
 angle scattering and is limited to low collisionality regimes, making it
@@ -156,11 +163,19 @@ memory access. We attempt to fill this gap with \yancc{} (``Yet Another
 NeoClassical Code''), providing a fast solver for the full DKE with minimal
 physics approximations by exploiting GPU parallelism for high-throughput
 parameter scans and optimization. Built on JAX \cite{jax2018github}, \yancc{} is
-automatically differentiable, enabling gradient-based optimization and
-uncertainty quantification workflows that require derivatives of transport
-coefficients with respect to input parameters.
+automatically differentiable, enabling workflows that benefit from gradients with
+respect to input parameters such as optimization, uncertainty quantification, and
+predictive transport. While a wide range of neoclassically optimized stellarator
+configurations have been found using existing proxy metrics \cite{landreman2022magnetic,
+zarnstorff2001physics,goodman2023constructing,swanson2026overview, lion2025stellaris,
+hegna2025infinity, nuhrenberg1986stable, anderson1995helically}, recent work has
+benefited from including higher fidelity models in the optimization loop
+\cite{neto2025electron,lee2024direct,bindel2023direct,landreman2026bayesian}. Fast
+and differentiable transport models also benefit profile prediction workflows, and
+coupling \yancc{} to a differentiable profile prediction code for profile optimization will
+be detailed in a forthcoming publication.
 
-\section{Drift Kinetic Equation}
+\section{Drift kinetic equation}
 \label{sec:dke}
 
 The drift kinetic equation \cite{hazeltine_recursive_1973} governs neoclassical
@@ -168,16 +183,16 @@ transport in toroidal
 confinement devices. It has been derived a number of times in the literature
 \cite{helander_collisional_2005, hinton_theory_1976}, so we only focus on the
 salient points here. We expand the kinetic
-equation for small normalized gyroradius $\rho_* = m v_{th} / (|q| B_0 a)$
-(here $m$ is the particle mass, $q$ the charge, $v_{th}$ the thermal speed,
+equation for small normalized gyroradius $\rho_* = m v_{\mathrm{th}} / (|q| B_0 a)$
+(here $m$ is the particle mass, $q$ the charge, $v_{\mathrm{th}}$ the thermal speed,
 $B_0$ the average field strength, and $a$ some characteristic macroscopic
 length scale, taken here to be the minor radius) and take the guiding center
 distribution function for species $s$ as
 \begin{equation}
 f_s = f_{1,s} + F_{M,s}
 \end{equation}
-Where $F_{M,s}$ is a Maxwellian, and we assume that the first order correction
-$f_{1,s}/F_{M,s} \sim \rho_s^*$ which is well satisfied in the core of tokamaks
+where $F_{M,s}$ is a Maxwellian, and we assume that the first order correction
+$f_{1,s}/F_{M,s} \sim \rho_{*s}$ which is well satisfied in the core of tokamaks
 and stellarators. The guiding center distribution function depends on 5
 variables, 3 in real space and 2 in velocity space. In real space we
 parameterize a toroidal volume by coordinates $(\rho, \theta, \zeta)$ where
@@ -193,17 +208,19 @@ coordinates the magnetic field can be written as
 = B^\theta \tfrac{\partial \mathbf{r}}{\partial \theta}
 + B^\zeta \tfrac{\partial \mathbf{r}}{\partial \zeta}
 \end{equation}
-and the Jacobian determinant of the coordinate system is
+where $\mathbf{r}$ is the position vector and the Jacobian determinant of the coordinate
+system is
 \begin{equation}
 \sqrt{g} = \tfrac{\partial \mathbf{r}}{\partial \rho} \cdot
 \tfrac{\partial \mathbf{r}}{\partial \theta} \times
 \tfrac{\partial \mathbf{r}}{\partial \zeta}
 \end{equation}
 
-In the small $\rho_*$ limit we drop radial coupling, reducing the problem to 4D
+In the small $\rho_*$ limit we take the solution to be radially local, which allows us
+to drop radial coupling, reducing the problem to 4D
 ($\theta$, $\zeta$, and 2 velocity space coordinates). In velocity space we
-choose our coordinates to be normalized speed $x_s = v/v_{th,s}$ and the pitch
-angle $\alpha = \arccos(-v_{||}/v)$. In these coordinates, the drift kinetic
+choose our coordinates to be normalized speed $x_s = v/v_{\mathrm{th},s}$ and the pitch
+angle $\alpha = \arccos(-v_{\parallel}/v)$. In these coordinates, the drift kinetic
 equation becomes:
 \begin{equation}
 \begin{split}
@@ -214,22 +231,22 @@ equation becomes:
 - \sum_{s'} C^\ell_{ss'} + S_s
 &= -\mathbf{v}_{\mathrm{drift},s} \cdot \nabla \rho
 \Bigg(\frac{\partial F_{M,s}}{\partial \rho} \Bigg)_{W_{0,s}} \\
-&\quad + \frac{q_s}{T_s}v_{||}B
-\frac{\langle E_{||}B \rangle}{\langle B^2 \rangle} F_{M,s}
+&\quad + \frac{q_s}{T_s}v_{\parallel}B
+\frac{\fsa{E_{\parallel}B}}{\fsa{B^2}} F_{M,s}
 \end{split}
 \end{equation}
-Here and throughout the angle brackets $\langle h \rangle$ denote the flux surface
+Here and throughout the angle brackets $\fsa{h}$ denote the flux surface
 average of a quantity $h$. The trajectories are given by
 \begin{equation}
-\dot{\theta} = -\frac{v_{th,s} x_s \cos{\alpha}~ B^\theta}{B}
+\dot{\theta} = -\frac{v_{\mathrm{th},s} x_s \cos{\alpha}~ B^\theta}{B}
 - \frac{B_\zeta}{B^2\sqrt{g}}E_\rho
 \end{equation}
 \begin{equation}
-\dot{\zeta} = -\frac{v_{th,s} x_s \cos{\alpha} ~ B^\zeta}{B}
+\dot{\zeta} = -\frac{v_{\mathrm{th},s} x_s \cos{\alpha} ~ B^\zeta}{B}
 + \frac{B_\theta}{B^2\sqrt{g}}E_\rho
 \end{equation}
 \begin{equation}
-\dot{\alpha} = -\frac{v_{th,s} x_s\sin{\alpha}}{2 B^2}
+\dot{\alpha} = -\frac{v_{\mathrm{th},s} x_s\sin{\alpha}}{2 B^2}
 \Bigg( B^\theta \frac{\partial B}{\partial \theta}
 + B^\zeta \frac{\partial B}{\partial \zeta} \Bigg)
 + \cos{\alpha} \sin{\alpha} \frac{1}{2B^3 \sqrt{g}} E_\rho
@@ -244,10 +261,10 @@ average of a quantity $h$. The trajectories are given by
 Here the radial electric field enters as
 $E_\rho = - \partial \Phi_0 / \partial \rho$ with $\Phi_0$ the leading
 order potential that is constant on a flux surface,
-$v_{th,s} = \sqrt{2T_s/m_s}$ is the thermal speed of species $s$, and $B$ is the
+$v_{\mathrm{th},s} = \sqrt{2T_s/m_s}$ is the thermal speed of species $s$, and $B$ is the
 magnetic field magnitude. $S_s$ is a source term that will be described below.
 
-The collision operator $C^\ell_{ss'}$ is the Fokker-Planck-Landau operator
+The collision operator $C^\ell_{ss'}$ is the Fokker--Planck--Landau operator
 linearized around a Maxwellian:
 \begin{align}
 C^\ell_{ss'} &= C_{ss'}[f_{1,s}, F_{M,s'}] + C_{ss'}[F_{M,s}, f_{1,s'}] \\
@@ -262,29 +279,29 @@ C_{L,ss'} = \frac{\nu_{D,ss'}}{2 \sin \alpha} \frac{\partial}{\partial \alpha}
 \end{equation}
 and $C_E$ the energy scattering operator between $f_{1,s}$ and $F_{M,s'}$:
 \begin{equation}
-C_{E,ss'} = \nu_{||,ss'}\Big[ \frac{v^2}{2} \frac{\partial^2 f_{1,s}}{\partial
+C_{E,ss'} = \nu_{\parallel,ss'}\Big[ \frac{v^2}{2} \frac{\partial^2 f_{1,s}}{\partial
 v^2}
-- \frac{v^2}{v_{th,s'}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) v
+- \frac{v^2}{v_{\mathrm{th},s'}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big) v
 \frac{\partial f_{1,s}}{\partial v}\Big]
 + \nu_{D,ss'} v \frac{\partial f_{1,s}}{\partial v}
-+ 4\pi \Gamma_{ss'}\frac{m_s}{m_s'} F_{M,s'} f_{1,s}
++ 4\pi \Gamma_{ss'}\frac{m_s}{m_{s'}} F_{M,s'} f_{1,s}
 \end{equation}
 $C_F$ is the field-particle scattering operator with Rosenbluth potentials
 $H_{s'}$ and $G_{s'}$
 \begin{align}
-C_{F,ss'} &= \Gamma_{ss'} F_{M,s} \Big[\frac{2v^2}{v_{th,s}^4}
+C_{F,ss'} &= \Gamma_{ss'} F_{M,s} \Big[\frac{2v^2}{v_{\mathrm{th},s}^4}
 \frac{\partial^2 G_{s'}}{\partial v^2}
-- \frac{2v}{v_{th,s}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big)
+- \frac{2v}{v_{\mathrm{th},s}^2} \Big(1 - \frac{m_s}{m_{s'}} \Big)
 \frac{\partial H_{s'}}{\partial v}
-- \frac{2}{v_{th,s}^2} H_{s'} + 4\pi \frac{m_s}{m_{s'}} f_{1,s'} \Big] \\
+- \frac{2}{v_{\mathrm{th},s}^2} H_{s'} + 4\pi \frac{m_s}{m_{s'}} f_{1,s'} \Big] \\
 \nabla^2_v H_{s'} &= -4 \pi f_{1,s'} \\
 \nabla^2_v G_{s'} &= 2 H_{s'}
 \end{align}
 The collision frequencies and related coefficients are given by
 \begin{align}
 \nu_{D,ss'} &= \frac{\Gamma_{ss'} n_{s'}}{v^3}
-[\mathrm{erf}(v/v_{th,s'}) - \Psi(v/v_{th,s'})] \\
-\nu_{||,ss'} &= 2 \frac{\Gamma_{ss'} n_{s'}}{v^3} \Psi(v/v_{th,s'}) \\
+[\mathrm{erf}(v/v_{\mathrm{th},s'}) - \Psi(v/v_{\mathrm{th},s'})] \\
+\nu_{\parallel,ss'} &= 2 \frac{\Gamma_{ss'} n_{s'}}{v^3} \Psi(v/v_{\mathrm{th},s'}) \\
 \Gamma_{ss'} &= \frac{4\pi q_s^2 q_{s'}^2 \ln \Lambda_{ss'}}
 {(4\pi \epsilon_0)^2 m_s^2} \\
 \Psi(x) &= \frac{1}{2x^2}\Big[\mathrm{erf}(x)
@@ -296,23 +313,23 @@ The right hand side drive term is given by
 \begin{align}
 R_s &= -\mathbf{v}_{\mathrm{drift},s} \cdot \nabla \rho
 \Bigg(\frac{\partial F_{M,s}}{\partial \rho} \Bigg)_{W_{0,s}}
-+ \frac{q_s}{T_s}v_{||}B \frac{\langle E_{||}B \rangle}{\langle B^2 \rangle}
++ \frac{q_s}{T_s}v_{\parallel}B \frac{\fsa{E_{\parallel}B}}{\fsa{B^2}}
 F_{M,s} \\
 &= - (\mathbf{v}_{\mathrm{drift},s} \cdot \nabla\rho)
 \Big[\frac{1}{n_s}\frac{\partial n_s}{\partial \rho}
 + \frac{q_s}{T_s}\frac{\partial \Phi_0}{\partial \rho}
 + (x_s^2 - \tfrac{3}{2})\frac{1}{T_s}\frac{\partial T_s}{\partial \rho} \Big]
 F_{M,s} \notag \\
-&\quad + \frac{q_s}{T_s}v_{||}B
-\frac{\langle E_{||}B \rangle}{\langle B^2 \rangle} F_{M,s} \\
+&\quad + \frac{q_s}{T_s}v_{\parallel}B
+\frac{\fsa{E_{\parallel}B}}{\fsa{B^2}} F_{M,s} \\
 &= \Big(\frac{m_s v^2}{q_s} \frac{1 + \cos^2 \alpha}{2B^3}
 \mathbf{B} \times \nabla \rho \cdot \nabla B \Big)
 \Big[\frac{1}{n_s}\frac{\partial n_s}{\partial \rho}
 + \frac{q_s}{T_s}\frac{\partial \Phi_0}{\partial \rho}
 + (x_s^2 - \tfrac{3}{2})\frac{1}{T_s}\frac{\partial T_s}{\partial \rho} \Big]
 F_{M,s} \notag \\
-&\quad + \frac{q_s}{T_s}v_{||}B
-\frac{\langle E_{||}B \rangle}{\langle B^2 \rangle} F_{M,s}
+&\quad + \frac{q_s}{T_s}v_{\parallel}B
+\frac{\fsa{E_{\parallel}B}}{\fsa{B^2}} F_{M,s}
 \end{align}
 here the radial derivative of the leading order Maxwellian is
 taken at constant leading order energy:
@@ -321,8 +338,8 @@ W_{0,s} = \frac{m_s v^2}{2} + q_s \Phi_0
 \end{equation}
 The drive term is commonly split into three linearly independent components:
 \begin{equation}
-R_s = (A_{1,s} + x_s^2 A_{2,s}) (-\mathbf{v}_{m,s} \cdot \nabla \rho) F_{M,s}
-+ A_{3,s} Bv_{||} F_{M,s}
+R_s = (A_{1,s} + x_s^2 A_{2,s}) (-\mathbf{v}_{\mathrm{drift},s} \cdot \nabla \rho) F_{M,s}
++ A_{3,s} Bv_{\parallel} F_{M,s}
 \end{equation}
 where the thermodynamic forces are given by
 \begin{align}
@@ -330,38 +347,35 @@ A_{1,s} &= \frac{1}{n_s}\frac{\partial n_s}{\partial \rho}
 - \frac{q_s E_\rho}{T_s}
 - \frac{3}{2} \frac{1}{T_s} \frac{\partial T_s}{\partial \rho}, \\
 A_{2,s} &= \frac{1}{T_s}\frac{\partial T_s}{\partial \rho}, \\
-A_{3,s} &= \frac{q_s}{T_s} \frac{\langle E_\parallel B \rangle}{\langle B^2
-\rangle}.
+A_{3,s} &= \frac{q_s}{T_s} \frac{\fsa{E_\parallel B}}{\fsa{B^2}}.
 \end{align}
 Given solutions to the drift kinetic equation, one can compute neoclassical
 fluxes and flows, the most common of which include the per-species surface
 average particle flux:
 \begin{equation}
-\langle \Gamma_s \rangle = \Bigg \langle \int f_{1,s}
+\fsa{\Gamma_s} = \Bigg \langle \int f_{1,s}
 \mathbf{v}_\mathrm{drift} \cdot \nabla \rho ~\mathrm{d}^3 \mathbf{v}
 \Bigg \rangle
 \end{equation}
 per-species surface average heat flux:
 \begin{equation}
-\langle Q_s \rangle = \Bigg \langle \int \frac{m_s v^2}{2} f_{1,s}
+\fsa{Q_s} = \Bigg \langle \int \frac{m_s v^2}{2} f_{1,s}
 \mathbf{v}_\mathrm{drift} \cdot \nabla \rho ~\mathrm{d}^3 \mathbf{v}
 \Bigg \rangle
 \end{equation}
 per-species surface average parallel flow:
 \begin{equation}
-\langle V_{||,s}B \rangle = \Bigg \langle B \int v_{||} f_{1,s}
-\mathbf{v}_\mathrm{drift} \cdot \nabla \rho ~\mathrm{d}^3 \mathbf{v}
-\Bigg \rangle
+\fsa{V_{\parallel,s}B} = \frac{1}{n_s}\Bigg \langle B \int v_{\parallel} f_{1,s}
+~\mathrm{d}^3 \mathbf{v} \Bigg \rangle
 \end{equation}
 the radial current:
 \begin{equation}
-\langle J_\rho \rangle = \sum_s q_s \langle \Gamma_s \rangle
+\fsa{J_\rho} = \sum_s q_s \fsa{\Gamma_s}
 \end{equation}
 and the parallel current (including both bootstrap and Ohmic components):
 \begin{equation}
-\langle J_{||} B \rangle = \sum_s q_s \langle V_{||,s} B \rangle
+\fsa{J_{\parallel} B} = \sum_s n_s q_s \fsa{V_{\parallel,s} B}
 \end{equation}
-
 In addition to the full 4D problem described above, \yancc{} can also solve a
 reduced set of equations commonly called the ``monoenergetic drift kinetic
 equation'' which is also solved by DKES \cite{hirshman_plasma_1986} and MONKES
@@ -373,18 +387,17 @@ species independent:
 \dot{\alpha} \frac{\partial f_{j}}{\partial \alpha}
 + \dot{\theta} \frac{\partial f_{j}}{\partial \theta}
 + \dot{\zeta} \frac{\partial f_{j}}{\partial \zeta}
-- \hat{\nu} \mathcal{L} f_{j} = s_j
+- \frac{\hat{\nu}}{2} \mathcal{L} f_{j} = s_j
 \end{equation}
-The monoenergetic equation uses a modified set of trajectories to ensure
-conservation of the magnetic moment and to remove all direct dependence on
-velocity:
+The monoenergetic equation uses a modified set of trajectories to remove all direct
+dependence on velocity while maintaining phase space conservation:
 \begin{equation}
 \dot{\theta} = -\frac{ \cos{\alpha}~ B^\theta}{B}
-- \frac{B_\zeta}{\langle B^2 \rangle \sqrt{g}}\hat{E}_\rho
+- \frac{B_\zeta}{\fsa{B^2} \sqrt{g}}\hat{E}_\rho
 \end{equation}
 \begin{equation}
 \dot{\zeta} = -\frac{\cos{\alpha} ~ B^\zeta}{B}
-+ \frac{B_\theta}{\langle B^2 \rangle \sqrt{g}}\hat{E}_\rho
++ \frac{B_\theta}{\fsa{B^2} \sqrt{g}}\hat{E}_\rho
 \end{equation}
 \begin{equation}
 \dot{\alpha} = - \frac{\sin{\alpha}}{2 B^2}
@@ -403,12 +416,11 @@ s_2 &= s_1 \\
 s_3 &= -\cos{\alpha} ~B
 \end{align}
 giving the three monoenergetic solutions $f_1, f_2, f_3$. These are then used
-to compute the so called monoenergetic transport coefficients
+to compute the so-called monoenergetic transport coefficients
 \begin{equation}
 D_{ij} = \Bigg\langle \int_0^\pi s_i f_j \sin{\alpha} ~\mathrm{d}\alpha
 \Bigg\rangle
 \end{equation}
-
 \subsection{Boundary conditions}
 \label{sec:bcs}
 
@@ -434,60 +446,74 @@ diffusion is
 \begin{equation}
 \mathbf{w} \cdot \nabla f - \nu \nabla^2 f = S
 \end{equation}
-however, several features of the drift kinetic equation make it more
-complicated than the prototypical example. In the prototypical equation, the
+where $\mathbf{w}$ is the advection coefficient, commonly called the ``wind'' in the
+literature, and $\nu$ is the diffusion coefficient. Connecting the drift kinetic
+equation to the standard linear advection diffusion equation allows us to leverage a
+wide body of existing methods for such equations such as upwind finite differences
+and choices of multigrid smoothing and coarsening, which will be discussed further
+in Sections~\ref{sec:discretization} and \ref{sec:multigrid}.
+
+Several features of the drift kinetic equation make it more
+complicated than the prototypical example above. In the prototypical equation, the
 problem generally becomes easier for $\nu \gg 1$ as it becomes more Poisson
 like, while it becomes singular as $\nu \rightarrow 0$. In the drift kinetic
 equation the diffusive term (the collision operator) acts only in velocity
 space, so the diffusion is highly anisotropic -- there is zero diffusion in the
 real space coordinates. This makes the equation singular in both limits of
-collisionality, as $\nu \rightarrow \infty$ we lose coupling in real space. In
-practice this is only a minor issue, as the normalized collisionality $\nu^*$
+collisionality: as $\nu \rightarrow \infty$ we lose coupling in real space. In
+practice this is only a minor issue, as the normalized collisionality
+$\nu^* = \nu_D R_0/ v \iota$ (with $R_0$ the major radius, $v$ the speed being
+considered and $\iota$ the rotational transform)
 is typically in the range $(10^{-4}, 10^{-2})$ though for impurities it can be
 several orders of magnitude larger.
 
 Another important feature of the drift kinetic equation is that all
-collisionless characteristics are effectively closed. This is strictly true for
+collisionless characteristics at $E_\rho=0$ are effectively closed. This is strictly true for
 trapped particles, as well as passing particles on rational surfaces. On
 irrational surfaces, the trajectories approximately close after a sufficient
 number of transits. The periodic boundary conditions in real space combined
 with the symmetry/reflecting boundaries in pitch angle means that no
 information enters or leaves the domain, which will affect the choice of
 smoothing operation in the multigrid scheme, described in
-Section~\ref{sec:smoothing}.
+Section~\ref{sec:smoothing}. At finite $E_\rho$, the orbits generally don't close exactly,
+but are still bounded and recurrent, so similar smoothing properties apply.
 
 One can show \cite{landreman_comparison_2014} that the drift kinetic equation
 has a null space of
-dimension $2n_s$ where $n_s$ is the number of species consisting of
+dimension $2N_s$ where $N_s$ is the number of species consisting of
 $f_{1,s} = c_s F_{M,s}$ and $f_{1,s} = c_s v^2 F_{M,s}$ where $c_s$ is an
 arbitrary constant. The monoenergetic form has a null space of dimension 1,
 corresponding to $f_j = c$ for some constant $c$. To remove this null space, we
 impose additional gauge constraints. For the full drift kinetic equation, we
-require that all of the density and pressure reside in the leading order
+require that all of the surface averaged density and pressure reside in the leading order
 Maxwellian for each species:
 \begin{align}
 \Bigg \langle \int f_{1,s} ~\mathrm{d}^3 \mathbf{v} \Bigg \rangle &= 0 \\
 \Bigg \langle \int v^2 f_{1,s} ~\mathrm{d}^3 \mathbf{v} \Bigg \rangle &= 0
 \end{align}
-In addition to this gauge freedom, one can also show that the steady state
+In addition to this gauge freedom, one can also show (see Sec.~III of
+\cite{landreman_comparison_2014}) that the steady state
 drift kinetic equation requires an additional source for it to be solvable when
-$E_\rho$ is nonzero and not at its ambipolar value (ie $E_\rho$ such that
-$J_\rho=0$). To account for this we add additional terms that serve as a source
-of particles and heat for each species to ensure solvability for arbitrary
-$E_\rho$. For the trajectory models considered here the particle source is not
-strictly necessary (the source is always zero at the solution) but it helps by
-making the overall system square, and is needed when alternative trajectory
-models are considered \cite{landreman_comparison_2014}. The source term for each
-species has the form:
+$E_\rho$ is nonzero and not at its ambipolar value (the value for which
+$J_\rho=0$). This is due to nonzero $E_\rho$ being a singular perturbation to the
+$E_\rho=0$ equation. To account for this we follow \cite{landreman_comparison_2014}
+and add additional terms that serve as a source of particles and heat for each species
+to ensure solvability for arbitrary $E_\rho$. For the trajectory models considered
+here the particle source is not strictly necessary (the source is always zero at the
+solution) but it helps by making the overall system square, and is needed when
+alternative trajectory models are considered \cite{landreman_comparison_2014}. Both
+source terms vanish when $E_\rho$ is at its ambipolar value, so they should be viewed
+merely as a numerical expedient, and do not affect the true transport physics. The
+source term for each species has the form:
 \begin{equation}
-S_s(x_s) = S_{s,p}(x_s) F_{M,s}(x_s)(x_s^2 - \tfrac{5}{2})
-+ S_{s,h}(x_s) F_{M,s}(x_s)(x_s^2 - \tfrac{3}{2})
+S_s(x_s) = S_{s,p} F_{M,s}(x_s)(x_s^2 - \tfrac{5}{2})
++ S_{s,h} F_{M,s}(x_s)(x_s^2 - \tfrac{3}{2})
 \end{equation}
 where $S_{s,p}$ and $S_{s,h}$ are the free parameters to be solved for.
 
 For the monoenergetic equation, the only gauge freedom that exists is the
 choice of the average of $f_j$. One could impose an additional constraint
-requiring eg, zero average, but it is simplier to just require that $f$ take a
+requiring, e.g., zero average, but it is simpler to just require that $f$ take a
 fixed value at a given point:
 \begin{equation}
 f_j(\alpha=\pi/2, \theta=0, \zeta=0) = \mathrm{const}
@@ -495,49 +521,40 @@ f_j(\alpha=\pi/2, \theta=0, \zeta=0) = \mathrm{const}
 
 The final important feature, which also appears in the prototypical equation, is
 the presence of internal boundary layers that develop in the solution with a
-characteristic width $\sqrt{\nu}$. These layers correspond to the accumulation
-of particles near transitions between trapping regions
-\cite{hinton_transport_1973, ho_neoclassical_1987}, and
-necessitates very high resolution, primarily in the real space and pitch angle
-coordinates.
+characteristic width $\sqrt{\nu}$. These can be seen clearly in Figure~3 of
+\cite{albert2025convergence} or Figure~5 of \cite{landreman2012local}, and correspond
+to the accumulation of particles near transitions between trapping regions
+\cite{hinton_transport_1973, ho_neoclassical_1987}, necessitating very high resolution
+in the real space and pitch angle coordinates.
 
 \section{Discretization}
 \label{sec:discretization}
 
-Because the location of boundary layers doesn't depend on speed $x_s$, we can
-often get away with a relatively coarse discretization in the speed coordinate.
-Following SFINCS \cite{landreman_comparison_2014}, we use a collocation approach
-based on weighted Maxwell
-polynomials, which are orthogonal on $(0, \infty)$ with respect to the weight
-function $e^{-x^2}$ \cite{landreman_new_2013}. In practice we usually only need
-5--10 points in the speed
-coordinate with this discretization.
-
 One could consider using a fully spectral method for the drift kinetic
-equation, which has been sucessfully used for the monoenergetic form in DKES
+equation, which has been successfully used for the monoenergetic form in DKES
 and MONKES, however we found that these did not scale well when applied to the
 full 4D problem. Due to the sharp boundary layers that develop at low
-collisionality, any method requires a large number of grid points or spectral
-collocation points to sufficiently resolve these, so the usual reduction in
-resolution possible with spectral methods for smooth solutions isn't possible.
+collisionality (Section~\ref{sec:properties}), any method requires a large number of
+grid points or spectral collocation points to sufficiently resolve these, so the usual
+reduction in resolution possible with spectral methods for smooth solutions isn't possible.
 Additionally, spectral methods tend to give dense matrices (though using
 Legendre polynomials for pitch angle results in a block pentadiagonal system,
-the block size would be $n_s n_x n_\theta n_\zeta$ which can be quite large).
+the block size would be $N_s n_x n_\theta n_\zeta$ which can be quite large).
 
-Because of this, in all other coordinates we adopt a finite difference
+Because of this, in $\alpha, \theta, \zeta$ we adopt a finite difference
 discretization with a defect correction approach where we use a 2nd order
 scheme for the preconditioner and a 4th order scheme for the main operator. We
 use uniform grids in $\alpha, \theta, \zeta$, with full index grids in
 $\theta,\zeta$ and half index grid in $\alpha$:
 \begin{align}
-\alpha &= \frac{\pi(2j+1)}{2 n_\alpha} \quad &j \in [0, 1, ..., n_\alpha - 1] \\
-\theta_j &= \frac{2\pi j}{n_\theta} \quad &j \in [0, 1, ..., n_\theta-1] \\
-\zeta_j &= \frac{2\pi j}{N_{FP}~n_\zeta} \quad &j \in [0, 1, ..., n_\zeta-1]
+\alpha_j &= \frac{\pi(2j+1)}{2 n_\alpha} \quad &j \in \{0, 1, \dots, n_\alpha - 1\} \\
+\theta_j &= \frac{2\pi j}{n_\theta} \quad &j \in \{0, 1, \dots, n_\theta-1\} \\
+\zeta_j &= \frac{2\pi j}{N_{FP}~n_\zeta} \quad &j \in \{0, 1, \dots, n_\zeta-1\}
 \end{align}
 where $N_{FP}$ is the number of field periods of the underlying equilibrium (a
 discrete toroidal symmetry common in stellarators). We use standard centered
-differences differences for the collision operator, with the Lorentz pitch angle
-scattering operator being explicitly split into first and second derivative
+differences for the Lorentz pitch angle scattering operator, which is
+explicitly split into first and second derivative
 parts, with centered differences applied to each:
 \begin{equation}
 \mathcal{L} = \frac{1}{\sin \alpha} \frac{\partial}{\partial \alpha}
@@ -550,7 +567,15 @@ $\alpha=0$ and $\alpha=\pi$. To enforce boundary conditions in $\alpha$ we
 mirror $f$ around the endpoints which explicitly enforces
 $f(-\alpha) = f(\alpha)$ and $f(\pi - \alpha) = f(\pi + \alpha)$.
 
-For the advective terms we use an upwinded stencil. The ``standard'' 2nd/4th
+The streaming, magnetic drift, and $\mathbf{E}\times\mathbf{B}$ terms play the
+role of the wind $\mathbf{w}$ in the prototypical advection diffusion equation of
+Section~\ref{sec:properties}. Because the collision operator acts only in velocity
+space, there is no physical diffusion in $\theta, \zeta$ to damp the grid scale
+oscillations that centered differences of an advective term produce, and at low
+collisionality the diffusion in $\alpha$ is also weak, so the local P\'eclet number
+is large in all three coordinates. We therefore use upwinded stencils for the
+advective terms, the standard choice for advection dominated problems
+\cite{morton_numerical_1996, oosterlee_multigrid_1998}. The ``standard'' 2nd/4th
 order upwind scheme uses stencil points $(0,1,2)$ and $(0,1,2,3,4)$ respectively,
 where these integers give the relative grid indices for a forward difference, with
 $0$ being the point the derivative is being evaluated at, positive numbers are grid
@@ -603,19 +628,83 @@ all levels. Using upwinded finite differences achieves this by adding artificial
 numerical diffusion to avoid small grid scale oscillations that can happen when
 under-resolving sharp features. This increased numerical stability is not
 without cost though. Because the additional diffusion is proportional to the
-grid spacing, coarser grids effectively have higher diffusion, which can make
+grid spacing, coarser grids effectively have a larger $\nu$ in the prototypical
+equation, and hence a lower P\'eclet number, which can make
 them a poor approximation to the true fine grid problem, causing convergence
 issues for a multigrid scheme. This is a well known problem when using multigrid
 for advection diffusion problems \cite{trottenberg_multigrid_2007} and
 techniques to mitigate it will be
 discussed in Section~\ref{sec:coarse}.
 
-The integrals required for output moments are computed with spectral accuracy in
-all coordinates. In $x$ we use the Gaussian quadrature weights associated with
-the Maxwell polynomials, while in $\theta,\zeta$ we use standard trapezoidal
-quadrature which is spectrally accurate for periodic integrands. In $\alpha$ we
-use Fejer type 1 quadrature which is equivalent to Chebyshev quadrature in
-$\xi = -\cos \alpha$.
+In contrast, because the location of boundary layers doesn't depend on speed
+$x_s$, we can often get away with a relatively coarse discretization in the speed coordinate.
+Following SFINCS \cite{landreman_comparison_2014}, we represent $f_{1,s}$ in
+speed using weighted Maxwell polynomials,
+$f_{1,s}(x_s) = e^{-x_s^2} u_s(x_s)$ with $u_s = \sum_j c_{s,j} L_j(x_s)$, where
+the Maxwell polynomials $L_k$ are orthogonal on $(0, \infty)$ with respect
+to the weight
+function $e^{-x^2}$ \cite{landreman_new_2013}. In practice we usually only need
+5--10 points in the speed
+coordinate with this discretization. The advective term
+$\dot{x}_s \partial f_{1,s}/\partial x_s$, the pitch angle scattering operator
+$C_L$, and the field-particle operator $C_F$ are collocated at the
+Maxwell-polynomial nodes using the associated pseudospectral differentiation
+matrices.
+
+The energy scattering operator $C_E$ is instead discretized in weak
+(Galerkin) form. Collocating $C_E$ pointwise can lead to spurious anti-dissipative modes.
+The lowest speed node has no neighbor below it, so the
+one-sided stencil for its second derivative is anti-diffusive,
+and is stabilized only by a drag term that is normally positive at that node.
+When a background species has a thermal speed that places its collisional
+transition near the lowest speed node of the kinetic species, this drag term
+can change sign, leaving a growing mode whose magnitude is
+comparable to the stiffest resolved mode. Because the multigrid smoothers
+used in Section~\ref{sec:smoothing} require the discrete operator to be
+dissipative, this defect stalls convergence for otherwise unremarkable
+combinations of species masses, temperature ratios, and collisionality.
+
+We avoid this by writing $C_{E,ss'}$ in flux form,
+\begin{equation}
+C_{E,ss'} f_{1,s} = \frac{1}{x_s^2}\frac{\partial}{\partial x_s}\Bigg[
+a_{ss'}(x_s) \Bigg(\frac{\partial f_{1,s}}{\partial x_s}
++ 2\tau_{ss'} x_s f_{1,s}\Bigg)\Bigg], \qquad
+a_{ss'} = \frac{\nu_{\parallel,ss'} x_s^4}{2}, \qquad
+\tau_{ss'} = \frac{T_s}{T_{s'}},
+\end{equation}
+which is algebraically identical to the operator given in
+Section~\ref{sec:dke}. In terms of the polynomial factor $u_s$ the flux becomes
+\begin{equation}
+\frac{\partial f_{1,s}}{\partial x_s} + 2\tau_{ss'} x_s f_{1,s}
+= e^{-x_s^2}\Bigg(\frac{\partial u_s}{\partial x_s}
++ 2(\tau_{ss'} - 1) x_s u_s\Bigg).
+\end{equation}
+Testing against each (unweighted) Maxwell polynomial $L_k$ and
+integrating by parts gives
+\begin{equation}
+\int_0^\infty L_k x_s^2 \, C_{E,ss'} f_{1,s}
+\,\mathrm{d}x_s = -\int_0^\infty \frac{\partial L_k}{\partial x_s}
+a_{ss'}\Bigg(\frac{\partial u_s}{\partial x_s}
++ 2(\tau_{ss'} - 1) x_s u_s\Bigg) e^{-x_s^2} \,\mathrm{d}x_s,
+\end{equation}
+with the boundary term vanishing because $a_{ss'} e^{-x_s^2} \to 0$ as
+$x_s \rightarrow 0$ and $x_s \rightarrow \infty$. Representing the result in
+the same basis, $C_{E,ss'} f_{1,s} = e^{-x_s^2} \sum_j d_{s,j} L_j(x_s)$, and
+substituting the expansion of $u_s$ gives $M d_s = -K c_s$, with mass matrix $M$ and
+stiffness matrix $K$
+\begin{equation}
+M_{kj} = \int_0^\infty x_s^2 e^{-x_s^2} L_k L_j \,\mathrm{d}x_s, \qquad
+K_{kj} = \int_0^\infty a_{ss'} e^{-x_s^2} \frac{\partial L_k}{\partial x_s}
+\Bigg(\frac{\partial L_j}{\partial x_s} + 2(\tau_{ss'} - 1) x_s L_j\Bigg)
+\,\mathrm{d}x_s,
+\end{equation}
+both evaluated with the same Gaussian quadrature used for the collocation
+nodes. $M$ is symmetric positive-definite, and for $\tau_{ss'}=1$ the stiffness
+matrix is symmetric positive-semidefinite (since $a_{ss'} \geq 0$), with null
+space $u_s = \mathrm{const}$, corresponding to $f_{1,s} \propto F_{M,s}$. The
+discrete operator $-M^{-1}K$ is therefore
+dissipative for any combination of colliding species; empirically we find
+this remains true for $\tau_{ss'} \neq 1$ as well.
 
 For the field part of the collision operator, there are a number of possible
 ways to discretize the Rosenbluth potentials. One could treat them as additional
@@ -623,6 +712,13 @@ unknowns and solve a system of equations for $f, G, H$, but we adopt a Green's
 function approach to analytically solve the Poisson equations for $G, H$
 \cite{mollen_impurities_2015}. The details of this derivation are given in
 Appendix~\ref{app:rosenbluth}.
+
+The integrals required for output moments are computed with spectral accuracy in
+all coordinates. In $x$ we use the Gaussian quadrature weights associated with
+the Maxwell polynomials, while in $\theta,\zeta$ we use standard trapezoidal
+quadrature which is spectrally accurate for periodic integrands. In $\alpha$ we
+use Fej\'er type 1 quadrature which is equivalent to Chebyshev quadrature in
+$\xi = -\cos \alpha$.
 
 \section{Multigrid method and Krylov solver}
 \label{sec:multigrid}
@@ -633,12 +729,15 @@ to the finite difference discretization), and dense in $\alpha$ and $x$ (due to
 the spectral collocation in $x$ and the integral terms in the collision operator
 for $\alpha$). The monoenergetic equation is banded in all three coordinates
 $(\alpha, \theta, \zeta)$. Due to the high resolution required to resolve the
-trapped passing boundary, the resulting system typically has $\sim 10^6 - 10^7$
+trapped passing boundary, the resulting system typically has $\sim 10^6$--$10^7$
 degrees of freedom ($\sim 10^5$ is typical for the monoenergetic problem). At
 this size for this problem, direct sparse solvers were found to be quite poor,
 with scipy's \texttt{spsolve} \cite{virtanen_scipy_2020, demmel_supernodal_1999}
 failing to solve even the monoenergetic
-problem in a reasonable time.
+problem in a reasonable time -- for a problem with 137k unknowns (still an order of
+magnitude less than what is commonly required for the DKE), \texttt{spsolve} needed
+more than 30 minutes, while on the same hardware, using the methods outlined below,
+\yancc{} needed 18 seconds.
 
 A more efficient approach is to use a Krylov method like GMRES combined with a
 good preconditioner. Existing codes like SFINCS use a sparse LU factorization of
@@ -656,9 +755,9 @@ of grids, a smoothing operation, and a coarse grid correction. The basic idea is
 as follows:
 \begin{enumerate}
 \item Starting from some initial guess on a fine grid, apply a smoothing
-operation which reduces the high frequency components of the error.
+operation which reduces the high-frequency components of the error.
 \item Restrict the fine grid problem down to a coarser grid. Because the
-smoothing eliminated the high frequency error, the coarse grid problem now
+smoothing eliminated the high-frequency error, the coarse grid problem now
 captures the dominant error.
 \item Solve the coarse grid problem (possibly approximately) to obtain a
 correction.
@@ -668,7 +767,7 @@ correction.
 
 The key idea is that step 3 can be done recursively, using additional coarser
 levels to reduce the problem size until it is small enough to solve directly. In
-the ideal case, multigrid methods can achieve a grid independent rate of
+the ideal case, multigrid methods can achieve a grid-independent rate of
 convergence, where each pass through the multigrid cycle reduces the error by a
 fixed fraction, regardless of resolution, meaning that the number of iterations
 required to achieve a given error tolerance is constant as the resolution is
@@ -703,8 +802,8 @@ single node. In our case we find that using a larger coarse grid improves
 performance. Typically we coarsen until the coarsest grid has a few thousand
 degrees of freedom at which point we directly solve the coarsest grid system
 with a dense LU factorization. Going coarser than this is generally inefficient,
-as dense linear algebra on GPU is very fast, as well as the increased overhead
-of more grid levels. Using an exact solve on a larger grid also reduces the
+since dense linear algebra on GPU is very fast and each additional grid level
+adds overhead. Using an exact solve on a larger grid also reduces the
 effects of the additional numerical diffusion on the coarse grid discussed in
 Section~\ref{sec:coarse}.
 
@@ -712,11 +811,11 @@ In addition to the grid hierarchy, we must define operations for moving
 information between grids. These are generally referred to as restriction
 (moving from fine to coarse) and prolongation (from coarse to fine). There are a
 number of methods for restriction/prolongation in use in the literature. A
-common approach is to use operator dependent methods,
-\cite{de_zeeuw_matrix-dependent_1990} where one
+common approach is to use operator dependent methods
+\cite{de_zeeuw_matrix-dependent_1990}, where one
 considers the direction of flow and diffusive coupling to determine how to move
-between grids. We find in our case that prolongating with simple piecewise
-linear interpolation is sufficient, with higher order interpolation or operator
+between grids. We find in our case that simple piecewise
+linear interpolation is sufficient for prolongation, with higher order interpolation or operator
 dependent methods increasing the per iteration cost and complexity without a
 noticeable decrease in the required number of iterations. For restriction we use
 the volume weighted transpose of the prolongation operator.
@@ -730,7 +829,8 @@ relaxation method which takes the form
 \begin{equation}
 f_{k+1} = f_k + \omega_s K^{-1} (s - A f_k)
 \end{equation}
-where $K$ is some approximation of $A$ and $\omega_s$ is a
+where $f$ is the unknown being solved for, $s$ is the right hand side, $k$ is an
+iteration index, $K$ is some approximation of $A$ and $\omega_s$ is a
 damping/under-relaxation parameter. For Poisson type problems the standard
 choice is $K = \mathrm{diag}(A)$, however for advective or anisotropic diffusion
 problems this is generally poor due to strong coupling along characteristics
@@ -754,7 +854,7 @@ consider a family of block diagonal smoothers, which each maintain full coupling
 along one coordinate \cite{oosterlee_multigrid_1998, elman_finite_2014}. If $A$
 is our original matrix, and $P_j$ is a
 permutation matrix that reorders the coordinates to put coordinate
-$j \in (x, \alpha, \theta, \zeta)$ on the block diagonal, then we take
+$j \in \{x, \alpha, \theta, \zeta\}$ on the block diagonal, then we take
 $K_j = P^{-1}_j \mathrm{block\_diag}(P_j A P_j^{-1}) P_j$, giving 4 smoothers (3
 for the monoenergetic problem) which each preferentially smooth the errors in a
 different direction. One full smoother pass consists of applying these 4
@@ -768,16 +868,16 @@ the behavior of $A$, resulting in a more efficient smoother. We can measure the
 efficiency of the smoother by considering the operator that multiplies the error
 at each smoothing step:
 \begin{equation}
-f_{k+1} - f_{exact} \equiv e_{k+1} = (I - \omega_s K^{-1} A) e_k
+f_{k+1} - f_{\mathrm{exact}} \equiv e_{k+1} = (I - \omega_s K^{-1} A) e_k
 \end{equation}
 We can then consider
 \begin{equation}
-r = \frac{||L(I-\omega_s K^{-1}A) ||}{||L||}
+r = \frac{\|L(I-\omega_s K^{-1}A)\|}{\|L\|}
 \end{equation}
 where $L$ is some approximate high pass filter, which following
 \cite{hackbusch_multi-grid_1985} we take
 to be the discrete Laplacian on our phase space. This ratio $r$ gives a measure
-of how much the smoother is reducing the high frequency errors (lower is
+of how much the smoother is reducing the high-frequency errors (lower is
 better). In Figure~\ref{fig:smoothing} we compare this ratio for the block
 diagonal smoothers in each coordinate for our upwinded stencil vs the ``QUICK''
 method (Quadratic Upstream Interpolation for Convective Kinematics, from
@@ -786,7 +886,7 @@ optimize the
 damping parameter $\omega_s$ to achieve the lowest $r$ possible for each
 collisionality considered across a range of different geometries and electric
 fields. We see that our method allows a larger damping parameter and gives much
-lower smoothing factor, indicating that more of the high frequency error is
+lower smoothing factor, indicating that more of the high-frequency error is
 eliminated per application, especially at low collisionality for $\theta$,
 $\zeta$ and across all collisionalities for $\alpha$. For the full drift kinetic
 equation, which spans several orders of magnitude in collisionality, we find that a
@@ -816,10 +916,11 @@ memory access.
 
 The standard coarse grid correction takes the form of
 \begin{equation}
-f_{k+1, fine} = f_{k, fine}
-+ \omega_c P A^{-1}_{coarse} R (s_{fine} - A_{fine} f_{k, fine})
+f_{k+1, \mathrm{fine}} = f_{k, \mathrm{fine}}
++ \omega_c P A^{-1}_{\mathrm{coarse}} R
+(s_{\mathrm{fine}} - A_{\mathrm{fine}} f_{k, \mathrm{fine}})
 \end{equation}
-Where $R$ is the restriction operator from fine grid to coarse grid, $P$ is the
+where $R$ is the restriction operator from fine grid to coarse grid, $P$ is the
 prolongation operator from coarse grid to fine grid, and as in the smoothing we
 allow for a damping parameter $\omega_c$.
 
@@ -830,22 +931,22 @@ re-discretize the original problem on the coarser grid, using the same
 underlying finite difference method. This has the advantage of being cheap to
 implement and apply. Galerkin projection takes
 \begin{equation}
-A_{coarse} = R A_{fine}P
+A_{\mathrm{coarse}} = R A_{\mathrm{fine}}P
 \end{equation}
 This is commonly used in algebraic multigrid schemes and is often recommended
 when dealing with advective problems, however it can require more memory and be
 difficult to implement in a matrix free manner. The additional memory is due to
 the Galerkin projection changing the sparsity structure, meaning that in many
-cases $A_{coarse}$ can have more nonzero elements than $A_{fine}$, especially
+cases $A_{\mathrm{coarse}}$ can have more nonzero elements than $A_{\mathrm{fine}}$, especially
 when combined with semi-coarsening. This also makes coarse grid operations
 proportionally more expensive. Additionally, in our case we wish to avoid ever
-materializing even a sparse representation of $A_{fine}$ to keep memory usage
-low. This is easy when doing direct re-discretization, as applying $A_{fine}$
-and $A_{coarse}$ consist of convolutions, small tensor contractions and
-elementwise operations, with $A_{coarse}$ being orders of magnitude smaller and
-thus cheaper. With a Galerkin projection however, applying $A_{coarse}$ in a
+materializing even a sparse representation of $A_{\mathrm{fine}}$ to keep memory usage
+low. This is easy when doing direct re-discretization, as applying $A_{\mathrm{fine}}$
+and $A_{\mathrm{coarse}}$ consist of convolutions, small tensor contractions and
+elementwise operations, with $A_{\mathrm{coarse}}$ being orders of magnitude smaller and
+thus cheaper. With a Galerkin projection however, applying $A_{\mathrm{coarse}}$ in a
 matrix free manner requires interpolating the coarse grid residual back to the
-fine grid, applying $A_{fine}$, then restricting. This means that the cost of
+fine grid, applying $A_{\mathrm{fine}}$, then restricting. This means that the cost of
 the coarse grid operations is as expensive as the fine grid, which
 significantly increases the cost of the multigrid cycle. For these reasons we
 opt for direct rediscretization which we find works sufficiently well in
@@ -854,23 +955,24 @@ practice.
 \subsection{Cycle type}
 \label{sec:cycle-type}
 
-The final element of the multgrid scheme to consider is the cycle type,
-governed by the ``cycle index''. A cycle index of 1 corresponds to a ``V''
-cycle, where we visit each coarser grid once per cycle. Cycle index 2
+The final element of the multigrid scheme to consider is the cycle type,
+governed by the ``cycle index'' which we denote $\gamma$. A cycle index of $\gamma=1$
+corresponds to a ``V''
+cycle, where we visit each coarser grid once per cycle. Cycle index $\gamma=2$
 corresponds to a ``W'' cycle, where we visit each coarser grid twice, etc. These
 are shown diagrammatically in Figure~\ref{fig:cycles}. We find that for the
-drift kinetic equation cycle index 1 is the most robust. As discussed above, the
+drift kinetic equation $\gamma=1$ is the most robust. As discussed above, the
 coarse grid correction can be unreliable due to additional numerical diffusion,
 so higher order cycles that apply this less accurate coarse grid correction more
 often tend to slow the solver down. For the monoenergetic equation however, we
-find that this is less of an issue and using cycle index 3 tends to be most
+find that this is less of an issue and using $\gamma=3$ tends to be most
 efficient.
 
 \begin{figure}[htbp]
 \centering
 \includegraphics{multigrid_cycles.pdf}
-\caption{Schematic of multigrid cycle types (V-, W-, and higher cycle indices)
-across the grid hierarchy.}
+\caption{Schematic of multigrid cycle types for different cycle index $\gamma$ (V-, W-,
+and higher cycle indices) across the grid hierarchy.}
 \label{fig:cycles}
 \end{figure}
 
@@ -880,7 +982,8 @@ across the grid hierarchy.}
 For many problems a well tuned multigrid method works efficiently as a
 standalone solver, however this is often not the case for advection diffusion
 equations. This can be seen in Figure~\ref{fig:spectrum}, where we plot the
-spectrum of the discretized drift kinetic equation $A$, as well as $I-MA$ where
+spectrum of the discretized drift kinetic equation $A$ for a representative example, as
+well as $I-MA$ where
 $M$ is the multigrid preconditioner. This matrix is what multiplies the error at
 each step of a pure multigrid cycle. If all of its eigenvalues are within the
 unit circle then pure multigrid would converge. We see that in practice, the
@@ -889,7 +992,7 @@ zero, which means they are very efficiently damped. However there are several
 eigenvalues near the unit circle which are only weakly damped which would slow
 convergence, and there can also be outliers that would cause divergence in a
 pure multigrid scheme. To handle this, we use multigrid as a preconditioner for
-a Krylov solver. We use a right preconditioned GCROT \cite{de1999truncation,
+a Krylov solver. We use a right-preconditioned GCROT \cite{de1999truncation,
 hicken_simplified_2010} with inner GMRES
 \cite{saad_gmres_1986, saad_flexible_1993}. The largest memory requirement is
 typically storing the Krylov
@@ -902,20 +1005,141 @@ standard restarted GMRES.
 \begin{figure}[htbp]
 \centering
 \includegraphics{spectrum.pdf}
-\caption{Spectrum of the discretized drift kinetic operator $A$ and of the
+\caption{Spectrum of the discretized drift kinetic operator $A$ for a representative
+example, and of the
 preconditioned error operator $I-MA$, where $M$ is the multigrid
-preconditioner.}
+preconditioner. $\lambda$ denotes the eigenvalues of the discretized operator. Choosing
+different parameters for the DKE (such as a different magnetic field) will give slightly
+different but qualitatively similar spectra.}
 \label{fig:spectrum}
 \end{figure}
+
+\subsection{Ambipolar rootfinding}
+\label{sec:ambipolar}
+
+In a stellarator, the particle transport is not intrinsically ambipolar like in a tokamak,
+meaning that the radial current $J_\rho = \sum_s q_s \Gamma_s$ is not zero for arbitrary
+electric field $E_\rho$. This means that to obtain physically meaningful solutions,
+one must find the ambipolar value(s) of $E_\rho$ self consistently. To do this, we use
+Newton's method to find the roots of $J_\rho(E_\rho) = 0$. Each Newton step then requires
+solving the drift kinetic equation for a fixed value of $E_\rho$ and its derivative, which
+is supplied by automatic differentiation. In many cases only a single root exists, but
+in exceptional cases there can be three roots \cite{hastings1985ambipolar}, corresponding
+to so-called electron and ion branches, with electron roots being favorable for
+confinement \cite{helander2024optimised}. To find multiple roots, we apply deflation,
+where after each root $E_\rho^i$ is found, we divide it out and find the roots to the
+modified equation:
+\begin{equation}
+J_\rho(E_\rho)\prod_i \frac{1}{E_\rho - E_\rho^i} = 0
+\end{equation}
+
+After finding a root of the deflated system, we use that as an initial guess for the
+original system to ensure it is a true root and not a numerical artifact of the deflated
+equation. To improve robustness we also make use of bracketing, where we keep track of
+sign changes during iterations, and use these to bracket roots and prevent the Newton
+steps from diverging when we know a root exists within a given domain, falling back to
+bisection if the Newton step fails to make sufficient progress.
+
 
 \section{Benchmarks}
 \label{sec:benchmarks}
 
+
+\subsection{High aspect ratio tokamak}
+\label{sec:benchmark-circular}
+
+As a first example we compare \yancc{} to analytic results for a high aspect ratio
+circular tokamak. The parameters are given in Table~\ref{tab:bench-circular}. Using a
+single ion species means there is no parallel friction, and several transport
+coefficients then take values that are exact at any collisionality and aspect ratio.
+Because like-particle collisions conserve momentum, a single species cannot transport
+itself radially, so the radial particle flux vanishes for every drive. The density and
+radial-electric-field drives enter the kinetic equation only through the combination
+$A_1 = \partial_\rho \ln n + (Z e/T)\partial_\rho\Phi - \tfrac{3}{2}\partial_\rho \ln T$,
+which is isotropic in energy, so they drive no conductive heat flux and produce exactly
+the diamagnetic flow $\fsa{B V_\parallel} = -A_1 K T/(Z e)$ with
+$K = G/(\iota\,\partial_\rho\psi)$. Because the $mathbf{E}\times\mathbf{B}$ drift is
+negligible at this field strength, the density drive and $E_\rho$ drive produce the same
+flux. Each drive
+is solved separately, the electric field one at the small $E_\rho$ of
+Table~\ref{tab:bench-circular} and rescaled by $T/(Z e E_\rho)$, so that its column is
+the response per unit $A_1$ and shares the normalization of the density column.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+$\rho$ & $0.5$ \\
+$B(\theta)$ & $B_0 / (1 + \epsilon \cos\theta)$ \\
+$B_0$ & $1~\mathrm{T}$ \\
+$R_0$ & $3~\mathrm{m}$ \\
+$q = 1/\iota$ & $2$ \\
+$G$, $I$ & $B_0 R_0$, $0$ \\
+$\epsilon = \rho a / R_0$ & $0.01$ \\
+$T$ & $1~\mathrm{keV}$ \\
+$n$ & $\in [2.0 \times 10^{15}, 6.3 \times 10^{22}]~\mathrm{m}^{-3}$ \\
+$\ln\Lambda$ & $17$ \\
+$E_\rho$ & $0.1~\mathrm{V}$, rescaled to unit $A_1$ \\
+$\nu^*_{i,\mathrm{Sauter}} = \frac{q R_0}{\epsilon^{3/2} v_T \tau_i}$ & $\in [10^{-3},
+3.2 \times 10^{4}]$ \\
+Species & Deuterium \\
+\yancc{} resolution $(n_x, n_\alpha, n_\theta, n_\zeta)$ & $(6\text{--}16,\
+121\text{--}3201,\ 61\text{--}121,\ 1)$ \\
+\bottomrule
+\end{tabular}
+\caption{Parameters and resolutions for the circular tokamak comparison with analytic
+theory. The configuration is axisymmetric, so a single toroidal grid point is used. The
+density sets the collisionality at fixed temperature, and the resolution varies with
+collisionality as described below.}
+\label{tab:bench-circular}
+\end{table}
+
+Figure~\ref{fig:bench-nuscan} shows the resulting transport matrix across eight decades
+in collisionality, spanning both asymptotic regimes. The seven quantities that are exact
+are reproduced to $10^{-3}$ or better in the normalizations shown. At the collisional
+end the heat flux approaches the Pfirsch--Schl\"uter
+value~\cite{helander_collisional_2005} to $0.2\%$ and the flow approaches Hazeltine's
+coefficient~\cite{hazeltine1974rotation} to $1.3\%$, the latter well inside that
+formula's own accuracy of roughly $20\%$. At the collisionless end the flow reaches the
+banana-regime coefficient $1.17 f_c$ (with $f_c$ the circulating particle fraction) to
+within $0.5\%$, while the heat flux exceeds the
+$\epsilon \to 0$ value by $15\%$; a separate scan in aspect ratio confirms that this is
+the expected $O(\sqrt{\epsilon})$ finite-aspect-ratio correction, the measured coefficient
+falling from $2.08$ at $\epsilon = 0.3$ to $0.99$ at $\epsilon = 10^{-3}$ and
+extrapolating linearly in $\sqrt{\epsilon}$ to the analytic $0.92$. The two regimes make
+opposite demands on the discretization. In the banana regime the trapped-passing boundary
+layer sets $n_\alpha \gtrsim 16/\sqrt{2\epsilon\nu^*_i}$, while at high collisionality the
+requirement is one of momentum conservation: pitch-angle scattering is discretized by
+finite differences and so conserves parallel momentum only to $O(n_\alpha^{-2})$, an error
+amplified by $\nu^*_i$ because the parallel viscosity it competes against is itself small,
+$O(\epsilon^2/\nu)$. Recovering the exact flow there requires $n_x \ge 16$ and $n_\alpha$
+growing as $\sqrt{\nu^*_i}$.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.8\textwidth]{benchmark_circular_tokamak_nustar}
+  \caption{Ion transport matrix of a circular tokamak at $\epsilon = 0.01$ against the
+    Sauter collisionality $\nu^*_{i,\mathrm{Sauter}} = q R_0 / (\epsilon^{3/2} v_T
+    \tau_i)$, for which the banana regime is $\nu^*_{i,\mathrm{Sauter}} \ll 1$ and the
+    Pfirsch--Schl\"uter regime is $\nu^*_{i,\mathrm{Sauter}} \gg \epsilon^{-3/2} = 10^3$.
+    Columns are the three drives, each normalized to unit $A_1$ or $\partial_\rho \ln T$;
+    rows are the radial particle flux, the radial conductive heat flux and the parallel
+    flow. Flows are normalized to the diamagnetic flow $K T/(Z e)$ and the temperature-
+    driven heat flux to $n T^2 K^2 m / (Z^2 e^2 \tau_i)$; quantities whose exact value
+    vanishes are normalized to the temperature-driven flux of the same point. Solid
+    lines are exact values, dashed the banana limit, dotted the Pfirsch--Schl\"uter
+    limit, and gray the Chang--Hinton interpolation~\cite{chang1982effect}.}
+  \label{fig:bench-nuscan}
+\end{figure}
+
+
+
 \subsection{W7-X monoenergetic DKE}
 \label{sec:bench-w7x}
 
-As a first example we solve the monoenergetic drift kinetic equation for the
-KJM configuration of W7-X over a range of collisionality and electric field. The
+For the next example we solve the monoenergetic drift kinetic equation for the
+high mirror configuration \cite{geiger2015physics} of W7-X over a range of collisionality
+and electric field. The
 results are shown in Figure~\ref{fig:mdke-dij}, comparing \yancc{} vs MONKES
 \cite{escoto_monkes_2024}. Both codes are converged to within 1\% across the
 full range of
@@ -926,8 +1150,8 @@ collisionality. The resolutions for each code are given in Table~\ref{tab:w7x}.
 \begin{tabular}{ll}
 \toprule
 $\rho$ & $0.45$ \\
-$\hat{\nu} = \nu_D/v$ & $\in [1 \times 10^{-4}, 3 \times 10^1]$ \\
-$\hat{E_r} = E_r/v$ & $[0, 10^{-3}]$ \\
+$\hat{\nu} = \nu_D/v$ & $\in [1 \times 10^{-4}, 3 \times 10^1]~\mathrm{m}^{-1}$ \\
+$\hat{E}_r = E_r/v = E_\rho/(a v)$ & $[0, 10^{-3}]~\mathrm{V\,s\,m}^{-2}$ \\
 MONKES resolution $(n_l, n_\theta, n_\zeta)$ & $(180, 39, 99)$ \\
 \yancc{} resolution $(n_\alpha, n_\theta, n_\zeta)$ & $(201, 31, 81)$ \\
 \bottomrule
@@ -939,7 +1163,7 @@ MONKES resolution $(n_l, n_\theta, n_\zeta)$ & $(180, 39, 99)$ \\
 \begin{figure}[htbp]
 \centering
 \includegraphics{benchmark_mdke_Dij.pdf}
-\caption{Monoenergetic transport coefficients $D_{ij}$ for the W7X-KJM
+\caption{Monoenergetic transport coefficients $D_{ij}$ for the W7-X high mirror
 configuration, comparing \yancc{} against MONKES over a range of collisionality
 and electric field.}
 \label{fig:mdke-dij}
@@ -947,10 +1171,12 @@ and electric field.}
 
 For a performance comparison, we re-implement the MONKES algorithm in JAX and
 compare time and memory required to solve the monoenergetic equation. Both codes
-run on the same hardware (Nvidia A100 GPU) to isolate algorithmic differences.
-For this problem, \yancc{} required 4GB of memory, while MONKES required only
-1.4 GB. This is likely due to the use of a Legendre discretization in MONKES,
-and the fact that the monoenergetic coefficients depend only on the first 2
+run on the same hardware (Nvidia A100 GPU) to isolate algorithmic differences (comparing
+\yancc{}'s finite difference discretization and Krylov/multigrid solver to the fully
+spectral discretization and block tridiagonal solver in MONKES).
+For this problem, \yancc{} required 4~GB of memory, while MONKES required only
+1.4~GB. This is likely due to the use of a Legendre discretization in MONKES,
+and the fact that the monoenergetic coefficients depend only on the first three
 Legendre modes, so very little storage is required. The tradeoff is that MONKES
 must invert a large number of dense matrices of size
 $(n_\theta n_\zeta) \times (n_\theta n_\zeta)$, which costs
@@ -965,7 +1191,7 @@ required, in this case they are broadly similar despite MONKES using a spectral
 discretization in all 3 coordinates. This is likely because the solutions are
 not sufficiently smooth for spectral convergence to show an advantage. If higher
 accuracy is desired then a fully spectral approach would be more efficient
-asymptotically, but at this level of accuracy common in optimization and
+asymptotically, but at the level of accuracy common in optimization and
 analysis there is little difference.
 
 \begin{figure}[htbp]
@@ -982,10 +1208,10 @@ collisionality.}
 
 For the full drift kinetic equation, we compare \yancc{} to SFINCS
 \cite{landreman_comparison_2014}, here
-for a single species scan in density / collisionality using an NCSX like
-equilibrium. The parameters are summarized in Table~\ref{tab:ncsx-1s}, and a
-comparison of the output fluxes (heat flux $\langle Q \rangle$, particle flux
-$\langle \Gamma \rangle$, and parallel flow $\langle V_{||} B \rangle$) is shown
+for a single species scan in density / collisionality using an NCSX \cite{zarnstorff2001physics}
+like equilibrium. The parameters are summarized in Table~\ref{tab:ncsx-1s}, and a
+comparison of the output fluxes (particle flux
+$\fsa{\Gamma}$, heat flux $\fsa{Q}$,  and parallel flow $\fsa{V_{\parallel} B}$) is shown
 in Figure~\ref{fig:nhat-fluxes}, where again both codes are converged to within
 1\%.
 
@@ -997,9 +1223,9 @@ $\rho$ & $0.5$ \\
 $E_r = E_\rho/a$ & $-1 ~\mathrm{kV/m}$ \\
 $T$ & $800 ~\mathrm{eV}$ \\
 $n$ & $\in [1.5 \times 10^{19}, 1.5 \times 10^{22}]~\mathrm{m}^{-3}$ \\
-$a/L_T$ & $0.81$ \\
-$a/L_n$ & $0.86$ \\
-$\nu^*=\frac{R \nu_D}{v_{th} \iota}$ & $5.2\times 10^{-3} - 4.1 \times 10^0$ \\
+$T^{-1} \partial_\rho T$ & $-0.81$ \\
+$n^{-1} \partial_\rho n$ & $-0.86$ \\
+$\nu^*=\frac{R_0 \nu_D}{v_{\mathrm{th}} \iota}$ & $5.2\times 10^{-3}\text{--}4.1 \times 10^0$ \\
 Species & Hydrogen \\
 SFINCS resolution $(n_x, n_\xi, n_\theta, n_\zeta)$ & $(7, 141, 25, 81)$ \\
 \yancc{} resolution $(n_x, n_\alpha, n_\theta, n_\zeta)$ & $(7, 121, 43, 65)$ \\
@@ -1012,7 +1238,8 @@ SFINCS resolution $(n_x, n_\xi, n_\theta, n_\zeta)$ & $(7, 141, 25, 81)$ \\
 \begin{figure}[htbp]
 \centering
 \includegraphics{benchmark_nhat_scan_fluxes.pdf}
-\caption{Output fluxes (heat flux, particle flux, and parallel flow) for the
+\caption{Output fluxes (particle flux $\fsa{\Gamma_i}$, heat flux $\fsa{Q_i}$, and
+parallel flow $\fsa{V_{\parallel}B}$) for the
 single-species NCSX density scan, comparing \yancc{} and SFINCS.}
 \label{fig:nhat-fluxes}
 \end{figure}
@@ -1020,14 +1247,15 @@ single-species NCSX density scan, comparing \yancc{} and SFINCS.}
 A timing comparison is shown in Figure~\ref{fig:nhat-time} across the full range
 of collisionality. For this case SFINCS was run on 128 CPU cores, while \yancc{}
 was run on a single Nvidia A100 GPU, both on the Perlmutter cluster at NERSC and
-both using 64 bit floats. We see a speedup of roughly 5x across the full range,
+both using 64 bit floats. We see a speedup of roughly $5\times$ across the full range,
 up to nearly 2 orders of magnitude at higher collisionality where SFINCS slows
 down significantly. This is likely because the default preconditioner in SFINCS
 drops coupling in the speed coordinate, effectively ignoring energy scattering
 which becomes important at high collisionality. On the other hand \yancc{}
 remains relatively flat, showing only modest slowdown at low or high
-collisionality. The times for \yancc{} do not include the cost of just in time
-compilation in JAX which must be paid once for a given resolution, after which
+collisionality. The times for \yancc{} do not include the cost of just-in-time
+compilation in JAX (usually under 30~s) which must be paid once for a given resolution,
+after which
 the JIT compiled code is re-used across the scan. This is most representative of
 real world use where the DKE is solved repeatedly for parameter scans or
 optimization tasks.
@@ -1036,7 +1264,7 @@ Due to the different hardware this is not a strictly fair comparison, but to get
 a rough estimate we can compare peak theoretical flops. Assuming we could run
 SFINCS on GPU with the same overall efficiency as on CPU (unlikely due to the
 poor scaling of sparse matrix factorizations on GPU), we would expect a speedup
-of roughly 3 going from 128 CPU to 1x A100. We can then see that the speedup
+of roughly 3 going from 128 CPU to $1\times$ A100. We can then see that the speedup
 from \yancc{} is due to both being able to run on GPU as well as purely
 algorithmic improvements that are independent of hardware. In addition to the
 speed improvement, \yancc{} also shows a clear win on memory usage. For these
@@ -1046,12 +1274,12 @@ especially important for GPU based codes since GPU memory is often a bottleneck.
 \begin{figure}[htbp]
 \centering
 \includegraphics{benchmark_nhat_scan_timing.pdf}
-\caption{Timing comparison between \yancc{} (1x A100 GPU) and SFINCS (128 CPU
+\caption{Timing comparison between \yancc{} ($1\times$ A100 GPU) and SFINCS (128 CPU
 cores) for the single-species NCSX density scan, across collisionality.}
 \label{fig:nhat-time}
 \end{figure}
 
-\subsection{Two-species $E_\rho$ scan}
+\subsection{Two-species \texorpdfstring{$E_\rho$}{E\_rho} scan}
 \label{sec:bench-two}
 
 To confirm the correctness for the 2 species case with full interspecies
@@ -1080,10 +1308,10 @@ $\rho$ & $0.5$ \\
 $E_r = E_\rho / a$ & $\in [-8, 8]~ \mathrm{kV/m}$ \\
 $T_H = T_e$ & $800 ~\mathrm{eV}$ \\
 $n_H = n_e$ & $1.5 \times 10^{20}~\mathrm{m}^{-3}$ \\
-$a/L_{T,H} = a/L_{T,e}$ & $0.81$ \\
-$a/L_{n,H} = a/L_{n,e}$ & $0.86$ \\
-$\nu^*_H = \frac{R \nu_{D,H}}{v_{th,H} \iota}$ & $5.0 \times 10^{-2}$ \\
-$\nu^*_e = \frac{R \nu_{D,e}}{v_{th,e} \iota}$ & $1.3 \times 10^{-1}$ \\
+$T_H^{-1} \partial_\rho T_H = T_e^{-1} \partial_\rho T_e$ & $-0.81$ \\
+$n_H^{-1} \partial_\rho n_H = n_e^{-1} \partial_\rho n_e$ & $-0.86$ \\
+$\nu^*_H = \frac{R_0 \nu_{D,H}}{v_{\mathrm{th},H} \iota}$ & $5.0 \times 10^{-2}$ \\
+$\nu^*_e = \frac{R_0 \nu_{D,e}}{v_{\mathrm{th},e} \iota}$ & $1.3 \times 10^{-1}$ \\
 Species & Hydrogen, Electrons \\
 SFINCS resolution $(n_x, n_\xi, n_\theta, n_\zeta)$ & $(7, 61, 15, 31)$ \\
 \yancc{} resolution $(n_x, n_\alpha, n_\theta, n_\zeta)$ & $(7, 61, 25, 37)$ \\
@@ -1096,11 +1324,70 @@ field scan.}
 
 \begin{figure}[htbp]
 \centering
-\includegraphics[width=\linewidth]{benchmark_er_scan_fluxes.pdf}
+\includegraphics[width=\linewidth]{benchmark_ncsx_er_scan_two_species_fluxes.pdf}
 \caption{Two-species (hydrogen and electron) radial electric field scan for the
-NCSX like equilibrium, comparing \yancc{} and SFINCS.}
+NCSX like equilibrium, comparing \yancc{} and SFINCS on particle flux ($\Gamma_e$,
+$\Gamma_i$), heat flux ($Q_e$, $Q_i$), parallel flow ($V_{\parallel, e} B$,
+$V_{\parallel,i}B$), radial current ($J_\rho$) and bootstrap current ($J_\parallel B$).}
 \label{fig:er-scan}
 \end{figure}
+
+\subsection{Ambipolar rootfinding in W7-X}
+\label{sec:bench-ambipolar}
+
+As a test of the ability to find the ambipolar electric field, we consider again the
+high mirror configuration of W7-X, and take a surface close to the axis with
+$T_e \gg T_i$ and zero density gradient (full parameters given in
+Table~\ref{tab:w7x-ambipolar}), where we expect to find multiple roots. We see that
+\yancc{} is able to find all three roots as shown in Figure~\ref{fig:w7x-ambipolar},
+corresponding to the ion branch, the electron branch, and the unstable branch in
+between. For this problem we gave no initial guess, only very wide bounds,
+corresponding to $E^* = \pm 0.1$, where $E^*$ is the electric field normalized to its
+resonant value (as $E^* \rightarrow \pm 1$ the drift ordering assumed by the DKE breaks
+down and nonphysical roots can appear). This should contrast with existing workflows
+for finding multiple roots which generally involve a dense scan in $E_\rho$, followed
+by visual inspection to look for likely root locations and then local root finding from
+those initial points or brackets. For this search, \yancc{} required 42 solutions of the
+DKE to find all three roots, which is already comparable to the number required for a
+dense scan to first bracket the roots in a standard workflow, and has the advantage
+of being fully automated.
+
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{ll}
+\toprule
+$\rho$ & $0.1919$ \\
+$E_\rho$ & $\in [-5.7 \times 10^4, 5.7 \times 10^4] ~\mathrm{V}$ \\
+$T_H$ &  $1150 ~\mathrm{eV}$\\
+$T_e$ & $2650 ~\mathrm{eV}$ \\
+$n_H = n_e$ & $6 \times 10^{19}~\mathrm{m}^{-3}$ \\
+$T_H^{-1} \partial_\rho T_H$ & $-0.869$ \\
+$T_e^{-1} \partial_\rho T_e$ & $-1.73$ \\
+$n_H^{-1} \partial_\rho n_H = n_e^{-1} \partial_\rho n_e$ & $0.0$ \\
+$\nu^*_H = \frac{R_0 \nu_{D,H}}{v_{\mathrm{th},H} \iota}$ & $2.1 \times 10^{-2}$ \\
+$\nu^*_e = \frac{R_0 \nu_{D,e}}{v_{\mathrm{th},e} \iota}$ & $9.4 \times 10^{-3}$ \\
+Species & Hydrogen, Electrons \\
+\yancc{} resolution $(n_x, n_\alpha, n_\theta, n_\zeta)$ & $(6, 181, 97, 31)$ \\
+\bottomrule
+\end{tabular}
+\caption{Parameters and resolutions for the W7-X ambipolar electric field solve.}
+\label{tab:w7x-ambipolar}
+\end{table}
+
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\linewidth]{benchmark_w7x_kjm_ambipolar_roots.pdf}
+\caption{Left: Particle fluxes (electron and ion) as a function of $E_\rho$ for the W7-X
+high mirror configuration. Right: The radial current $J_\rho$ and the location of the
+found ambipolar roots. Also shown are the modified curves after deflating each found
+root. The bounds used for the rootfinding were more than $10\times$ wider than the region
+shown, but \yancc{} is able to efficiently explore this space and find the desired
+roots.}
+\label{fig:w7x-ambipolar}
+\end{figure}
+
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -1108,7 +1395,7 @@ NCSX like equilibrium, comparing \yancc{} and SFINCS.}
 We have presented \yancc, a new solver for the drift kinetic equation designed
 for GPU acceleration and automatic differentiability. The code solves both the
 monoenergetic and full four-dimensional forms of the equation, using a mixed
-pseudo-spectral/finite difference discretization with a multigrid preconditioned
+pseudo-spectral/finite difference discretization with a multigrid-preconditioned
 Krylov solver. The numerical benchmarks demonstrate agreement with MONKES and
 SFINCS to within 1\% across a wide range of collisionalities, electric fields,
 and magnetic geometries, for both single-species and multi-species plasmas, and
@@ -1136,32 +1423,34 @@ are commonly used today. The differentiability also enables adjoint-based
 sensitivity analysis, where the derivative of a quantity of interest with
 respect to all input parameters can be computed in a single solve.
 
-Several directions for future development are planned. Self-consistent
-computation of the ambipolar radial electric field will be added as a built-in
-capability, extending beyond the current approach where $E_r$ is specified as an
-input. Adaptive mesh refinement in pitch angle and real space is being explored
+Several directions for future development are planned. Adaptive mesh refinement in
+pitch angle and real space is being explored
 to efficiently resolve the trapped-passing boundary layers, which can span
 several orders of magnitude in width depending on collisionality, without
 requiring uniformly fine grids across the full angular domain. Incorporating
 corrections for strong radial electric fields and flows near quasisymmetry,
 building on the work of \cite{nies_turbulence_2025}, will extend the validity of
 the code to regimes
-where the conventional $\rho_*$ ordering assumptions begin to break down.
+where the conventional $\rho_*$ ordering assumptions begin to break down. When
+considering impurities, additional terms in the DKE can become important, such as
+tangential drifts or the in-surface variation of the electrostatic potential
+\cite{garcia2017electrostatic}, and including these terms is planned.
 Together, these developments will make \yancc{} a versatile tool for
 neoclassical transport calculations across the full range of fusion-relevant
 regimes, from conceptual design through discharge analysis.
 
 
-\subsection{Data Availability}
-The source code and data supporting this work is available at
-\url{https://github.com/f0uriest/yancc}
+\section*{Data Availability}
+The source code and data supporting this work are available at
+\url{https://github.com/f0uriest/yancc}.
 
-\section{Acknowledgements}
-This work was supported by Greg Hammett’s DOE Distinguished Scientist Fellow
-award, and by a grant from the Simons Foundation (560651, ML). This research
+\section*{Acknowledgements}
+This work was supported by a DOE Distinguished Scientist Fellow Award to G.W. Hammett
+via DOE Contract No. DE-AC02-09CH11466 to the Princeton Plasma Physics Laboratory.
+This work was also supported by a grant from the Simons Foundation (560651, ML). This research
 used resources of the National Energy Research Scientific Computing Center
 (NERSC), a Department of Energy User Facility using NERSC award FES-m4505 for
-2025-2026. The authors thank Javier Escoto for help with the MONKES benchmark and
+2025--2026. The authors thank Javier Escoto for help with the MONKES benchmark and
 for many fruitful discussions about solving the drift kinetic equation, as well
 as Greg Hammett for many discussions about subtleties of numerical methods.
 
@@ -1190,23 +1479,23 @@ And similarly for $f_{1,s}$:
 f_{1,s}(\alpha, x_s) = \sum_l P_l(-\cos \alpha) f_{1,s,l} (x_s)
 \end{equation}
 
-The Legendre harmonics of the potentials are then given by the Greens function:
+The Legendre harmonics of the potentials are then given by the Green's function:
 \begin{equation}
-H_{s,l}(x_s) = \frac{4\pi v_{th,s}^2}{2l+1}
+H_{s,l}(x_s) = \frac{4\pi v_{\mathrm{th},s}^2}{2l+1}
 \Bigg[\frac{1}{x_s^{l+1}} I_{2,l}(x_s) + x_s^l I_{1,l}(x_s) \Bigg]
 \end{equation}
 \begin{equation}
-G_{s,l}(x_s) = -\frac{4\pi v_{th,s}^4}{4l^2-1}
+G_{s,l}(x_s) = -\frac{4\pi v_{\mathrm{th},s}^4}{4l^2-1}
 \Bigg[ {x_s^l} I_{3,l}(x_s) - \frac{2l-1}{2l+3}x_s^{l+2} I_{1,l}(x_s)
 - \frac{2l-1}{2l+3} \frac{1}{x_s^{l+1}} I_{4,l}(x_s)
 + \frac{1}{x_s^{l-1}} I_{2,l}(x_s) \Bigg]
 \end{equation}
 with
 \begin{align}
-I_{1,l}(x_s) &= \int_{x_s}^\infty z^{-l+1} f_{1,s,l}(z) \mathrm{d} z \\
-I_{2,l}(x_s) &= \int_0^{x_s} z^{l+2} f_{1,s,l}(z) \mathrm{d} z \\
-I_{3,l}(x_s) &= \int_{x_s}^\infty z^{-l+3} f_{1,s,l}(z) \mathrm{d} z \\
-I_{4,l}(x_s) &= \int_0^{x_s} z^{l+4} f_{1,s,l}(z) \mathrm{d} z
+I_{1,l}(x_s) &= \int_{x_s}^\infty z^{-l+1} f_{1,s,l}(z) \,\mathrm{d}z \\
+I_{2,l}(x_s) &= \int_0^{x_s} z^{l+2} f_{1,s,l}(z) \,\mathrm{d}z \\
+I_{3,l}(x_s) &= \int_{x_s}^\infty z^{-l+3} f_{1,s,l}(z) \,\mathrm{d}z \\
+I_{4,l}(x_s) &= \int_0^{x_s} z^{l+4} f_{1,s,l}(z) \,\mathrm{d}z
 \end{align}
 We can then express $f_{1,s,l}$ using weighted Maxwell polynomials $L_k(x_s)$:
 \begin{equation}
@@ -1214,10 +1503,10 @@ f_{1,s,l}(x_s) = \sum_k f_{1,s,l,k} L_k(x_s) \exp(-x_s^2)
 \end{equation}
 and define
 \begin{align}
-I_{1,l,k}(x_s) &= \int_{x_s}^\infty z^{-l+1} L_k(z) \exp(-z^2) \mathrm{d} z \\
-I_{2,l,k}(x_s) &= \int_0^{x_s} z^{l+2} L_k(z) \exp(-z^2) \mathrm{d} z \\
-I_{3,l,k}(x_s) &= \int_{x_s}^\infty z^{-l+3} L_k(z) \exp(-z^2) \mathrm{d} z \\
-I_{4,l,k}(x_s) &= \int_0^{x_s} z^{l+4} L_k(z) \exp(-z^2) \mathrm{d} z
+I_{1,l,k}(x_s) &= \int_{x_s}^\infty z^{-l+1} L_k(z) \exp(-z^2) \,\mathrm{d}z \\
+I_{2,l,k}(x_s) &= \int_0^{x_s} z^{l+2} L_k(z) \exp(-z^2) \,\mathrm{d}z \\
+I_{3,l,k}(x_s) &= \int_{x_s}^\infty z^{-l+3} L_k(z) \exp(-z^2) \,\mathrm{d}z \\
+I_{4,l,k}(x_s) &= \int_0^{x_s} z^{l+4} L_k(z) \exp(-z^2) \,\mathrm{d}z
 \end{align}
 so that
 \begin{align}
@@ -1228,60 +1517,50 @@ I_{4,l}(x_s) &= \sum_k f_{1,s,l,k} I_{4,l,k}(x_s)
 \end{align}
 We can then define
 \begin{equation}
-H_{s,l,k}(x_s) = \frac{4\pi}{2l+1}
+H_{s,l,k}(x_s) = \frac{4\pi v_{\mathrm{th},s}^2}{2l+1}
 \Bigg[\frac{1}{x_s^{l+1}} I_{2,l,k}(x_s) + x_s^l I_{1,l,k}(x_s) \Bigg]
 \end{equation}
 \begin{equation}
-G_{s,l,k}(x_s) = -\frac{4\pi}{4l^2-1}
+G_{s,l,k}(x_s) = -\frac{4\pi v_{\mathrm{th},s}^4}{4l^2-1}
 \Bigg[ {x_s^l} I_{3,l,k}(x_s) - \frac{2l-1}{2l+3}x_s^{l+2} I_{1,l,k}(x_s)
 - \frac{2l-1}{2l+3} \frac{1}{x_s^{l+1}} I_{4,l,k}(x_s)
 + \frac{1}{x_s^{l-1}} I_{2,l,k}(x_s) \Bigg]
 \end{equation}
-The integrals $I_{1,l,k}$ etc can be cheaply computed as incomplete gamma
-functions after a change of variables. Taking $I_{1,l,k}$ as an example, we
-first express $L_k$ in the standard monic polynomial form:
-\begin{equation}
-L_k(x) = \sum_{k'}^k p_{k'} x^{k'}
-\end{equation}
-then $I_{1,l,k}$ becomes
-\begin{equation}
-I_{1,l,k}(x_s) = \sum_{k'}^k p_{k'}\int_{x_s}^\infty z^{k'-l+1}
-\exp(-z^2) \mathrm{d} z
-\end{equation}
-Changing variables to $y = z^2$ we obtain
-\begin{align}
-I_{1,l,k}(x_s) &= \frac{1}{2}\sum_{k'}^k p_{k'}
-\int_{x^2_s}^\infty y^{(k'-l)/2} \exp(-y) \mathrm{d} y \\
-&= \frac{1}{2}\sum_{k'}^k p_{k'} \Gamma(k'/2-l/2 + 1, x_s^2)
-\end{align}
-where $\Gamma(s,x)$ is the upper incomplete gamma function. The other integrals
-can be transformed similarly, with $I_2$ and $I_4$ giving lower incomplete gamma
-functions $\gamma(s,x)$. To avoid numerical cancellation due to the large
-magnitudes involved, we compute the gamma functions in logarithmic form and
-evaluate the integral using a weighted log-sum-exp operation.
+To compute the integrals $I_{i,l,k}$, we use a fixed composite Gauss--Legendre quadrature
+rule of 32 nodes per panel. For the integrals over $[0, x_s]$ ($I_2$ and $I_4$), we use
+two uniform panels on $[0, \min(x_s, 10)]$, beyond which the integrand is negligible.
+The integrals over $[x_s, \infty)$ ($I_1$ and $I_3$) contain negative powers of $z$ that
+are sharply peaked near $z = x_s$ when $x_s \ll 1$, so we use four geometrically
+graded panels on $[x_s, \max(x_s, 1)]$, followed by two uniform panels covering
+the Maxwellian tail up to $\max(x_s, 1) + \min(8, 22/x_s + 1)$. Compared to
+high precision reference values, this rule attains an error within a small
+multiple of the best achievable in double precision (machine precision times the
+integral of the absolute value of the integrand) for $n_x$ up to 20 and $l_{\max}$
+up to 16 which covers all but the most extreme cases. Beyond this we use an adaptive
+quadrature routine from quadax \cite{Conlin_quadax}.
 
 The distribution function $f_s$ is stored on a grid in $(x, \alpha)$ as
-$f_{s,x,\alpha}$, and the greens functions $H_{s,l,k}$ and $G_{s,l,k}$ are
+$f_{s,x,\alpha}$, and the Green's functions $H_{s,l,k}$ and $G_{s,l,k}$ are
 stored on the same speed grid, for each cross species interaction as
-$H_{s,s',x',l,k}$ and $G_{s,s',x',l,k}$ (where $x' = x_s v_{th,s}/v_{th,s'}$,
+$H_{s,s',x',l,k}$ and $G_{s,s',x',l,k}$ (where $x' = x_s v_{\mathrm{th},s}/v_{\mathrm{th},s'}$,
 the potential for species $s$ evaluated on the speed grid for species $s'$). The
 Rosenbluth potentials can then be evaluated as simple tensor contractions:
 \begin{equation}
-H_{s, s',x',\alpha'} = \sum_{l,k,x,\alpha} T^{-1}_{l,\alpha'} H_{s,s',x',l,k}
+H_{s, s',x',\alpha'} = \sum_{l,k,x,\alpha} T^{\dagger}_{l,\alpha'} H_{s,s',x',l,k}
 V_{k,x}T_{l,\alpha}f_{s,x,\alpha}
 \end{equation}
 \begin{equation}
-G_{s, s',x',\alpha'} = \sum_{l,k,x,\alpha} T^{-1}_{l,\alpha'} G_{s,s',x',l,k}
+G_{s, s',x',\alpha'} = \sum_{l,k,x,\alpha} T^{\dagger}_{l,\alpha'} G_{s,s',x',l,k}
 V_{k,x}T_{l,\alpha}f_{s,x,\alpha}
 \end{equation}
 where $T_{l,\alpha}$ is the change of basis matrix transforming between pitch
-angle $\alpha$ and Legendre index $l$ and $V_{k,x}$ is the change of basis
+angle $\alpha$ and Legendre index $l$, with $T^\dagger_{l,\alpha}$ its pseudoinverse, and $V_{k,x}$ is the change of basis
 matrix between speed $x$ and Maxwell polynomial index $k$. Derivatives of the
 potentials with respect to speed required for the collision operator are
 obtained analytically and precomputed/applied in a similar fashion. The cost of
 these tensor operations is quite low, as the resolution in $x$ is fairly coarse
 ($n_x \sim 5$--$10$), and generally only a small number of Legendre modes are
-required to represent the potentials (generally $l_{max} \sim 4$--$6$).
+required to represent the potentials (generally $l_{\max} \sim 4$--$6$).
 
 % ---------------------------------------------------------------------------
 \bibliographystyle{plain}

@@ -17,11 +17,19 @@ def _compare_fields_scalars(field1, field2):
     np.testing.assert_allclose(field1.psi_r, field2.psi_r, rtol=5e-2)
     np.testing.assert_allclose(field1.sqrtg.mean(), field2.sqrtg.mean(), rtol=1e-5)
     np.testing.assert_allclose(field1.B0, field2.B0, rtol=1e-2)
+    np.testing.assert_allclose(
+        field1.flux_surface_average(field1.g_sup_rr / field1.Bmag**2),
+        field2.flux_surface_average(field2.g_sup_rr / field2.Bmag**2),
+        rtol=1e-3,
+    )
 
 
 def _compare_fields_local(field1, field2):
     np.testing.assert_allclose(field1.Bmag, field2.Bmag, rtol=1e-3)
     np.testing.assert_allclose(field1.sqrtg, field2.sqrtg, rtol=1e-3)
+    # g_sup_rr depends on angular derivatives of R, Z, so it is sensitive to
+    # truncated Fourier modes in the input files
+    np.testing.assert_allclose(field1.g_sup_rr, field2.g_sup_rr, rtol=3e-2)
     np.testing.assert_allclose(field1.B_sub_t, field2.B_sub_t, rtol=1e-3, atol=1e-4)
     np.testing.assert_allclose(field1.B_sub_z, field2.B_sub_z, rtol=1e-3, atol=1e-4)
     np.testing.assert_allclose(field1.B_sup_t, field2.B_sup_t, rtol=1e-3, atol=1e-4)

@@ -1,1 +1,4 @@
+*.ipynb -linguist-detectable
+*.tex -linguist-detectable
+docs/* linguist-documentation
 yancc/_version.py export-subst

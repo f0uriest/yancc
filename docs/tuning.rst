@@ -86,6 +86,16 @@ DKE-only options
    add Krook style diffusion. Use this to selectively turn parts of the operator off
    (e.g. zero out :math:`C_E` and :math:`C_F` to recover a Lorentz operator).
 
+``fluid_correction`` *(bool, default True)*
+   Whether to precede each application of the multigrid preconditioner with an
+   exact correction of the density, energy and parallel momentum of each species
+   at every point of the flux surface. This makes the solve much more robust at high
+   collisionality, at the cost of a setup step and one extra operator application
+   per iteration (usually less than 2% additional cost per iteration, and can reduce
+   the required number of iterations by 5-10x). The correction of each species is
+   weighted smoothly from 0 at low collisionality to 1 at high collisionality, where
+   it is needed most, and it is skipped when no species is collisional.
+
 Warm-starting
 -------------
 
@@ -182,6 +192,28 @@ Cycle and smoothing
    to 4–5 is sometimes the cheapest way to recover convergence on stiff
    problems.
 
+``smooth_type`` *(str, default "plane,s,x,a,l01t,l01z" for DKE, "plane,a,t,z" for MDKE)*
+   Comma separated list of the smoothers applied on each multigrid level, in the
+   order given. Each entry is one of:
+
+   - ``"a"``, ``"t"``, ``"z"``: block-Jacobi line smoothers along pitch angle, theta
+     and zeta. The DKE also has ``"x"`` and ``"s"``, line smoothers along speed and
+     species.
+   - ``"plane"``: a (theta, zeta)-plane smoother that uses only the surface averaged
+     drift and diagonalizes via a 2d Fourier transform so it is fast and memory
+     efficient.
+   - ``"l01t"``, ``"l01z"``: theta and zeta line smoothers acting only on the
+     lowest two Legendre moments in pitch (the flux-surface density- and
+     flow-like parts of the distribution).
+
+   For example ``"z,t,a,x,s"`` uses only the block-Jacobi line smoothers for the DKE.
+   The moment smoothers only act on part of the distribution function, so they should
+   be combined with smoothers that cover the rest. Adding the block-Jacobi theta and
+   zeta lines to the defaults (e.g. ``"plane,s,x,a,l01t,l01z,t,z"`` for the DKE or
+   ``"plane,a,t,z,l01t,l01z"`` for the MDKE) usually reduces the number of iterations
+   further, but increases the cost of each iteration by more. ``smooth_weights``
+   applies to the line and plane smoothers.
+
 ``smooth_method`` *(str, default "standard")*
    How the smoother is applied. Choices: ``"standard"`` (block Jacobi, which is tuned
    to decrease the error but may not decrease the residual), ``"krylov1"``,
@@ -207,7 +239,10 @@ Cycle and smoothing
 
 ``smooth_weights`` *(default None)*
    Optional damping weights applied to each smoother. The default ``None`` uses
-   specially tuned weights based on the collisionality of the problem.
+   specially tuned weights based on the collisionality of the problem. A single value
+   applies to every smoother. A dict with entries from ``smooth_type`` as keys, e.g.
+   ``{"plane": 0.8, "l01t": 0.9}``, sets the weight of each of those smoothers, with
+   the others using their defaults.
 
 ``p1``, ``p2`` *(default "2d", 2)*
    Finite-difference order used inside the preconditioner. Lower order than
@@ -215,9 +250,14 @@ Cycle and smoothing
    preconditioner only needs to be a good approximation, and lower order is
    cheaper.
 
-``gauge`` *(bool, default True)*
-   Whether to fix the gauge of the constraint equations inside the
-   preconditioner. Keep this True; it exists primarily for verification.
+``gauge`` *(default True for the MDKE, "shift" for the DKE)*
+   How the preconditioner handles the null space of the operator (for the DKE, a
+   density and an energy mode for each species). ``True`` fixes it by replacing the
+   equations at one grid point on every level. For the DKE, ``"shift"`` keeps the
+   null space on every level and shifts it away from zero in the direct solve on the
+   coarsest level, which converges more reliably; ``True`` is still accepted.
+   ``False`` leaves the null space in place, so the coarsest solve is singular; it
+   exists primarily for verification. The MDKE accepts only ``True`` or ``False``.
 
 DKE-only multigrid options
 --------------------------

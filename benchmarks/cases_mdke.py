@@ -14,9 +14,9 @@ which is ``erhat * field.a_minor`` (this mirrors ``tests/test_solve.py``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from cases_dke import load_field
+from cases_dke import load_field, scale_resolution
 
 from yancc.velocity_grids import UniformPitchAngleGrid
 
@@ -32,6 +32,11 @@ class Case:
     res: tuple[int, int, int]
     rtol: float = 1e-5
     tier: str = "nightly"
+
+    def scaled(self, scale: float) -> Case:
+        """Copy of this case with the na, nt, nz resolutions scaled by ``scale``."""
+        na, nt, nz = (scale_resolution(n, scale) for n in self.res)
+        return replace(self, res=(na, nt, nz))
 
     def build(self):
         """Return (field, pitchgrid, erhohat, nuhat) ready for solve_mdke."""

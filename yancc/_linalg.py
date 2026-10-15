@@ -6,11 +6,13 @@ from typing import cast
 
 import equinox as eqx
 import jax
+import jax.flatten_util
 import jax.numpy as jnp
 import lineax as lx
 import numpy as np
 from jaxtyping import Array, Float
 
+from ._sharding import _replicate
 from .field import Field
 from .velocity_grids import AbstractPitchAngleGrid
 
@@ -57,19 +59,18 @@ def _ruiz_scale(A, iters=5):
     # Partial pivoting LU has backward error ~eps*max|A|, so without balancing the
     # large entries set an error floor that swamps the directions where the heavy
     # species are nearly singular.
-    absA = jnp.abs(A)
-
-    def body(_, rc):
-        r, c = rc
-        scaled = r[:, None] * absA * c[None, :]
-        rmax = scaled.max(axis=1)
-        cmax = scaled.max(axis=0)
+    # The scaled magnitudes are recomputed from A inside each reduction rather than
+    # stored, so the elementwise work fuses into the reductions and no n x n
+    # temporary exists alongside A. The loop is unrolled because A is used again
+    # after scaling: passing it into a while loop makes XLA give the loop its own
+    # n x n copy of A.
+    r = c = jnp.ones(A.shape[0], dtype=A.dtype)
+    for _ in range(iters):
+        rmax = jnp.abs(r[:, None] * A * c[None, :]).max(axis=1)
+        cmax = jnp.abs(r[:, None] * A * c[None, :]).max(axis=0)
         r = r * _where(rmax > 0, 1 / jnp.sqrt(rmax), jnp.ones_like(rmax))
         c = c * _where(cmax > 0, 1 / jnp.sqrt(cmax), jnp.ones_like(cmax))
-        return r, c
-
-    ones = jnp.ones(A.shape[0], dtype=A.dtype)
-    return jax.lax.fori_loop(0, iters, body, (ones, ones))
+    return r, c
 
 
 def _banded_row_scale(p, q, A, periodic):
@@ -165,10 +166,10 @@ class AbstractDKEOperator(AbstractYanccOperator):
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
 
     @abc.abstractmethod
-    def block_diagonal(self, fmt="dense", bw=None) -> Float[Array, "n1 n2 n2"]:
+    def block_diagonal(
+        self, fmt="dense", bw=None, axorder: str = "sxatz"
+    ) -> Float[Array, "n1 n2 n2"]:
         """Block diagonal of the operator.
-
-        Blocks are along the last axis of ``axorder``.
 
         Parameters
         ----------
@@ -178,7 +179,29 @@ class AbstractDKEOperator(AbstractYanccOperator):
         bw : int, optional
             Lower and upper bandwidth of the banded storage. Defaults to a
             bandwidth that holds all nonzero entries of the blocks.
+        axorder : str, optional
+            Ordering of the axes, a permutation of "sxatz" (or "atz" for operators
+            without species and speed). Blocks are along the last axis, and ordered
+            by the remaining axes in the given order. Defaults to "sxatz" (or "atz"),
+            giving blocks along zeta.
         """
+
+
+def _bordered_structure(n1, n2):
+    """Structure of a bordered vector, a tuple of parts of size n1 and n2."""
+    dtype = jnp.array(1.0).dtype
+    return (jax.ShapeDtypeStruct((n1,), dtype), jax.ShapeDtypeStruct((n2,), dtype))
+
+
+def _bordered_as_matrix(operator):
+    """Dense matrix of an operator on bordered vectors, parts concatenated in order."""
+    x = jax.tree.map(jnp.zeros_like, operator.in_structure())
+    unravel = jax.flatten_util.ravel_pytree(x)[1]
+
+    def mv(v):
+        return jax.flatten_util.ravel_pytree(operator.mv(unravel(v)))[0]
+
+    return jax.vmap(mv, out_axes=-1)(jnp.eye(operator.in_size()))
 
 
 class BorderedOperator(lx.AbstractLinearOperator):
@@ -186,6 +209,9 @@ class BorderedOperator(lx.AbstractLinearOperator):
 
     [A B]
     [C 0]
+
+    Vectors are tuples ``(x1, x2)`` with ``x1`` in the space of ``A`` and ``x2`` of
+    size ``B.in_size()`` (input) or ``C.out_size()`` (output).
     """
 
     A: lx.AbstractLinearOperator
@@ -203,30 +229,25 @@ class BorderedOperator(lx.AbstractLinearOperator):
         """Matrix vector product."""
         # [A B] [X1] = [AX1 + BX2]
         # [C 0] [X2] = [CX1      ]
-        X1 = vector[: self.A.in_size()]
-        X2 = vector[self.A.in_size() :]
+        # The two parts are kept as separate arrays rather than one concatenated
+        # vector, so that when X1 is split across devices its shards stay aligned
+        # with those of the operators acting on it.
+        X1, X2 = vector
         Y1 = self.A.mv(X1) + self.B.mv(X2)
         Y2 = self.C.mv(X1)
-        return jnp.concatenate([Y1, Y2])
+        return (Y1, Y2)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.A.in_size() + self.B.in_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.A.in_size(), self.B.in_size())
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.A.out_size() + self.C.out_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.A.out_size(), self.C.out_size())
 
     def transpose(self):
         """Transpose of the operator."""
@@ -257,8 +278,7 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
 
     def mv(self, vector):
         """Matrix vector product."""
-        X1 = vector[: self.Ai.in_size()]
-        X2 = vector[self.Ai.in_size() :]
+        X1, X2 = vector
         cbic_x1 = self.CBi.mv(self.C.mv(X1))
         z11 = X1 - self.B.mv(cbic_x1)
         Az11 = self.Ai.mv(z11)
@@ -266,26 +286,19 @@ class InverseBorderedOperator(lx.AbstractLinearOperator):
         z12 = self.B.mv(self.CBi.mv(X2))
         Y1 = z11 + z12
         Y2 = cbic_x1
-        return jnp.concatenate([Y1, Y2])
+        return (Y1, Y2)
 
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
-        x = jnp.eye(self.in_size())
-        return jax.vmap(self.mv, out_axes=-1)(x)
+        return _bordered_as_matrix(self)
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct(
-            (self.Ai.in_size() + self.B.in_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.Ai.in_size(), self.B.in_size())
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct(
-            (self.Ai.out_size() + self.C.out_size(),),
-            dtype=jnp.array(1.0).dtype,
-        )
+        return _bordered_structure(self.Ai.out_size(), self.C.out_size())
 
     def transpose(self):
         """Transpose of the operator."""
@@ -409,25 +422,63 @@ def _tridiag_solve(l, d, u, b, *args):
     return jax.lax.linalg.tridiagonal_solve(l, d, u, b[:, None])[:, 0]
 
 
+# Estimated 1-norm condition number of the factored matrix above which its solve is
+# refined. An LU solve is backward stable, but its rounding error is new for every
+# right hand side. Along nearly singular directions it is amplified twice, once
+# through the size of the solution there and once more through the inverse, so the
+# solve is linear only to within that noise. A Krylov method that treats the solve
+# as a fixed linear preconditioner, and rebuilds its update with one more
+# application instead of storing the preconditioned basis, then has a floor on its
+# true residual that its own estimate does not see, and restarts or stalls once that
+# floor approaches the tolerance. The size of the noise also depends on how the
+# right hand sides project onto the nearly singular directions, so the condition
+# number bounds it only loosely: well below this threshold refinement does not
+# change convergence, while above it some problems need it and others don't. The
+# threshold is set low enough that problems below it don't need refinement, and
+# above it refinement is always applied.
+_REFINE_COND = 5e12
+
+
 class DenseLUInverseOperator(lx.AbstractLinearOperator):
-    """Inverse of a dense matrix, via its LU factorization.
+    """Inverse of a linear operator, via the LU factorization of its dense matrix.
 
     Parameters
     ----------
-    matrix : jax.Array
-        Square matrix to invert.
+    operator : lx.AbstractLinearOperator
+        Operator to invert. Materialized into a dense matrix and factored.
     equilibrate : bool
         Whether to balance the rows and columns of the matrix before factoring it.
-        This does not change the inverse, but improves its accuracy for badly scaled
-        matrices.
+        This does not change the inverse, but improves the factorization's accuracy
+        for badly scaled matrices.
+    refine : int
+        Maximum number of steps of iterative refinement against ``operator`` to apply
+        after each triangular solve, which improves the accuracy for ill-conditioned
+        matrices. Steps only run when the estimated condition number of the matrix
+        is large enough for the rounding error of the solve to matter, so a
+        well-conditioned matrix pays only for the estimate at construction.
+    batch_size : int, optional
+        Number of columns of the identity to map ``operator`` over at a time when
+        materializing it. Default maps over all columns at once; a smaller batch
+        bounds the peak memory of materialization at the cost of a little speed.
     """
 
-    _luT: jax.Array
+    _lu: jax.Array
     _perm: jax.Array
     _r: jax.Array
     _c: jax.Array
+    _operator: lx.AbstractLinearOperator
+    _needs_refine: jax.Array
+    _refine: int = eqx.field(static=True)
 
-    def __init__(self, matrix: jax.Array, equilibrate: bool = True):
+    def __init__(
+        self,
+        operator: lx.AbstractLinearOperator,
+        equilibrate: bool = True,
+        refine: int = 1,
+        batch_size: int | None = None,
+    ):
+        matrix = dense_from_mv(operator.mv, operator.in_size(), batch_size)
+        norm1 = matrix_1norm(matrix)
         if equilibrate:
             r, c = _ruiz_scale(matrix)
             matrix = r[:, None] * matrix * c[None, :]
@@ -436,18 +487,61 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         # Only the factors are kept, not the matrix itself, so the operator holds a
         # single n x n array.
         lu, _, perm = jax.lax.linalg.lu(matrix)
-        # triangular_solve needs its matrix operand in column-major layout, while
-        # arrays passed into a jitted function are row-major. Storing the factor
-        # transposed makes the ``.T`` in ``mv`` a free relabeling of the same
-        # buffer, rather than a full n^2 relayout copy on every solve.
-        self._luT = jax.lax.stop_gradient(lu.T)
+        # The factor is stored exactly as the LU returns it, and every solve reads it
+        # directly. When the operator is built and used in the same jitted function
+        # XLA keeps it in the column-major layout triangular_solve needs, so it is a
+        # single n x n buffer. Any transpose or other reformulation of it gives XLA a
+        # separate value to materialize, and the construction-time solves below then
+        # hold a second n x n copy alongside the stored one.
+        self._lu = jax.lax.stop_gradient(lu)
         self._perm = perm
         self._r = jax.lax.stop_gradient(r)
         self._c = jax.lax.stop_gradient(c)
+        self._operator = operator
+        self._refine = refine
+        if refine:
+            # Whether this factorization needs refining depends only on how badly
+            # conditioned the matrix is, not on any particular right hand side, so it
+            # is decided once here rather than on every matrix-vector product.
+            # Deciding it per-``mv`` call from the actual ``vector`` would make ``mv``
+            # a nonlinear function of its input (the branch taken would depend on
+            # ``vector``), which breaks the operator's transpose.
+            inv_norm = _hager_1norm_est(
+                self._solve, self._solve_transpose, matrix.shape[0], (), matrix.dtype, 5
+            )
+            # Negated comparison so that a non-finite estimate (singular factors)
+            # also refines.
+            self._needs_refine = ~(norm1 * inv_norm <= _REFINE_COND)
+        else:
+            self._needs_refine = jnp.array(False)
+
+    def _shard(self, mesh):
+        # its size is set by the coarsest grid rather than the problem resolution, and
+        # the factorization can't be split across devices, so it is kept whole
+        return _replicate(self, mesh)
 
     def mv(self, vector):
         """Matrix vector product."""
-        lu = self._luT.T
+        x = self._solve(vector)
+        # For badly conditioned matrices the LU solve leaves a residual many orders of
+        # magnitude above roundoff, and its size depends on floating point details
+        # such as operation order and fusion. That makes the preconditioner, and so
+        # the Krylov iteration count, differ between compilations and hardware.
+        # Refinement against the operator (whose residual is far more accurate than
+        # the solve) removes most of that residual for the cost of one operator
+        # product and one more solve per step, so it is only applied when the
+        # factorization was flagged as needing it at construction.
+        for _ in range(self._refine):
+            x = jax.lax.cond(
+                self._needs_refine,
+                lambda x: x + self._solve(vector - self._operator.mv(x)),
+                lambda x: x,
+                x,
+            )
+        return x
+
+    def _solve(self, vector):
+        lu = self._lu
         # The factored matrix is diag(r) A diag(c), so A^-1 b = c * (LU)^-1 (r * b),
         # and (diag(r) A diag(c))[perm] = L U.
         b = (self._r * vector)[self._perm, None]
@@ -457,6 +551,22 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
         x = jax.lax.linalg.triangular_solve(lu, y, left_side=True, lower=False)
         return self._c * x[:, 0]
 
+    def _solve_transpose(self, vector):
+        lu = self._lu
+        # A^-T = diag(r) (LU)^-T P diag(c) with the permutation undone at the end:
+        # (diag(r) A diag(c))^T = U^T L^T P.
+        y = jax.lax.linalg.triangular_solve(
+            lu,
+            (self._c * vector)[:, None],
+            left_side=True,
+            lower=False,
+            transpose_a=True,
+        )
+        z = jax.lax.linalg.triangular_solve(
+            lu, y, left_side=True, lower=True, unit_diagonal=True, transpose_a=True
+        )
+        return self._r * jnp.zeros_like(z[:, 0]).at[self._perm].set(z[:, 0])
+
     def as_matrix(self):
         """Materialize the operator as a dense matrix."""
         x = jnp.zeros(self.in_size())
@@ -464,11 +574,11 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
 
     def in_structure(self):
         """Pytree structure of expected input."""
-        return jax.ShapeDtypeStruct((self._luT.shape[0],), dtype=self._luT.dtype)
+        return jax.ShapeDtypeStruct((self._lu.shape[0],), dtype=self._lu.dtype)
 
     def out_structure(self):
         """Pytree structure of expected output."""
-        return jax.ShapeDtypeStruct((self._luT.shape[0],), dtype=self._luT.dtype)
+        return jax.ShapeDtypeStruct((self._lu.shape[0],), dtype=self._lu.dtype)
 
     def transpose(self):
         """Transpose of the operator."""
@@ -482,6 +592,40 @@ class DenseLUInverseOperator(lx.AbstractLinearOperator):
 @lx.is_tridiagonal.register(DenseLUInverseOperator)
 def _(operator):
     return False
+
+
+class LowRankUpdateOperator(AbstractYanccOperator):
+    """Square linear operator plus a low rank term, ``A + U diag(s) V^T``.
+
+    Parameters
+    ----------
+    operator : lx.AbstractLinearOperator
+        The operator ``A``.
+    U, V : jax.Array, shape(n, k)
+        Left and right factors of the update.
+    s : jax.Array, shape(k,)
+        Scale of each rank one term of the update.
+    """
+
+    operator: lx.AbstractLinearOperator
+    U: jax.Array
+    V: jax.Array
+    s: jax.Array
+
+    def __init__(self, operator, U, V, s):
+        assert U.shape == V.shape == (operator.in_size(), s.size)
+        self.operator = operator
+        self.U = U
+        self.V = V
+        self.s = s
+
+    def mv(self, vector):
+        """Matrix vector product."""
+        return self.operator.mv(vector) + self.U @ (self.s * (self.V.T @ vector))
+
+    def in_structure(self):
+        """Pytree structure of expected input."""
+        return self.operator.in_structure()
 
 
 @functools.partial(jax.jit, static_argnames=["p", "q"])
@@ -1182,6 +1326,96 @@ def cr_block_tridiag_solve(factors, b, *, trans=False) -> jax.Array:
         )(b)
         return s * y
     return _cr_forward_solve(levels, root_inv, s * b)
+
+
+def _block_thomas_solve(lus, L, C, r):
+    """Solve a non-periodic block tridiagonal system from its block LU factors.
+
+    r has shape (m, b, ...). Forward and back substitution are each one loop, so the
+    traced program does not grow with the number of blocks.
+    """
+    # The rhs is the loop carry, overwritten one block at a time, rather than a
+    # scanned input with the solution stacked as scan outputs. jax.linear_transpose
+    # can't transpose a scan whose scanned inputs or outputs are linear, and the
+    # operators using this solve are transposed that way.
+    m = r.shape[0]
+
+    def forward(i, y):
+        lu = jax.tree.map(lambda a: a[i], lus)
+        prev = jnp.where(i > 0, L[i] @ y[jnp.maximum(i - 1, 0)], 0.0)
+        return y.at[i].set(jax.scipy.linalg.lu_solve(lu, y[i] - prev))
+
+    def backward(j, x):
+        i = m - 1 - j
+        nxt = jnp.where(i < m - 1, C[i] @ x[jnp.minimum(i + 1, m - 1)], 0.0)
+        return x.at[i].set(x[i] - nxt)
+
+    y = jax.lax.fori_loop(0, m, forward, r)
+    return jax.lax.fori_loop(0, m, backward, y)
+
+
+@jax.jit
+def block_tridiag_periodic_factor(D, L, U):
+    """Block LU factorization of a periodic block tridiagonal matrix.
+
+    Rows are equilibrated before factoring. Each diagonal block is factored with
+    partial pivoting, but there is no pivoting between blocks.
+
+    Parameters
+    ----------
+    D, L, U : jax.Array, shape (m, b, b)
+        Diagonal, sub- and super-diagonal blocks, so that block row k of the matrix
+        applied to x is ``L[k] x[k-1] + D[k] x[k] + U[k] x[k+1]``, with block indices
+        taken modulo m. Requires m >= 2.
+
+    Returns
+    -------
+    factors : tuple
+        Factors for block_tridiag_periodic_solve.
+    """
+    m, b, _ = D.shape
+    s = _cr_row_scale(D[None], L[None], U[None])[0]
+    D, L, U = D * s[..., None], L * s[..., None], U * s[..., None]
+    # The first m - 1 block rows form a non-periodic block tridiagonal system T,
+    # coupled to the last block through E (rows 0 and m - 2). The last block is then
+    # found from the Schur complement of T.
+    n = m - 1
+    E = jnp.zeros((n, b, b), D.dtype).at[0].set(L[0]).at[n - 1].add(U[n - 1])
+    Lt = L[:n].at[0].set(0.0)
+    Ut = U[:n].at[n - 1].set(0.0)
+
+    def eliminate(c_prev, xs):
+        d, l, u = xs
+        lu = jax.scipy.linalg.lu_factor(d - l @ c_prev)
+        c = jax.scipy.linalg.lu_solve(lu, u)
+        return c, (lu, c)
+
+    _, (lus, C) = jax.lax.scan(eliminate, jnp.zeros((b, b), D.dtype), (D[:n], Lt, Ut))
+    Y = _block_thomas_solve(lus, Lt, C, E)
+    S = D[n] - U[n] @ Y[0] - L[n] @ Y[n - 1]
+    return lus, Lt, C, Y, jax.scipy.linalg.lu_factor(S), U[n], L[n], s
+
+
+def block_tridiag_periodic_solve(factors, r):
+    """Solve a periodic block tridiagonal system.
+
+    Parameters
+    ----------
+    factors : tuple
+        Output of block_tridiag_periodic_factor.
+    r : jax.Array, shape (m, b)
+        Right hand side.
+
+    Returns
+    -------
+    x : jax.Array, shape (m, b)
+    """
+    lus, Lt, C, Y, S, U_last, L_last, s = factors
+    r = s * r
+    y = _block_thomas_solve(lus, Lt, C, r[:-1])
+    x_last = jax.scipy.linalg.lu_solve(S, r[-1] - U_last @ y[0] - L_last @ y[-1])
+    x = y - jnp.einsum("kij,j->ki", Y, x_last)
+    return jnp.concatenate([x, x_last[None]])
 
 
 def _banded_to_blocks(Ab, b, p, q):

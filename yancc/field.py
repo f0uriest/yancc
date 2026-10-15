@@ -68,6 +68,10 @@ class Field(eqx.Module):
         Derivative of Bmag with respect to theta/zeta. Default is to compute with fft.
     B0 : float, optional
         Characteristic scale for magnetic field. Default is surface average of B.
+    g_sup_rr : jax.Array, shape(ntheta, nzeta), optional
+        Contravariant radial metric element g^rr = grad(rho)·grad(rho), in units of
+        1/m^2. Only needed for outputs that depend on the real space geometry of
+        the surface, such as classical transport.
     """
 
     rho: Float[Array, ""]
@@ -85,6 +89,7 @@ class Field(eqx.Module):
     BxgradrhodotgradB: Float[Array, "ntheta nzeta"]
     dBdt: Float[Array, "ntheta nzeta"]
     dBdz: Float[Array, "ntheta nzeta"]
+    g_sup_rr: Float[Array, "ntheta nzeta"] | None
     Bmag_fsa: Float[Array, ""]
     B2mag_fsa: Float[Array, ""]
     psi_r: Float[Array, ""]
@@ -119,6 +124,7 @@ class Field(eqx.Module):
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
+        g_sup_rr: Float[ArrayLike, "ntheta nzeta"] | None = None,
         source: _FieldSource = _FieldSource.manual,
     ):
         self.source = source
@@ -138,6 +144,7 @@ class Field(eqx.Module):
             dBdz = self._dfdz(self.Bmag)
         self.dBdt = jnp.asarray(dBdt)
         self.dBdz = jnp.asarray(dBdz)
+        self.g_sup_rr = None if g_sup_rr is None else jnp.asarray(g_sup_rr)
         if B0 is None:
             B0 = self.Bmag.mean()
         self.B0 = jnp.asarray(B0)
@@ -229,6 +236,7 @@ class Field(eqx.Module):
             "|B|_t",
             "|B|_z",
             "sqrt(g)",
+            "|grad(rho)|",
             "iota",
         ]
         desc_data = eq.compute(keys, grid=grid, data=seed, override_grid=False)
@@ -242,6 +250,7 @@ class Field(eqx.Module):
             "dBdt": desc_data["|B|_t"],
             "dBdz": desc_data["|B|_z"],
             "sqrtg": desc_data["sqrt(g)"],
+            "g_sup_rr": desc_data["|grad(rho)|"] ** 2,
         }
 
         data = {
@@ -302,6 +311,8 @@ class Field(eqx.Module):
         bsupv_mnc = file.variables["bsupvmnc"][:].filled()
         bsubu_mnc = file.variables["bsubumnc"][:].filled()
         bsubv_mnc = file.variables["bsubvmnc"][:].filled()
+        r_mnc = file.variables["rmnc"][:].filled()
+        z_mns = file.variables["zmns"][:].filled()
 
         nfp = file.variables["nfp"][:].filled()
         iota = file.variables["iotaf"][:].filled()
@@ -315,6 +326,22 @@ class Field(eqx.Module):
         bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :], extrap=True)
         bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :], extrap=True)
         iota = interpax.interp1d(s, s_full, iota, extrap=True)
+        r_mnc = interpax.interp1d(s, s_full, r_mnc, extrap=True)
+        z_mns = interpax.interp1d(s, s_full, z_mns, extrap=True)
+
+        # the vmec toroidal angle is the cylindrical angle
+        xm_geo = file.variables["xm"][:].filled()
+        xn_geo = file.variables["xn"][:].filled()
+        t, z = theta[:, None], zeta[None, :]
+        R = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo)
+        R_t = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo, dt=1)
+        R_z = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo, dz=1)
+        Z_t = _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo, dt=1)
+        Z_z = _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo, dz=1)
+        # covariant basis vectors in the orthonormal (R, phi, Z) basis
+        e_t = jnp.stack([R_t, jnp.zeros_like(R), Z_t], axis=-1)
+        e_z = jnp.stack([R_z, R, Z_z], axis=-1)
+        e_t_x_e_z_sq = jnp.sum(jnp.cross(e_t, e_z) ** 2, axis=-1)
 
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
@@ -340,6 +367,7 @@ class Field(eqx.Module):
 
         data = {}
         data["sqrtg"] = sqrtg * 2 * rho
+        data["g_sup_rr"] = e_t_x_e_z_sq / data["sqrtg"] ** 2
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -398,6 +426,9 @@ class Field(eqx.Module):
         aspect = file.variables["aspect_b"][:].filled()
         b_mnc = file.variables["bmnc_b"][:].filled()
         g_mnc = file.variables["gmn_b"][:].filled()
+        r_mnc = file.variables["rmnc_b"][:].filled()
+        z_mns = file.variables["zmns_b"][:].filled()
+        p_mns = file.variables["pmns_b"][:].filled()
         nfp = int(file.variables["nfp_b"][:].filled())
         iota = file.variables["iota_b"][:].filled()
         buco = file.variables["buco_b"][:].filled()  # (AKA Boozer I)
@@ -416,6 +447,9 @@ class Field(eqx.Module):
 
         # jlist = 2 + indices of half grid where boozer transform was computed
         b_mnc = interpax.interp1d(s, s_half[jlist - 2], b_mnc, extrap=True)
+        r_mnc = interpax.interp1d(s, s_half[jlist - 2], r_mnc, extrap=True)
+        z_mns = interpax.interp1d(s, s_half[jlist - 2], z_mns, extrap=True)
+        p_mns = interpax.interp1d(s, s_half[jlist - 2], p_mns, extrap=True)
         # profiles are on half grid, but with an extra 0 at the beginning bc
         # the world is awful.
         # sign flip for buco and iota LH -> RH coordinates
@@ -436,6 +470,21 @@ class Field(eqx.Module):
         buco *= sign
         bvco *= sign
 
+        # cylindrical angle phi = zeta_B - p, in the orientation used to evaluate
+        # the series here
+        t, z = theta[:, None], zeta[None, :]
+        R = _vmec_eval(t, z, r_mnc, 0, xm, -xn)
+        R_t = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dt=1)
+        R_z = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dz=1)
+        Z_t = _vmec_eval(t, z, 0, z_mns, xm, -xn, dt=1)
+        Z_z = _vmec_eval(t, z, 0, z_mns, xm, -xn, dz=1)
+        phi_t = _vmec_eval(t, z, 0, -p_mns, xm, -xn, dt=1)
+        phi_z = 1 + _vmec_eval(t, z, 0, -p_mns, xm, -xn, dz=1)
+        e_t = jnp.stack([R_t, R * phi_t, Z_t], axis=-1)
+        e_z = jnp.stack([R_z, R * phi_z, Z_z], axis=-1)
+        e_t_x_e_z_sq = jnp.sum(jnp.cross(e_t, e_z) ** 2, axis=-1)
+        sqrtg = _boozer_sqrtg(rho, Bmag, buco, bvco, iota, Psi)
+
         return cls.from_boozer(
             rho=rho,
             Bmag=Bmag,
@@ -449,6 +498,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
+            g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
             source=_FieldSource.booz_xform,
         )
 
@@ -489,6 +539,9 @@ class Field(eqx.Module):
         I = interpax.interp1d(s, s_grid, data["I"], extrap=True)
         G = interpax.interp1d(s, s_grid, data["G"], extrap=True)
         iota = interpax.interp1d(s, s_grid, data["iota"], extrap=True)
+        r_mnc = interpax.interp1d(s, s_grid, data["Rmn"], extrap=True).flatten()
+        z_mns = interpax.interp1d(s, s_grid, data["Zmn"], extrap=True).flatten()
+        nu_mns = interpax.interp1d(s, s_grid, data["numn"], extrap=True).flatten()
 
         xm, xn = np.meshgrid(data["m"], data["n"], indexing="ij")
         xm, xn = xm.flatten(), xn.flatten()
@@ -508,6 +561,22 @@ class Field(eqx.Module):
         I *= sign
         G *= sign
 
+        # nu = (phi_B - phi) * nfp / 2pi, with phi the cylindrical angle. The sign
+        # of the sine series flips with the change to right handed coordinates.
+        t, z = theta[:, None], zeta[None, :]
+        R = _vmec_eval(t, z, r_mnc, 0, xm, -xn)
+        R_t = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dt=1)
+        R_z = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dz=1)
+        Z_t = _vmec_eval(t, z, 0, z_mns, xm, -xn, dt=1)
+        Z_z = _vmec_eval(t, z, 0, z_mns, xm, -xn, dz=1)
+        nu_mns = 2 * np.pi / nfp * nu_mns
+        phi_t = _vmec_eval(t, z, 0, nu_mns, xm, -xn, dt=1)
+        phi_z = 1 + _vmec_eval(t, z, 0, nu_mns, xm, -xn, dz=1)
+        e_t = jnp.stack([R_t, R * phi_t, Z_t], axis=-1)
+        e_z = jnp.stack([R_z, R * phi_z, Z_z], axis=-1)
+        e_t_x_e_z_sq = jnp.sum(jnp.cross(e_t, e_z) ** 2, axis=-1)
+        sqrtg = _boozer_sqrtg(rho, Bmag, I, G, iota, data["Psi"])
+
         return cls.from_boozer(
             rho=rho,
             Bmag=Bmag,
@@ -521,6 +590,7 @@ class Field(eqx.Module):
             dBdt=dBdt,
             dBdz=dBdz,
             B0=B0,
+            g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
             source=_FieldSource.ipp_bc,
         )
 
@@ -540,6 +610,7 @@ class Field(eqx.Module):
         dBdt: Float[ArrayLike, "ntheta nzeta"] | None = None,
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
+        g_sup_rr: Float[ArrayLike, "ntheta nzeta"] | None = None,
         source: _FieldSource = _FieldSource.boozer,
     ) -> "Field":
         """Construct a field in Boozer coordinates.
@@ -567,10 +638,13 @@ class Field(eqx.Module):
             fft.
         B0 : float, optional
             Characteristic scale for magnetic field. Default is surface average of B.
+        g_sup_rr : jax.Array, shape(ntheta, nzeta), optional
+            Contravariant radial metric element g^rr = grad(rho)·grad(rho), in units of
+            1/m^2.
         """
-        sqrtg = (G + iota * I) / Bmag**2
         data = {}
-        data["sqrtg"] = sqrtg * Psi * rho / np.pi
+        data["sqrtg"] = _boozer_sqrtg(rho, Bmag, I, G, iota, Psi)
+        sqrtg = (G + iota * I) / Bmag**2
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -583,6 +657,7 @@ class Field(eqx.Module):
         data["B0"] = B0
         data["R_major"] = R_major
         data["a_minor"] = a_minor
+        data["g_sup_rr"] = g_sup_rr
         return cls(rho=rho, **data, NFP=NFP, source=source)
 
     @functools.partial(jnp.vectorize, signature="(m,n)->()", excluded=[0])
@@ -622,6 +697,8 @@ class Field(eqx.Module):
             "dBdz",
         ]
         out = {}
+        if self.g_sup_rr is not None:
+            keys.append("g_sup_rr")
         for key in keys:
             out[key] = interpax.fft_interp2d(getattr(self, key), ntheta, nzeta)
         return Field(
@@ -635,6 +712,11 @@ class Field(eqx.Module):
             NFP=self.NFP,
             source=self.source,
         )
+
+
+def _boozer_sqrtg(rho, Bmag, I, G, iota, Psi):
+    """Jacobian of (rho, theta_B, zeta_B) coordinates."""
+    return (G + iota * I) / Bmag**2 * Psi * rho / np.pi
 
 
 def _vmec_eval(

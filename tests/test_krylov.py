@@ -362,6 +362,13 @@ def test_gcrotmk_base(flexible):
     np.testing.assert_allclose(U1, U2)
 
 
+def _assert_cu_allclose(C1, U1, C2, U2):
+    """Recycled (C, U) pairs match, up to flipping the sign of a C, U column pair."""
+    sign = np.sign(np.sum(np.asarray(C1) * np.asarray(C2), axis=0))
+    np.testing.assert_allclose(C1, C2 * sign)
+    np.testing.assert_allclose(U1, U2 * sign)
+
+
 @pytest.mark.parametrize("flexible", [True, False])
 def test_gcrotmk_warm_start(flexible):
     """GCROT(m,k) warm-started with 1, k, and x0+k CU pairs matches scipy."""
@@ -407,8 +414,7 @@ def test_gcrotmk_warm_start(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
-    np.testing.assert_allclose(C1, C2)
-    np.testing.assert_allclose(U1, U2)
+    _assert_cu_allclose(C1, U1, C2, U2)
 
     # Round 3: warm-start with k CU pairs.
     CU = [(c, u) for c, u in zip(C1[:, :k].T, U1[:, :k].T)]
@@ -431,8 +437,7 @@ def test_gcrotmk_warm_start(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
-    np.testing.assert_allclose(C1, C2)
-    np.testing.assert_allclose(U1, U2)
+    _assert_cu_allclose(C1, U1, C2, U2)
 
     # Round 4: warm-start with x0 and k CU pairs.
     CU = [(c, u) for c, u in zip(C1[:, :k].T, U1[:, :k].T)]
@@ -456,8 +461,7 @@ def test_gcrotmk_warm_start(flexible):
     C1 = np.array([c for c, u in CU]).T[:, ::-1][:, :k]
     U1 = np.array([u for c, u in CU]).T[:, ::-1][:, :k]
     np.testing.assert_allclose(x1, x2)
-    np.testing.assert_allclose(C1, C2)
-    np.testing.assert_allclose(U1, U2)
+    _assert_cu_allclose(C1, U1, C2, U2)
 
     # Round 5: a solve that restarts fewer than k times returns zero columns in U.
     # Passing that back, with C computed from it, must behave exactly like passing
@@ -808,7 +812,7 @@ def test_krylov_autodiff(flexible):
     def solve_gcrot(x):
         A = get_A(x)
         bx = b * x
-        M = DenseLUInverseOperator(A.as_matrix())
+        M = DenseLUInverseOperator(A)
         y, _, _, res, _, _, _ = gcrotmk(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
@@ -818,7 +822,7 @@ def test_krylov_autodiff(flexible):
     def solve_lgmres(x):
         A = get_A(x)
         bx = b * x
-        M = DenseLUInverseOperator(A.as_matrix())
+        M = DenseLUInverseOperator(A)
         y, _, _, res, _, _, _ = lgmres(
             A, bx, m=1, k=1, maxiter=1, MR=M, flexible=flexible
         )
@@ -882,3 +886,37 @@ def test_krylov_throw_tangent(solver_fn):
 
     with pytest.raises(Exception, match="tangent"):
         jax.grad(f)(b)
+
+
+@pytest.mark.parametrize("solver", [gcrotmk, lgmres], ids=["gcrotmk", "lgmres"])
+def test_residual_floor(solver):
+    """Residual within the floor counts as converged, with the transposed floor used
+    for the tangent solve.
+    """
+    n = 20
+    rng = np.random.default_rng(42)
+    A = lx.MatrixLinearOperator(jnp.array(rng.random((n, n)) + n * np.eye(n)))
+    b = jnp.array(rng.random(n))
+    w = jnp.array(rng.random(n) + 0.5)
+    # no iterations from x0 = 1, so the floor is the scale itself, and the forward and
+    # tangent residuals b - A 1 and 1 - A^T 1 are both well below 100 in every entry
+    x0 = jnp.ones(n)
+    kw = dict(x0=x0, m=1, k=1, maxiter=0, throw=True)
+    big = jnp.full(n, 100.0)
+
+    with pytest.raises(Exception, match="forward"):
+        solver(A, b, **kw)
+    _, j, _, res, success, *_ = solver(A, b, weights=w, residual_floor=big, **kw)
+    assert success and j == 0
+    # the reported residual is that of b - A x, not its excess over the floor
+    np.testing.assert_allclose(res, jnp.linalg.norm(jnp.sqrt(w) * (b - A.mv(x0))))
+
+    def f(b, tangent_floor):
+        x = solver(
+            A, b, residual_floor=big, residual_floor_transpose=tangent_floor, **kw
+        )[0]
+        return x.sum()
+
+    jax.grad(f)(b, big)
+    with pytest.raises(Exception, match="tangent"):
+        jax.grad(f)(b, jnp.zeros(n))
