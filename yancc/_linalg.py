@@ -14,7 +14,7 @@ from jaxtyping import Array, Float
 
 from ._sharding import _replicate
 from .field import Field
-from .velocity_grids import UniformPitchAngleGrid
+from .velocity_grids import AbstractPitchAngleGrid
 
 
 def _where(a: jax.Array, b: jax.Array, c: jax.Array) -> jax.Array:
@@ -145,7 +145,7 @@ class AbstractDKEOperator(AbstractYanccOperator):
     """
 
     field: eqx.AbstractVar[Field]
-    pitchgrid: eqx.AbstractVar[UniformPitchAngleGrid]
+    pitchgrid: eqx.AbstractVar[AbstractPitchAngleGrid]
 
     def in_structure(self):
         """Pytree structure of expected input."""

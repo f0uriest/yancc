@@ -38,7 +38,26 @@ from yancc._smoothers import (
 from yancc._trajectories import DKE, MDKE
 from yancc.field import Field
 from yancc.species import Electron, GlobalMaxwellian, Hydrogen, LocalMaxwellian
-from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from yancc.velocity_grids import (
+    MaxwellSpeedGrid,
+    MDKEGaussianPitchAngleGrid,
+    UniformPitchAngleGrid,
+)
+
+
+def test_dkelaplacian_requires_uniform(field, pitchgrid, speedgrid, species2):
+    """Laplacian smoother only supports uniform pitch grids.
+
+    It builds its pitch term with a uniform-spacing second difference, so it
+    asserts a uniform grid rather than silently producing a wrong operator.
+    """
+    # uniform grid (the ``pitchgrid`` fixture) constructs fine
+    DKELaplacian(field, pitchgrid, speedgrid, species2)
+    # non-uniform grid is rejected
+    with pytest.raises(AssertionError):
+        DKELaplacian(
+            field, MDKEGaussianPitchAngleGrid(9, field, 0.0, 1e-4), speedgrid, species2
+        )
 
 
 def test_permutations_mdke(field, pitchgrid):

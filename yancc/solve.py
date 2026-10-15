@@ -36,7 +36,7 @@ from ._trajectories import DKE, MDKE
 from .field import _FIELD_SOURCE_NAMES, Field
 from .solution import DKESolution, MDKESolution
 from .species import LocalMaxwellian, _Estar, _nustar, _poloidal_mach
-from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import AbstractPitchAngleGrid, MaxwellSpeedGrid
 
 
 def _freeze_preconditioner(M):
@@ -118,7 +118,7 @@ def _make_dke_solution(
 
 def solve_mdke(
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     erhohat: float | Float[Any, ""],
     nuhat: float | Float[Any, ""],
     verbose: bool | int = False,
@@ -132,7 +132,7 @@ def solve_mdke(
     ----------
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v = -∂Φ /∂ρ /v in units of V*s/m.
@@ -294,7 +294,7 @@ def solve_mdke(
 
 def solve_dke(  # noqa: C901
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
     Erho: float | Float[Any, ""],
@@ -312,7 +312,7 @@ def solve_dke(  # noqa: C901
     ----------
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Speed grid data.
@@ -614,7 +614,7 @@ class _AmbipolarResidual(eqx.Module):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -679,7 +679,7 @@ class _AmbipolarResidual(eqx.Module):
 
 def solve_dke_ambipolar(  # noqa: C901
     field: Field,
-    pitchgrid: UniformPitchAngleGrid,
+    pitchgrid: AbstractPitchAngleGrid,
     speedgrid: MaxwellSpeedGrid,
     species: list[LocalMaxwellian],
     num_roots: int,
@@ -707,7 +707,7 @@ def solve_dke_ambipolar(  # noqa: C901
     ----------
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Speed grid data.

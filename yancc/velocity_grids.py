@@ -1,11 +1,26 @@
 """Velocity grids for yancc."""
 
+import functools
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import cast
+
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import orthax
+import quadax
 from jax import config
-from jax.typing import ArrayLike
+from jaxtyping import ArrayLike, Float
+
+from .field import Field
+from .species import (
+    LocalMaxwellian,
+    _normalize_collisionality,
+    _nustar,
+    _poloidal_mach,
+    _poloidal_mach_hat,
+)
 
 # need this here as well so that const default_xrec uses 64 bit
 config.update("jax_enable_x64", True)
@@ -254,7 +269,20 @@ class MaxwellSpeedGrid(_AbstractSpeedGrid):
         return self.__class__(nx)
 
 
-class _LegendrePitchAngleGrid(eqx.Module):
+class AbstractPitchAngleGrid(ABC, eqx.Module):
+    """Base class for pitch angle coordinate grids."""
+
+    nalpha: int = eqx.field(static=True)
+    alpha: jax.Array
+    xi: jax.Array
+    wxi: jax.Array
+
+    @abstractmethod
+    def resample(self, nalpha: int) -> "AbstractPitchAngleGrid":
+        """Resample grid to a lower or higher resolution."""
+
+
+class _LegendrePitchAngleGrid(AbstractPitchAngleGrid):
     r"""Grid for pitch angle variable :math:`\xi = v_{||} / v`.
 
     Uses Legendre Polynomials, which are orthogonal on (-1, 1) with the weight
@@ -267,42 +295,85 @@ class _LegendrePitchAngleGrid(eqx.Module):
 
     """
 
-    nalpha: int = eqx.field(static=True)
     xirec: orthax.recurrence.AbstractRecurrenceRelation
-    xi: jax.Array
-    wxi: jax.Array
-    xivander: jax.Array
-    xivander_inv: jax.Array
-    Dxi: jax.Array
-    Dxi_pseudospectral: jax.Array
-    L: jax.Array
 
     def __init__(self, nalpha: int):
         self.nalpha = nalpha
         self.xirec = orthax.recurrence.Legendre()
         self.xi, self.wxi = orthax.orthgauss(nalpha, self.xirec)
-        self.xivander = orthax.orthvander(self.xi, self.nalpha - 1, self.xirec)
-        self.xivander_inv = jnp.linalg.pinv(self.xivander)
-
-        def _dxifun(c):
-            c = jnp.append(c, jnp.array([0.0]))
-            dc = orthax.orthder(c, self.xirec)
-            return dc
-
-        self.Dxi = jax.jacfwd(_dxifun)(self.xi)
-        self.Dxi_pseudospectral = self.xivander @ self.Dxi @ self.xivander_inv
-        k = jnp.arange(self.nalpha)
-        kk = -jnp.diag(k * (k + 1))
-        # pitch angle scattering operator ~ -k(k+1)
-        self.L = self.xivander @ kk @ self.xivander_inv
+        self.alpha = -jnp.acos(self.xi)
 
     def resample(self, nalpha: int) -> "_LegendrePitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
 
 
-class UniformPitchAngleGrid(eqx.Module):
-    r"""Grid for pitch angle variable :math:`α = -\arccos(v_{||} / v)`.
+class _DensityMap(eqx.Module):
+    """Maps uniformly spaced alpha in [0, pi] to nodes equidistributing a density.
+
+    density(xi, *params) is a static (non-traced) callable giving the relative number
+    of nodes per unit alpha at pitch xi = -cos(alpha). params holds its dynamic
+    (traceable) arguments.
+    """
+
+    density: Callable = eqx.field(static=True)
+    params: tuple = ()
+
+    @eqx.filter_jit
+    def __call__(self, alpha):
+        # Invert the normalized cumulative density, tabulated on a fine alpha grid and
+        # linearly interpolated. The table is fine enough that interpolation error is
+        # negligible next to the discretization error of any practical nalpha.
+        table = jnp.linspace(0, jnp.pi, 16001)
+        rho = jnp.broadcast_to(self.density(-jnp.cos(table), *self.params), table.shape)
+        rho = eqx.error_if(rho, jnp.any(rho <= 0), "density must be positive")
+        cdf = quadax.cumulative_trapezoid(rho, x=table, initial=0.0)
+        return jnp.interp(alpha, cdf * jnp.pi / cdf[-1], table)
+
+
+class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
+    r"""User controlled non-uniform grid in pitch angle coordinate α = arccos(-v||/v).
+
+    Nodes are placed so that their density in :math:`\alpha` follows a user supplied
+    function of :math:`\xi = v_{||}/v`. A constant density gives nodes uniformly
+    spaced in :math:`\alpha`, the same as :class:`UniformPitchAngleGrid`.
+
+    Parameters
+    ----------
+    nalpha : int
+        Number of points in pitch angle coordinate.
+    density : callable
+        Smooth, positive function ``density(xi, *params)`` giving the relative number
+        of nodes per unit :math:`\alpha` at pitch :math:`\xi \in [-1, 1]`. Does not
+        need to be normalized.
+    params : tuple of jax.Array, optional
+        Additional arguments to ``density``.
+    """
+
+    density_map: _DensityMap
+
+    def __init__(self, nalpha: int, density: Callable, params: tuple = ()):
+        self.nalpha = nalpha
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        self.density_map = _DensityMap(density, tuple(params))
+
+        self.alpha = self.density_map(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+    def resample(self, nalpha: int) -> "NonUniformPitchAngleGrid":
+        """Resample grid to a lower or higher resolution."""
+        return NonUniformPitchAngleGrid(
+            nalpha, self.density_map.density, self.density_map.params
+        )
+
+
+def _uniform_density(xi):
+    return jnp.ones_like(xi)
+
+
+class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""Grid for pitch angle variable :math:`\alpha = \arccos(-v_{||}/v)`.
 
     Uniform grid on :math:`[0, \pi]`, not including endpoints.
 
@@ -313,34 +384,352 @@ class UniformPitchAngleGrid(eqx.Module):
 
     """
 
-    nalpha: int = eqx.field(static=True)
-    alpha: jax.Array
-    xi: jax.Array
-    wxi: jax.Array
-
     def __init__(self, nalpha: int):
         self.nalpha = nalpha
-        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False)
-        alpha += jnp.pi / (2 * nalpha)
-        self.alpha = alpha
-        self.xi = -jnp.cos(alpha)
-
-        # fejer type 1 quadrature
-        length = nalpha // 2
-        r = nalpha - length
-
-        kappa = jnp.arange(r)
-        beta = jnp.hstack(
-            [
-                2 * jnp.exp(1j * jnp.pi * kappa / nalpha) / (1 - 4 * kappa**2),
-                jnp.zeros(length + 1),
-            ]
+        self.density_map = _DensityMap(_uniform_density)
+        self.alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (
+            2 * nalpha
         )
-        beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
-
-        wxi = jnp.fft.ifft(beta)
-        self.wxi = wxi.real
+        self.xi = -jnp.cos(self.alpha)
+        # uniform in a means chebyshev nodes in xi, so we can do better than
+        # newton-cotes: fejer type 1 quadrature
+        self.wxi = _fejer_type_1_weights(nalpha)
 
     def resample(self, nalpha: int) -> "UniformPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha)
+
+
+# Cluster sharpness: a = coef * nustar^(-1/3) is the coefficient of a Gaussian cluster
+# exp(-a xi^2) that narrows with the collisional boundary layer. Both the exponent and
+# the coefficients are empirical fits to the pitch resolution error of the transport
+# coefficients on resolved flux surfaces. The optimum scatters by tens of percent
+# between fields, so the coefficients are kept to one significant figure.
+_MDKE_CLUSTER_COEF = 0.2
+# The DKE optimum is sharper than the MDKE one for the fluxes and flows.
+_DKE_CLUSTER_COEF = 0.3
+# Poloidal Mach number at which a cluster has relaxed by a factor e toward uniform.
+_CLUSTER_MACH = 0.3
+# Normalized speeds x = v/v_th whose MDKE clusters set the DKE grid: the slower one
+# keeps resolution toward xi = +-1 for parallel flows, the faster one resolves the
+# narrow layer that dominates the fluxes.
+_DKE_CLUSTER_SPEEDS = (1.0, 2.5)
+
+
+def _cluster_density(xi, a, center, weight, floor):
+    # rho(xi) = floor + sum_k weight_k exp(-a_k (xi - center_k)^2)
+    return floor + jnp.sum(
+        weight[:, None] * jnp.exp(-a[:, None] * (xi - center[:, None]) ** 2),
+        axis=0,
+    )
+
+
+def _cluster_sharpness(coef, nustar, mach):
+    # The boundary layer narrows with collisionality, while a strong radial electric
+    # field mostly widens the region of pitch where the solution has fine structure
+    # (it moves the region very little), so the cluster relaxes toward uniform as the
+    # poloidal Mach number grows.
+    # The exponent is fitted, not derived: the best cluster width in xi scales like
+    # nustar^(1/6), much more weakly than the nu^(1/2) width of the layer itself.
+    return coef * nustar ** (-1 / 3) * jnp.exp(-((mach / _CLUSTER_MACH) ** 2))
+
+
+class MDKEGaussianPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""MDKE pitch angle grid clustered in the collisional boundary layer.
+
+    Designed for the monoenergetic DKE (:func:`~yancc.solve.solve_mdke`), where the
+    collisionality and electric field are single numbers that set the layer.
+
+    Nodes are distributed in :math:`\alpha = \arccos(-\xi)` with density
+
+    .. math::
+
+        \rho(\xi) = \rho_0 + \exp\left(-a (\xi - \xi_s)^2\right),
+        \qquad a = 0.2 \, \nu_*^{-1/3} \exp\left(-(M_p / 0.3)^2\right),
+
+    where :math:`\nu_* = \hat{\nu} R / |\iota|`. The cluster narrows as the
+    collisionality decreases, following the width of the boundary layer near the
+    trapped/passing transition. The floor
+    :math:`\rho_0` keeps a minimum fraction of nodes away from the cluster, which
+    bounds the ratio of largest to smallest node spacing at very low collisionality.
+
+    A strong radial electric field spreads the fine structure of the solution over a
+    wider range of pitch, so the cluster relaxes toward a uniform grid as the poloidal
+    Mach number :math:`M_p = \omega_E / \omega_{transit}` grows, where
+    :math:`\omega_E = E_r / (\langle B \rangle a)` and
+    :math:`\omega_{transit} = v \langle \mathbf{b} \cdot \nabla \theta \rangle`.
+
+    Parameters
+    ----------
+    nalpha : int
+        Number of points in pitch angle coordinate.
+    field : Field
+        Magnetic field information.
+    erhohat : float
+        Monoenergetic electric field, as used in :func:`~yancc.solve.solve_mdke`.
+    nuhat : float
+        Normalized collisionality, as used in :func:`~yancc.solve.solve_mdke`.
+    floor : float
+        Minimum relative node density :math:`\rho_0` away from the cluster. Must be
+        positive.
+    xi_s : float
+        Value of :math:`\xi = v_{||}/v` at the center of the cluster.
+    """
+
+    nuhat: jax.Array
+    xi_s: jax.Array
+    floor: jax.Array
+
+    def __init__(
+        self,
+        nalpha: int,
+        field: Field,
+        erhohat: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
+        floor: Float[ArrayLike, ""] = 0.2,
+        xi_s: Float[ArrayLike, ""] = 0.0,
+    ):
+        nuhat = jnp.asarray(nuhat)
+        nuhat = eqx.error_if(nuhat, nuhat <= 0, "nuhat must be positive")
+        floor = jnp.asarray(floor)
+        floor = eqx.error_if(floor, floor <= 0, "floor must be positive")
+        xi_s = jnp.asarray(xi_s)
+        xi_s = eqx.error_if(xi_s, jnp.abs(xi_s) >= 1, "xi_s must be in (-1, 1)")
+        # error_if loses the static type, so reassert it (all are arrays post-asarray)
+        self.nalpha = nalpha
+        self.nuhat = cast(jax.Array, nuhat)
+        self.xi_s = cast(jax.Array, xi_s)
+        self.floor = cast(jax.Array, floor)
+        mach = _poloidal_mach_hat(field, erhohat)
+        # nuhat = nu / v, so nustar follows with v = 1
+        nustar = _normalize_collisionality(self.nuhat, 1.0, field)
+        a = _cluster_sharpness(_MDKE_CLUSTER_COEF, nustar, mach)
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        # parameters are dynamic args of the map rather than baked into a static
+        # callable, so the grid can be traced and differentiated through jit.
+        self.density_map = _DensityMap(
+            _cluster_density, (a[None], self.xi_s[None], jnp.ones(1), self.floor)
+        )
+
+        self.alpha = self.density_map(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+
+class DKEGaussianPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""DKE pitch angle grid clustered in the collisional layers of all species.
+
+    Designed for :func:`~yancc.solve.solve_dke`, where every species and speed sees a
+    different collisionality and electric field but all share one pitch angle grid.
+
+    Nodes are distributed in :math:`\alpha = \arccos(-\xi)` with density
+
+    .. math::
+
+        \rho(\xi) = \rho_0 + \sum_s \frac{n_s}{\sum_{s'} n_{s'}}
+        \frac{1}{2} \sum_{x_k \in \{1, 2.5\}} \exp\left(-a_{s,k} \xi^2\right),
+
+    where :math:`a_{s,k} = 0.3 \, \nu_{*,s,k}^{-1/3}
+    \exp\left(-(M_{p,s,k} / 0.3)^2\right)`, with the normalized collisionality
+    :math:`\nu_* = \nu R / (v |\iota|)` and poloidal Mach number of species :math:`s`
+    at normalized speed :math:`x_k = v / v_{th,s}` (the cluster of
+    :class:`MDKEGaussianPitchAngleGrid`, somewhat sharper). The slower
+    speed keeps resolution toward :math:`|\xi| = 1`, needed for parallel flows; the
+    faster one resolves the narrow layer that dominates the radial fluxes. Weighting
+    species by density keeps trace impurities, whose own layers are much wider, from
+    spreading the grid.
+
+    Parameters
+    ----------
+    nalpha : int
+        Number of points in pitch angle coordinate.
+    field : Field
+        Magnetic field information.
+    species : list[LocalMaxwellian]
+        Species information, as passed to :func:`~yancc.solve.solve_dke`.
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts.
+    background : list[LocalMaxwellian], optional
+        Additional background species included in the collision operator, as passed
+        to :func:`~yancc.solve.solve_dke`.
+    floor : float
+        Minimum relative node density :math:`\rho_0` away from the clusters. Must be
+        positive.
+    """
+
+    floor: jax.Array
+
+    def __init__(
+        self,
+        nalpha: int,
+        field: Field,
+        species: list[LocalMaxwellian],
+        Erho: Float[ArrayLike, ""],
+        background: list[LocalMaxwellian] | None = None,
+        floor: Float[ArrayLike, ""] = 0.2,
+    ):
+        background = [] if background is None else background
+        floor = jnp.asarray(floor)
+        floor = eqx.error_if(floor, floor <= 0, "floor must be positive")
+        self.nalpha = nalpha
+        self.floor = cast(jax.Array, floor)
+
+        density = jnp.array([s.density for s in species])
+        a, weight = [], []
+        for i, spec in enumerate(species):
+            others = species[:i] + species[i + 1 :] + background
+            for x in _DKE_CLUSTER_SPEEDS:
+                nustar = _nustar(spec, field, x, *others)
+                mach = _poloidal_mach(spec, field, Erho, x)
+                a.append(_cluster_sharpness(_DKE_CLUSTER_COEF, nustar, mach))
+                weight.append(density[i] / density.sum() / len(_DKE_CLUSTER_SPEEDS))
+        a = jnp.array(a)
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        self.density_map = _DensityMap(
+            _cluster_density, (a, jnp.zeros_like(a), jnp.array(weight), self.floor)
+        )
+
+        self.alpha = self.density_map(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+
+@functools.partial(jax.jit, static_argnames="order")
+def _composite_newton_cotes_weights(
+    x: jax.Array, order: int, global_limits: tuple | None = None
+):
+    """Computes composite quadrature weights.
+
+    Parameters
+    ----------
+    x : jax.Array
+        Sorted sample points. May be non-uniform.
+    order : int
+        Formal order of accuracy desired.
+    global_limits : tuple of floats
+        Limits for integration. If not given assumed to be x[0] and x[-1]
+
+    Returns
+    -------
+    w : jax.Array
+        Quadrature weights. All weights are non-negative, and symmetric for nodes
+        symmetric about the center of the integration limits.
+    """
+    N = x.shape[0]
+    if global_limits is not None:
+        a, b = global_limits
+    else:
+        a, b = x[0], x[-1]
+
+    # Each interval between neighboring nodes (and the gaps from the limits to the
+    # end nodes) is integrated with the interpolant through the `order + 1` nodes
+    # nearest to it. Overlapping stencils keep every interval inside its own stencil, so
+    # interior intervals never extrapolate; disjoint panels on strongly non-uniform
+    # nodes extrapolate across the gaps between panels and produce large weights of
+    # both signs. Only the end gaps extrapolate.
+    left = jnp.concatenate([jnp.atleast_1d(a), x])
+    right = jnp.concatenate([x, jnp.atleast_1d(b)])
+    length = right - left
+    center = (left + right) / 2
+    k = jnp.arange(N + 1)
+    max_npts = min(order + 1, N)
+
+    # The weights are the integrals of the Lagrange basis polynomials through the used
+    # points; unused points are left out of every product and get zero weight.
+    #
+    # Interval k lies between nodes k-1 and k, so an odd number of points can't be
+    # centered on it; averaging the two stencils shifted one node either way keeps
+    # the rule exact to the same degree and makes the weights of a symmetric grid
+    # symmetric.
+    i = jnp.arange(max_npts)
+    npts = i[:, None, None] + 1
+    shifts = jnp.stack([npts // 2, (npts + 1) // 2], axis=1)[..., 0]
+    start = jnp.clip(k - shifts, 0, N - npts)
+    used = i < npts[..., None]
+    idx = jnp.minimum(start[..., None] + i, N - 1)
+    # local scaled coordinate keeps the polynomial coefficients well scaled
+    h = jnp.maximum((x[start + npts - 1] - x[start]) / 2, jnp.abs(length))
+    t = (x[idx] - center[:, None]) / h[..., None]
+    tlo, thi = (left - center) / h, (right - center) / h
+    # root[..., m, j]: t[j] is a root of the m-th basis polynomial
+    root = (i[:, None] != i[None, :]) & used[..., None, :]
+    # ascending monomial coefficients of prod_j (s - t[j]) over the roots of each
+    # basis polynomial. Its degree is at most max_npts - 1, so multiplying by s never
+    # drops a nonzero coefficient.
+    coef = jnp.broadcast_to((i == 0).astype(x.dtype), (*t.shape, max_npts))
+    for j in range(max_npts):
+        times_s = jnp.pad(coef[..., :-1], [(0, 0)] * (coef.ndim - 1) + [(1, 0)])
+        coef = jnp.where(
+            root[..., j, None], times_s - t[..., j, None, None] * coef, coef
+        )
+    denom = jnp.prod(jnp.where(root, t[..., :, None] - t[..., None, :], 1), axis=-1)
+    moments = (
+        h[..., None] * (thi[..., None] ** (i + 1) - tlo[..., None] ** (i + 1)) / (i + 1)
+    )
+    w = jnp.where(used, jnp.einsum("...mp,...p->...m", coef, moments) / denom, 0)
+    # (npts, shift, interval, point) -> (npts * interval, shift * point), so a rule is
+    # looked up with a single flat index (npts - 1) * (N + 1) + interval
+    rules_idx = idx.transpose(0, 2, 1, 3).reshape(max_npts * (N + 1), -1)
+    rules_w = w.transpose(0, 2, 1, 3).reshape(max_npts * (N + 1), -1) / 2
+
+    def select(npts, rules_w):
+        rule = (npts - 1) * (N + 1) + k
+        return (
+            rules_idx.at[rule].get(mode="promise_in_bounds"),
+            rules_w.at[rule].get(mode="promise_in_bounds"),
+        )
+
+    def assemble(idx, w):
+        return (
+            jnp.zeros(N, dtype=x.dtype)
+            .at[idx.ravel()]
+            .add(w.ravel(), mode="promise_in_bounds")
+        )
+
+    # Local rules of degree >= 2 have negative weights even on uniform grids, and on
+    # stretched grids neighboring intervals no longer cancel them, so some summed
+    # weights can come out negative. Starting from full degree everywhere, while any
+    # node has a negative weight, lower the degree of each interval that contributes a
+    # negative local weight to it. A negative summed weight always has a negative
+    # contribution, so the loop stops exactly when all weights are non-negative.
+    # Non-negative weights summing to b - a also have the smallest possible sum of
+    # absolute weights, so this is the only stability safeguard needed, including for
+    # the extrapolating end gaps. This terminates: two-point rules on interior
+    # intervals and one-point rules on the end gaps have only positive weights. The
+    # degree choice is discrete, so it is made on constant weights and the final
+    # weights stay differentiable in x.
+    frozen = jax.lax.stop_gradient(rules_w)
+
+    def lower_degree(carry):
+        npts, _ = carry
+        idx, w = select(npts, frozen)
+        weights = assemble(idx, w)
+        bad = jnp.any(
+            (weights.at[idx].get(mode="promise_in_bounds") < 0) & (w < 0), axis=1
+        )
+        return jnp.where(bad, npts - 1, npts), jnp.any(bad)
+
+    npts, _ = jax.lax.while_loop(
+        lambda carry: carry[1],
+        lower_degree,
+        (jnp.full(N + 1, max_npts), jnp.array(True)),
+    )
+    weights = assemble(*select(npts, rules_w))
+
+    return weights
+
+
+def _fejer_type_1_weights(n):
+    """Fejer (chebyshev) type 1 quadrature."""
+    length = n // 2
+    r = n - length
+    kappa = jnp.arange(r)
+    beta = jnp.hstack(
+        [
+            2 * jnp.exp(1j * jnp.pi * kappa / n) / (1 - 4 * kappa**2),
+            jnp.zeros(length + 1),
+        ]
+    )
+    beta = beta[:-1] + jnp.conjugate(beta[:0:-1])
+    w = jnp.fft.ifft(beta)
+    return w.real
