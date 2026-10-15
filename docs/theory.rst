@@ -72,7 +72,9 @@ With these conventions the local Maxwellian for species :math:`s` is
 The pitch-angle grid has ``nalpha`` points on :math:`\alpha \in [0, \pi]`, either
 uniformly spaced (:class:`~yancc.UniformPitchAngleGrid`) or
 concentrated near :math:`v_\parallel = 0` to resolve low-collisionality
-boundary layers (:class:`~yancc.QuadraticPitchAngleGrid` and
+boundary layers (:class:`~yancc.QuadraticPitchAngleGrid`,
+:class:`~yancc.DKEGaussianPitchAngleGrid`,
+:class:`~yancc.MDKEGaussianPitchAngleGrid` and
 :class:`~yancc.NonUniformPitchAngleGrid`). The speed
 grid (:class:`~yancc.MaxwellSpeedGrid`) has ``nx`` collocation
 nodes chosen as the roots of polynomials orthogonal under the Maxwellian

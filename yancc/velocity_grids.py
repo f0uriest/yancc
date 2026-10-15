@@ -13,6 +13,15 @@ import quadax
 from jax import config
 from jaxtyping import ArrayLike, Float
 
+from .field import Field
+from .species import (
+    LocalMaxwellian,
+    _normalize_collisionality,
+    _nustar,
+    _poloidal_mach,
+    _poloidal_mach_hat,
+)
+
 # need this here as well so that const default_xrec uses 64 bit
 config.update("jax_enable_x64", True)
 
@@ -442,6 +451,200 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
     def resample(self, nalpha: int) -> "QuadraticPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
         return self.__class__(nalpha, self.c)
+
+
+# Cluster sharpness: a = coef * nustar^(-1/3) is the coefficient of a Gaussian cluster
+# exp(-a xi^2) that narrows with the collisional boundary layer. Both the exponent and
+# the coefficients are empirical fits to the pitch resolution error of the transport
+# coefficients on resolved flux surfaces. The optimum scatters by tens of percent
+# between fields, so the coefficients are kept to one significant figure.
+_MDKE_CLUSTER_COEF = 0.2
+# The DKE optimum is sharper than the MDKE one for the fluxes and flows.
+_DKE_CLUSTER_COEF = 0.3
+# Poloidal Mach number at which a cluster has relaxed by a factor e toward uniform.
+_CLUSTER_MACH = 0.3
+# Normalized speeds x = v/v_th whose MDKE clusters set the DKE grid: the slower one
+# keeps resolution toward xi = +-1 for parallel flows, the faster one resolves the
+# narrow layer that dominates the fluxes.
+_DKE_CLUSTER_SPEEDS = (1.0, 2.5)
+
+
+def _cluster_density(xi, a, center, weight, floor):
+    # rho(xi) = floor + sum_k weight_k exp(-a_k (xi - center_k)^2)
+    return floor + jnp.sum(
+        weight[:, None] * jnp.exp(-a[:, None] * (xi - center[:, None]) ** 2),
+        axis=0,
+    )
+
+
+def _cluster_sharpness(coef, nustar, mach):
+    # The boundary layer narrows with collisionality, while a strong radial electric
+    # field mostly widens the region of pitch where the solution has fine structure
+    # (it moves the region very little), so the cluster relaxes toward uniform as the
+    # poloidal Mach number grows.
+    # The exponent is fitted, not derived: the best cluster width in xi scales like
+    # nustar^(1/6), much more weakly than the nu^(1/2) width of the layer itself.
+    return coef * nustar ** (-1 / 3) * jnp.exp(-((mach / _CLUSTER_MACH) ** 2))
+
+
+class MDKEGaussianPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""MDKE pitch angle grid clustered in the collisional boundary layer.
+
+    Designed for the monoenergetic DKE (:func:`~yancc.solve.solve_mdke`), where the
+    collisionality and electric field are single numbers that set the layer.
+
+    Nodes are distributed in :math:`\alpha = \arccos(-\xi)` with density
+
+    .. math::
+
+        \rho(\xi) = \rho_0 + \exp\left(-a (\xi - \xi_s)^2\right),
+        \qquad a = 0.2 \, \nu_*^{-1/3} \exp\left(-(M_p / 0.3)^2\right),
+
+    where :math:`\nu_* = \hat{\nu} R / |\iota|`. The cluster narrows as the
+    collisionality decreases, following the width of the boundary layer near the
+    trapped/passing transition. The floor
+    :math:`\rho_0` keeps a minimum fraction of nodes away from the cluster, which
+    bounds the ratio of largest to smallest node spacing at very low collisionality.
+
+    A strong radial electric field spreads the fine structure of the solution over a
+    wider range of pitch, so the cluster relaxes toward a uniform grid as the poloidal
+    Mach number :math:`M_p = \omega_E / \omega_{transit}` grows, where
+    :math:`\omega_E = E_r / (\langle B \rangle a)` and
+    :math:`\omega_{transit} = v \langle \mathbf{b} \cdot \nabla \theta \rangle`.
+
+    Parameters
+    ----------
+    nalpha : int
+        Number of points in pitch angle coordinate.
+    field : Field
+        Magnetic field information.
+    erhohat : float
+        Monoenergetic electric field, as used in :func:`~yancc.solve.solve_mdke`.
+    nuhat : float
+        Normalized collisionality, as used in :func:`~yancc.solve.solve_mdke`.
+    floor : float
+        Minimum relative node density :math:`\rho_0` away from the cluster. Must be
+        positive.
+    xi_s : float
+        Value of :math:`\xi = v_{||}/v` at the center of the cluster.
+    """
+
+    nuhat: jax.Array
+    xi_s: jax.Array
+    floor: jax.Array
+
+    def __init__(
+        self,
+        nalpha: int,
+        field: Field,
+        erhohat: Float[ArrayLike, ""],
+        nuhat: Float[ArrayLike, ""],
+        floor: Float[ArrayLike, ""] = 0.2,
+        xi_s: Float[ArrayLike, ""] = 0.0,
+    ):
+        nuhat = jnp.asarray(nuhat)
+        nuhat = eqx.error_if(nuhat, nuhat <= 0, "nuhat must be positive")
+        floor = jnp.asarray(floor)
+        floor = eqx.error_if(floor, floor <= 0, "floor must be positive")
+        xi_s = jnp.asarray(xi_s)
+        xi_s = eqx.error_if(xi_s, jnp.abs(xi_s) >= 1, "xi_s must be in (-1, 1)")
+        # error_if loses the static type, so reassert it (all are arrays post-asarray)
+        self.nalpha = nalpha
+        self.nuhat = cast(jax.Array, nuhat)
+        self.xi_s = cast(jax.Array, xi_s)
+        self.floor = cast(jax.Array, floor)
+        mach = _poloidal_mach_hat(field, erhohat)
+        # nuhat = nu / v, so nustar follows with v = 1
+        nustar = _normalize_collisionality(self.nuhat, 1.0, field)
+        a = _cluster_sharpness(_MDKE_CLUSTER_COEF, nustar, mach)
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        # parameters are dynamic args of the map rather than baked into a static
+        # callable, so the grid can be traced and differentiated through jit.
+        self.density_map = _DensityMap(
+            _cluster_density, (a[None], self.xi_s[None], jnp.ones(1), self.floor)
+        )
+
+        self.alpha = self.density_map(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+
+
+class DKEGaussianPitchAngleGrid(NonUniformPitchAngleGrid):
+    r"""DKE pitch angle grid clustered in the collisional layers of all species.
+
+    Designed for :func:`~yancc.solve.solve_dke`, where every species and speed sees a
+    different collisionality and electric field but all share one pitch angle grid.
+
+    Nodes are distributed in :math:`\alpha = \arccos(-\xi)` with density
+
+    .. math::
+
+        \rho(\xi) = \rho_0 + \sum_s \frac{n_s}{\sum_{s'} n_{s'}}
+        \frac{1}{2} \sum_{x_k \in \{1, 2.5\}} \exp\left(-a_{s,k} \xi^2\right),
+
+    where :math:`a_{s,k} = 0.3 \, \nu_{*,s,k}^{-1/3}
+    \exp\left(-(M_{p,s,k} / 0.3)^2\right)`, with the normalized collisionality
+    :math:`\nu_* = \nu R / (v |\iota|)` and poloidal Mach number of species :math:`s`
+    at normalized speed :math:`x_k = v / v_{th,s}` (the cluster of
+    :class:`MDKEGaussianPitchAngleGrid`, somewhat sharper). The slower
+    speed keeps resolution toward :math:`|\xi| = 1`, needed for parallel flows; the
+    faster one resolves the narrow layer that dominates the radial fluxes. Weighting
+    species by density keeps trace impurities, whose own layers are much wider, from
+    spreading the grid.
+
+    Parameters
+    ----------
+    nalpha : int
+        Number of points in pitch angle coordinate.
+    field : Field
+        Magnetic field information.
+    species : list[LocalMaxwellian]
+        Species information, as passed to :func:`~yancc.solve.solve_dke`.
+    Erho : float
+        Radial electric field, Erho = -∂Φ /∂ρ, in Volts.
+    background : list[LocalMaxwellian], optional
+        Additional background species included in the collision operator, as passed
+        to :func:`~yancc.solve.solve_dke`.
+    floor : float
+        Minimum relative node density :math:`\rho_0` away from the clusters. Must be
+        positive.
+    """
+
+    floor: jax.Array
+
+    def __init__(
+        self,
+        nalpha: int,
+        field: Field,
+        species: list[LocalMaxwellian],
+        Erho: Float[ArrayLike, ""],
+        background: list[LocalMaxwellian] | None = None,
+        floor: Float[ArrayLike, ""] = 0.2,
+    ):
+        background = [] if background is None else background
+        floor = jnp.asarray(floor)
+        floor = eqx.error_if(floor, floor <= 0, "floor must be positive")
+        self.nalpha = nalpha
+        self.floor = cast(jax.Array, floor)
+
+        density = jnp.array([s.density for s in species])
+        a, weight = [], []
+        for i, spec in enumerate(species):
+            others = species[:i] + species[i + 1 :] + background
+            for x in _DKE_CLUSTER_SPEEDS:
+                nustar = _nustar(spec, field, x, *others)
+                mach = _poloidal_mach(spec, field, Erho, x)
+                a.append(_cluster_sharpness(_DKE_CLUSTER_COEF, nustar, mach))
+                weight.append(density[i] / density.sum() / len(_DKE_CLUSTER_SPEEDS))
+        a = jnp.array(a)
+        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
+        self.density_map = _DensityMap(
+            _cluster_density, (a, jnp.zeros_like(a), jnp.array(weight), self.floor)
+        )
+
+        self.alpha = self.density_map(alpha)
+        self.xi = -jnp.cos(self.alpha)
+        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 
 
 @functools.partial(jax.jit, static_argnames="order")

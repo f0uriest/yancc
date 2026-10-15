@@ -57,19 +57,30 @@ of how those points are *distributed* in :math:`\alpha`:
 
 - :class:`~yancc.UniformPitchAngleGrid` spaces points uniformly
   in :math:`\alpha`. This is the simplest choice and a good default.
+- :class:`~yancc.NonUniformPitchAngleGrid` is the general base
+  class: pass it your own smooth, positive node density as a function of
+  :math:`\xi = v_\parallel / v` to place nodes wherever your problem needs
+  resolution.
 - :class:`~yancc.QuadraticPitchAngleGrid` packs points more
   densely near :math:`v_\parallel = 0` (:math:`\alpha = \pi/2`), where the sharp
   trapped/passing boundary layers form at low collisionality. It can resolve
   those layers with fewer total points than a uniform grid, so it is often the
   better choice when :math:`\nu^* \to 0`. It takes a second argument ``c`` in
-  :math:`[0, 1]` controlling how strongly nodes are packed: ``c=0`` recovers
-  uniform spacing and ``c=1`` is maximal packing near :math:`v_\parallel = 0`;
+  :math:`[0, 1)` controlling how strongly nodes are packed: ``c=0`` recovers
+  uniform spacing and packing increases with ``c``;
   ``c = 0.5`` to ``0.8`` works well at low collisionality.
-- :class:`~yancc.NonUniformPitchAngleGrid` is the general base
-  class: pass it your own smooth, monotonic mapping function to place
-  nodes wherever your problem needs resolution.
+- :class:`~yancc.DKEGaussianPitchAngleGrid` chooses the packing for you in
+  :func:`~yancc.solve.solve_dke`: pass it the same ``field``, ``species``,
+  ``Erho`` (and ``background``) you give the solver. It clusters points in the
+  boundary layers of all species, narrower at lower collisionality, and relaxes
+  toward uniform spacing as the radial electric field grows. At low
+  collisionality it typically reaches a given accuracy in the fluxes and flows
+  with substantially fewer points than a uniform grid.
+- :class:`~yancc.MDKEGaussianPitchAngleGrid` does the same for monoenergetic
+  calculations: pass it the same ``field``, ``erhohat`` and ``nuhat`` you give
+  :func:`~yancc.solve.solve_mdke`.
 
-All three accept ``nalpha`` the same way and are interchangeable as the
+All of these accept ``nalpha`` the same way and are interchangeable as the
 ``pitchgrid`` argument to :func:`~yancc.solve.solve_dke` and
 :func:`~yancc.solve.solve_mdke`, so you can swap grids without changing the
 rest of a convergence study:
