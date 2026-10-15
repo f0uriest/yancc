@@ -9,6 +9,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import orthax
+import quadax
 from jax import config
 from jaxtyping import ArrayLike, Float
 
@@ -259,26 +260,6 @@ class MaxwellSpeedGrid(_AbstractSpeedGrid):
         return self.__class__(nx)
 
 
-class _MapFunction(eqx.Module):
-    """Wraps a domain map f(x, *params) defined on [-1, 1].
-
-    f is a static (non-traced) callable, so arbitrary user-supplied maps are
-    allowed. params holds any dynamic (traceable) arguments, e.g. the
-    packing parameter of QuadraticPitchAngleGrid so they remain JAX
-    leaves rather than being baked into the static callable.
-    """
-
-    f: Callable = eqx.field(static=True)
-    params: tuple = ()
-
-    @eqx.filter_jit
-    def __call__(self, x):
-        x = (x / jnp.pi) * 2 - 1  # map [0,pi] to [-1,1]
-        x = self.f(x, *self.params)  # map [-1,1] to [-1,1]
-        x = (x + 1) / 2 * jnp.pi  # map [-1,1] to [0,pi]
-        return x
-
-
 class AbstractPitchAngleGrid(ABC, eqx.Module):
     """Base class for pitch angle coordinate grids."""
 
@@ -318,43 +299,72 @@ class _LegendrePitchAngleGrid(AbstractPitchAngleGrid):
         return self.__class__(nalpha)
 
 
-class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
-    """User controlled non-uniform grid in pitch angle coordinate a = -arccos(v||/v).
+class _DensityMap(eqx.Module):
+    """Maps uniformly spaced alpha in [0, pi] to nodes equidistributing a density.
 
-    Allows an arbitrary mapping function to control grid spacing. Nodes are initially
-    created uniformly, then mapped through ``map_func``.
+    density(xi, *params) is a static (non-traced) callable giving the relative number
+    of nodes per unit alpha at pitch xi = -cos(alpha). params holds its dynamic
+    (traceable) arguments.
+    """
+
+    density: Callable = eqx.field(static=True)
+    params: tuple = ()
+
+    @eqx.filter_jit
+    def __call__(self, alpha):
+        # Invert the normalized cumulative density, tabulated on a fine alpha grid and
+        # linearly interpolated. The table is fine enough that interpolation error is
+        # negligible next to the discretization error of any practical nalpha.
+        table = jnp.linspace(0, jnp.pi, 16001)
+        rho = jnp.broadcast_to(self.density(-jnp.cos(table), *self.params), table.shape)
+        rho = eqx.error_if(rho, jnp.any(rho <= 0), "density must be positive")
+        cdf = quadax.cumulative_trapezoid(rho, x=table, initial=0.0)
+        return jnp.interp(alpha, cdf * jnp.pi / cdf[-1], table)
+
+
+class NonUniformPitchAngleGrid(AbstractPitchAngleGrid):
+    r"""User controlled non-uniform grid in pitch angle coordinate α = arccos(-v||/v).
+
+    Nodes are placed so that their density in :math:`\alpha` follows a user supplied
+    function of :math:`\xi = v_{||}/v`. A constant density gives nodes uniformly
+    spaced in :math:`\alpha`, the same as :class:`UniformPitchAngleGrid`.
 
     Parameters
     ----------
-    na : int
+    nalpha : int
         Number of points in pitch angle coordinate.
-    map_func : callable
-        Smooth, odd, monotonic function that maps the domain [-1,1] to [-1,1].
-        Defines the spacing of nodes in the domain.
+    density : callable
+        Smooth, positive function ``density(xi, *params)`` giving the relative number
+        of nodes per unit :math:`\alpha` at pitch :math:`\xi \in [-1, 1]`. Does not
+        need to be normalized.
+    params : tuple of jax.Array, optional
+        Additional arguments to ``density``.
     """
 
-    map_func: _MapFunction
+    density_map: _DensityMap
 
-    def __init__(self, nalpha: int, map_func: Callable):
+    def __init__(self, nalpha: int, density: Callable, params: tuple = ()):
         self.nalpha = nalpha
         alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
-        self.map_func = _MapFunction(map_func)
+        self.density_map = _DensityMap(density, tuple(params))
 
-        self.alpha = self.map_func(alpha)
+        self.alpha = self.density_map(alpha)
         self.xi = -jnp.cos(self.alpha)
         self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
 
     def resample(self, nalpha: int) -> "NonUniformPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""
-        return self.__class__(nalpha, self.map_func.f)
+        return NonUniformPitchAngleGrid(
+            nalpha, self.density_map.density, self.density_map.params
+        )
 
 
-def _linear_map(x):
-    return x
+def _uniform_density(xi):
+    return jnp.ones_like(xi)
 
 
 class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
-    r"""Grid for pitch angle variable :math:`\alpha = -\arccos(v_{||}/v)`.
+    r"""Grid for pitch angle variable :math:`\alpha = \arccos(-v_{||}/v)`.
 
     Uniform grid on :math:`[0, \pi]`, not including endpoints.
 
@@ -367,7 +377,7 @@ class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
 
     def __init__(self, nalpha: int):
         self.nalpha = nalpha
-        self.map_func = _MapFunction(_linear_map)
+        self.density_map = _DensityMap(_uniform_density)
         self.alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (
             2 * nalpha
         )
@@ -381,8 +391,20 @@ class UniformPitchAngleGrid(NonUniformPitchAngleGrid):
         return self.__class__(nalpha)
 
 
-def _quadratic_map(x, c):
-    return c * x**3 + (1 - c) * x
+def _quadratic_density(xi, c):
+    # Nodes uniformly spaced in u are mapped to alpha = pi/2 (c u^3 + (1 - c) u + 1),
+    # so the node density per unit alpha is 1/(3 c u^2 + 1 - c) at the u solving
+    # c u^3 + (1 - c) u = t, t = 2 alpha / pi - 1. The cubic has a single real root,
+    # written in hyperbolic form, which stays accurate as c -> 0.
+    t = 2 * jnp.arccos(-xi) / jnp.pi - 1
+    c_safe = cast(jax.Array, jnp.where(c > 0, c, 1.0))
+    p = (1 - c_safe) / c_safe
+    s = 2 * jnp.sqrt(p / 3)
+    # trigonometric-hyperbolic root of the depressed cubic u^3 + p u - t / c = 0 via
+    # sinh(3 phi) = 4 sinh^3(phi) + 3 sinh(phi); the 1/3 sits between sinh and arcsinh.
+    u = s * jnp.sinh(jnp.arcsinh(3 * t / (c_safe * p * s)) / 3)
+    u = cast(jax.Array, jnp.where(c > 0, u, t))
+    return 1 / (3 * c * u**2 + 1 - c)
 
 
 class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
@@ -393,32 +415,29 @@ class QuadraticPitchAngleGrid(NonUniformPitchAngleGrid):
     This grid packs nodes closer to that region to resolve it more accurately,
     while sacrificing nodes near the endpoints where the solution varies less.
 
+    Nodes are the image of uniformly spaced points :math:`u \in (-1, 1)` under
+    :math:`\alpha = \frac{\pi}{2} (c u^3 + (1 - c) u + 1)`.
+
     Parameters
     ----------
     nalpha : int
         Number of points in pitch angle coordinate.
-    c : float in [0,1]
-        Grid packing parameter. ``c=0`` means nodes uniformly spaced in a, ``c=1``
-        packs quadratically near :math:`\alpha=\pi/2` (:math:`v_{||}=0`). Recommended
-        values are in the range ``c=[0.5, 0.8]`` at low collisionality.
+    c : float in [0,1)
+        Grid packing parameter. ``c=0`` means nodes uniformly spaced in a, and
+        packing near :math:`\alpha=\pi/2` (:math:`v_{||}=0`) increases with ``c``.
+        Recommended values are in the range ``c=[0.5, 0.8]`` at low collisionality.
     """
 
     c: jax.Array
 
     def __init__(self, nalpha: int, c: Float[ArrayLike, ""]):
         c = jnp.asarray(c)
-        c = eqx.error_if(c, jnp.logical_or(c > 1, c < 0), "c must be between [0,1]")
+        c = eqx.error_if(c, jnp.logical_or(c >= 1, c < 0), "c must be in [0,1)")
         # error_if loses the static type, so reassert it (c is an array post-asarray)
-        self.nalpha = nalpha
         self.c = cast(jax.Array, c)
-        alpha = jnp.linspace(0, jnp.pi, nalpha, endpoint=False) + jnp.pi / (2 * nalpha)
         # pass c as a dynamic param (not baked into a static callable) so the
         # grid can be traced and differentiated through jit.
-        self.map_func = _MapFunction(_quadratic_map, (self.c,))
-
-        self.alpha = self.map_func(alpha)
-        self.xi = -jnp.cos(self.alpha)
-        self.wxi = _composite_newton_cotes_weights(self.xi, 4, (-1, 1))
+        super().__init__(nalpha, _quadratic_density, (self.c,))
 
     def resample(self, nalpha: int) -> "QuadraticPitchAngleGrid":
         """Resample grid to a lower or higher resolution."""

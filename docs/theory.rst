@@ -57,7 +57,7 @@ and the pitch-angle :math:`\alpha`:
 
 .. math::
 
-    \alpha = -\arccos{v_\parallel / v}
+    \alpha = \arccos(-v_\parallel / v)
 
 (Other codes use the cosine of the pitch angle :math:`\xi = v_\parallel / v`, we choose
 the angle itself because it simplifies the boundary conditions.)

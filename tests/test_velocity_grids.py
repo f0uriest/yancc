@@ -78,7 +78,7 @@ def test_pitch_quadrature():
     np.testing.assert_allclose(i1, i2)
 
 
-@pytest.mark.parametrize("c", [0.0, 0.5, 0.8, 1.0])
+@pytest.mark.parametrize("c", [0.0, 0.5, 0.8, 0.95])
 def test_quadratic_pitch_quadrature(c):
     """Test that QuadraticPitchAngleGrid.wxi properly integrates functions."""
     grid = QuadraticPitchAngleGrid(101, c)
@@ -123,19 +123,21 @@ def test_quadratic_pitch_node_packing(c):
 
 def test_quadratic_pitch_validation():
     """Out-of-range c should raise."""
-    with pytest.raises(Exception, match="c must be between"):
-        QuadraticPitchAngleGrid(31, 1.5)
-    with pytest.raises(Exception, match="c must be between"):
-        QuadraticPitchAngleGrid(31, -0.1)
+    for c in [1.0, 1.5, -0.1]:
+        with pytest.raises(Exception, match="c must be in"):
+            QuadraticPitchAngleGrid(31, c)
 
 
 def test_quadratic_pitch_resample():
-    """Resampling should change na but preserve the packing parameter c."""
+    """Resampling keeps c, and nodes match the defining map of uniform points."""
     grid = QuadraticPitchAngleGrid(31, 0.7)
     new = grid.resample(51)
     assert new.nalpha == 51
     np.testing.assert_allclose(new.c, grid.c)
-    np.testing.assert_allclose(new.xi, QuadraticPitchAngleGrid(51, 0.7).xi)
+    u = (jnp.arange(51) + 0.5) / 51 * 2 - 1
+    np.testing.assert_allclose(
+        new.alpha, jnp.pi / 2 * (0.7 * u**3 + 0.3 * u + 1), atol=1e-7
+    )
 
 
 def test_nonuniform_pitch_custom_map():
@@ -155,10 +157,19 @@ def test_nonuniform_pitch_custom_map():
 def test_nonuniform_pitch_identity_map():
     """The identity map reproduces the uniform a-grid (tests the [0,pi] remapping)."""
     na = 31
-    grid = NonUniformPitchAngleGrid(na, lambda x: x)
+    grid = NonUniformPitchAngleGrid(na, lambda xi: 2.0 + 0 * xi)
     a = jnp.linspace(0, jnp.pi, na, endpoint=False) + jnp.pi / (2 * na)
-    np.testing.assert_allclose(grid.alpha, a)
-    np.testing.assert_allclose(grid.xi, -jnp.cos(a))
+    np.testing.assert_allclose(grid.alpha, a, atol=1e-14)
+
+    density = lambda xi, w: 1 + jnp.exp(-((xi / w) ** 2))
+    grid = NonUniformPitchAngleGrid(na, density, (jnp.array(0.2),))
+    new = grid.resample(51)
+    assert new.nalpha == 51
+    np.testing.assert_allclose(
+        new.xi, NonUniformPitchAngleGrid(51, density, (jnp.array(0.2),)).xi
+    )
+    with pytest.raises(Exception, match="density must be positive"):
+        NonUniformPitchAngleGrid(na, lambda xi: xi)
 
 
 def test_maxwell_speed_grid_resample():
@@ -270,8 +281,8 @@ def test_composite_newton_cotes_default_limits():
 @pytest.mark.parametrize(
     "grid",
     [
-        # maximally packed quadratic pitch grid: spacing ratio 7 next to xi=0
-        lambda n: QuadraticPitchAngleGrid(n, 1.0).xi,
+        # cubic map of uniform points: spacing ratio 7 next to xi=0
+        lambda n: -jnp.cos(jnp.pi / 2 * (((jnp.arange(n) + 0.5) / n * 2 - 1) ** 3 + 1)),
         # nodes clustered strongly at the center
         lambda n: jnp.sinh(6 * (jnp.arange(n) + 0.5) / n * 2 - 6) / jnp.sinh(6),
         # nodes clustered strongly at the ends
