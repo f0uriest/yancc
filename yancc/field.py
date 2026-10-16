@@ -6,6 +6,7 @@ from typing import Any
 
 import equinox as eqx
 import interpax
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jaxtyping import Array, ArrayLike, Float, Int
@@ -22,6 +23,7 @@ class _FieldSource(eqx.Enumeration):
     booz_xform = "booz_xform"
     ipp_bc = "ipp_bc"
     boozer = "boozer"
+    gvec = "gvec"
 
 
 # labels indexed by the integer code, for display of a (possibly traced) source
@@ -384,6 +386,79 @@ class Field(eqx.Module):
         return cls(rho=rho, **data, NFP=nfp, source=_FieldSource.vmec)
 
     @classmethod
+    def from_gvec(
+        cls,
+        state,
+        rho: Float[ArrayLike, ""],
+        ntheta: int,
+        nzeta: int,
+    ) -> "Field":
+        """Construct Field from GVEC equilibrium.
+
+        Parameters
+        ----------
+        state : gvec.State or path-like
+            GVEC State, or path to a GVEC run directory, in which case the latest
+            state found there is used.
+        rho : float
+            Normalized surface label = sqrt(s).
+        ntheta, nzeta : int
+            Number of points on a surface in poloidal and toroidal directions.
+        """
+        import gvec  # pyright: ignore[reportMissingImports]
+
+        if not isinstance(state, gvec.State):
+            state = gvec.find_state(state)
+        nfp = int(state.nfp)
+
+        # Minor and major radius from the volume and the toroidally averaged
+        # cross-section area A, as a = sqrt(A/pi), R = V/(2 pi A), matching the
+        # definitions used by VMEC and DESC.
+        vol = gvec.evaluate(state, "Jac_l", "V", rho="int", theta="int", zeta="int")
+        area = float(gvec.radial_integral(gvec.poloidal_integral(vol.Jac_l)).mean())
+        a_minor = np.sqrt(area / np.pi)
+        R_major = float(vol.V) / (2 * np.pi * area)
+        # GVEC's toroidal flux profile is the flux divided by 2pi
+        Phi_edge = float(state.evaluate_profile("Phi", np.array([1.0]))[0])
+
+        # GVEC's toroidal angle need not follow the cylindrical angle phi. Orient it
+        # so that phi increases with zeta on average, as in the other constructors.
+        # Reversing zeta alone would make the coordinates left handed, so theta is
+        # reversed too, ie (theta, zeta) -> (-theta, -zeta).
+        geo = gvec.evaluate(state, "pos", "e_zeta", rho=[0.5], theta="int", zeta="int")
+        x, y = geo.pos.sel(xyz="x"), geo.pos.sel(xyz="y")
+        dx, dy = geo.e_zeta.sel(xyz="x"), geo.e_zeta.sel(xyz="y")
+        orientation = np.sign(float(((x * dy - y * dx) / (x**2 + y**2)).mean()))
+
+        surface_keys = ("B_sup_t", "B_sup_z", "B_sub_t", "B_sub_z", "Bmag")
+        surface_keys += ("dBdt", "dBdz", "sqrtg", "g_sup_rr")
+        dtype = jnp.result_type(float)
+        shapes = {k: jax.ShapeDtypeStruct((ntheta, nzeta), dtype) for k in surface_keys}
+        shapes["iota"] = jax.ShapeDtypeStruct((), dtype)
+
+        def _eval(r):
+            out = _gvec_surface(
+                state, float(r), Phi_edge, ntheta, nzeta, nfp, orientation
+            )
+            return {k: np.asarray(v, dtype=dtype) for k, v in out.items()}
+
+        # GVEC evaluates in compiled Fortran, so a callback keeps this jittable
+        # in rho like the other constructors.
+        data = jax.pure_callback(
+            _eval, shapes, jnp.asarray(rho, dtype=dtype), vmap_method="sequential"
+        )
+
+        return cls(
+            rho=rho,
+            **data,
+            Psi=2 * np.pi * Phi_edge * orientation,
+            R_major=R_major,
+            a_minor=a_minor,
+            NFP=nfp,
+            source=_FieldSource.gvec,
+        )
+
+    @classmethod
     def from_booz_xform(
         cls,
         booz: str | os.PathLike,
@@ -712,6 +787,49 @@ class Field(eqx.Module):
             NFP=self.NFP,
             source=self.source,
         )
+
+
+def _gvec_surface(state, rho, Phi_edge, ntheta, nzeta, nfp, orientation):
+    """Evaluate the surface data for Field.from_gvec on one surface, as numpy arrays.
+
+    For orientation = -1 the data is given in coordinates (-theta, -zeta) relative to
+    GVEC's own angles.
+    """
+    import gvec  # pyright: ignore[reportMissingImports]
+    from scipy.optimize import brentq
+
+    # GVEC's radial label rho_g is set by an arbitrary toroidal flux profile
+    # Phi(rho_g), so find the surface where Phi/Phi_edge = rho^2.
+    def resid(r):
+        return state.evaluate_profile("Phi", np.array([r]))[0] / Phi_edge - rho**2
+
+    rho_g = brentq(resid, 0.0, 1.0, xtol=1e-15, rtol=4 * np.finfo(float).eps)
+
+    theta = np.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+    zeta = np.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
+    keys = ("mod_B", "dmod_B_dt", "dmod_B_dz", "Jac", "B", "B_contra_t", "B_contra_z")
+    keys += ("e_theta", "e_zeta", "grad_rho", "dPhi_dr", "iota")
+    # reversing both angles leaves the Jacobian and grad(rho) unchanged and flips
+    # the sign of the angular components and derivatives
+    theta_g = np.mod(orientation * theta, 2 * np.pi)
+    zeta_g = np.mod(orientation * zeta, 2 * np.pi / nfp)
+    ev = gvec.evaluate(state, *keys, rho=[rho_g], theta=theta_g, zeta=zeta_g)
+    ev = ev.isel(rad=0)
+
+    # d(rho_g)/d(rho), with Phi = Phi_edge rho^2
+    drho = 2 * rho * Phi_edge / float(ev.dPhi_dr)
+    return {
+        "B_sup_t": orientation * ev.B_contra_t.values,
+        "B_sup_z": orientation * ev.B_contra_z.values,
+        "B_sub_t": orientation * (ev.B * ev.e_theta).sum("xyz").values,
+        "B_sub_z": orientation * (ev.B * ev.e_zeta).sum("xyz").values,
+        "Bmag": ev.mod_B.values,
+        "dBdt": orientation * ev.dmod_B_dt.values,
+        "dBdz": orientation * ev.dmod_B_dz.values,
+        "sqrtg": ev.Jac.values * drho,
+        "g_sup_rr": (ev.grad_rho**2).sum("xyz").values / drho**2,
+        "iota": np.asarray(ev.iota.values),
+    }
 
 
 def _boozer_sqrtg(rho, Bmag, I, G, iota, Psi):

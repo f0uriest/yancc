@@ -148,6 +148,7 @@ def test_solve_field_types(nuhat, erhohat):
     # desc imports its submodules lazily, so import one that needs jax to check
     # that the installed desc is compatible
     pytest.importorskip("desc.equilibrium")
+    pytest.importorskip("gvec")
     import desc.io  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
@@ -160,33 +161,42 @@ def test_solve_field_types(nuhat, erhohat):
     field2 = Field.from_vmec("tests/data/wout_NCSX.nc", rho, nt, nz)
     field3 = Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", rho, nt, nz)
     field4 = Field.from_ipp_bc("tests/data/NCSX.bc", rho, nt, nz)
+    field5 = Field.from_gvec("tests/data/gvec_NCSX", rho, nt, nz)
     pitchgrid = UniformPitchAngleGrid(73)
 
     sol1, info1 = solve_mdke(field1, pitchgrid, erhohat, nuhat, verbose=True)
     sol2, info2 = solve_mdke(field2, pitchgrid, erhohat, nuhat, verbose=True)
     sol3, info3 = solve_mdke(field3, pitchgrid, erhohat, nuhat, verbose=True)
     sol4, info4 = solve_mdke(field4, pitchgrid, erhohat, nuhat, verbose=True)
+    sol5, info5 = solve_mdke(field5, pitchgrid, erhohat, nuhat, verbose=True)
 
     D1 = sol1.get("Dij")
     D2 = sol2.get("Dij")
     D3 = sol3.get("Dij")
     D4 = sol4.get("Dij")
+    D5 = sol5.get("Dij")
 
     np.testing.assert_allclose(D1[0, 0], D2[0, 0], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[0, 0], D3[0, 0], rtol=2e-2, atol=0)
     np.testing.assert_allclose(D1[0, 0], D4[0, 0], rtol=2e-2, atol=0)
+    # the GVEC field uses different angles, with a different discretization error
+    # on this surface grid, which is a few percent at high collisionality
+    np.testing.assert_allclose(D1[0, 0], D5[0, 0], rtol=5e-2, atol=0)
 
     np.testing.assert_allclose(D1[0, 2], D2[0, 2], rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(D1[0, 2], D3[0, 2], rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(D1[0, 2], D4[0, 2], rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(D1[0, 2], D5[0, 2], rtol=1e-2, atol=1e-2)
 
     np.testing.assert_allclose(D1[2, 0], D2[2, 0], rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(D1[2, 0], D3[2, 0], rtol=1e-2, atol=1e-2)
     np.testing.assert_allclose(D1[2, 0], D4[2, 0], rtol=1e-2, atol=1e-2)
+    np.testing.assert_allclose(D1[2, 0], D5[2, 0], rtol=1e-2, atol=1e-2)
 
     np.testing.assert_allclose(D1[2, 2], D2[2, 2], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[2, 2], D3[2, 2], rtol=1e-2, atol=0)
     np.testing.assert_allclose(D1[2, 2], D4[2, 2], rtol=1e-2, atol=0)
+    np.testing.assert_allclose(D1[2, 2], D5[2, 2], rtol=1e-2, atol=0)
 
 
 @pytest.mark.parametrize("idx", [0, 10, 20])

@@ -39,9 +39,13 @@ jobs:
           python -m pip install --upgrade pip
           # DESC caps jax and other shared dependencies below the newest versions, so
           # only install it on the older python. The newer python tests the latest
-          # dependencies, with the tests comparing against DESC skipped.
+          # dependencies, with the tests comparing against DESC skipped. GVEC is
+          # installed alongside since the tests comparing field formats also need DESC.
           if [ "${{ matrix.combos.python_version }}" = "3.11" ]; then
-            pip install --upgrade -e ".[dev,desc]"
+            # GVEC is only distributed as source, and builds against these
+            sudo apt-get update
+            sudo apt-get install -y gfortran liblapack-dev libnetcdff-dev pkg-config
+            pip install --upgrade -e ".[dev,desc,gvec]"
           else
             pip install --upgrade -e ".[dev]"
           fi
