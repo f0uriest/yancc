@@ -1,6 +1,13 @@
 Changelog
 =========
 
+Unreleased
+----------
+### New features
+- New ``Field.from_gvec`` constructor to load a flux surface from a GVEC equilibrium,
+  given either a ``gvec.State`` or a GVEC run directory.
+
+
 v0.0.3
 ------
 ### New features
