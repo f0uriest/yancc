@@ -71,6 +71,38 @@ your acceptable tolerance, then back off one step. Sweep one axis at a time:
 ``nalpha`` first (usually the binding one), then ``ntheta``/``nzeta``, then
 ``nx``.
 
+Axisymmetric fields
+-------------------
+
+In an axisymmetric field (``nzeta=1``) at low collisionality, the centered stencil for
+the first derivatives, ``p1="4z"``, converges much faster with resolution than the
+default upwind stencil ``p1="4d"``. For the two species DSHAPE tokamak case of the
+tests at :math:`\rho=0.5`, the largest differences from SFINCS in the particle
+fluxes, heat fluxes, flows and bootstrap current are:
+
+==================================  ==========  ==========
+``ntheta``, ``nalpha``, ``nx``      ``"4d"``    ``"4z"``
+==================================  ==========  ==========
+41, 65, 8                           58%         4.5%
+71, 81, 12                          22%         3.0%
+65, 193, 12                         5.8%        1.3%
+==================================  ==========  ==========
+
+The largest is that of the ion particle flux in each case. For the other quantities
+they are 27%, 17% and 2.2% with ``"4d"`` and 4.2%, 1.7% and 0.2% with ``"4z"``.
+
+The multigrid preconditioner takes many iterations for the centered stencils (413
+applications of the operator for ``rtol=1e-6`` on the second of these grids, where the
+upwind stencil takes 60), so they are best used with ``preconditioner="tokamak"`` (see
+:doc:`tuning`), which takes 11 to 15 for either stencil on these grids:
+
+.. code-block:: python
+
+    sol, info = solve_dke(
+        field, pitchgrid, speedgrid, species, Erho=Erho,
+        p1="4z", preconditioner="tokamak",
+    )
+
 How cost scales
 ===============
 
