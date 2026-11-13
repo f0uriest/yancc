@@ -19,8 +19,10 @@ from yancc._collisions import (
     FokkerPlanckLandau,
     PitchAngleScattering,
 )
-from yancc._linalg import banded_to_dense
+from yancc._linalg import BorderedOperator, banded_to_dense
 from yancc._misc import (
+    DKEConstraint,
+    DKESources,
     _dke_thermodynamic_forces,
     angular_momentum_drift,
     dke_rhs,
@@ -28,6 +30,7 @@ from yancc._misc import (
 )
 from yancc._trajectories import DKE
 from yancc.rotation import RotatingEquilibrium, Rotation
+from yancc.solution import DKESolution, _energy_flux
 from yancc.species import Deuterium, Electron, LocalMaxwellian, Species
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -678,3 +681,275 @@ def test_angular_momentum_requires_major_radius(field, pitchgrid, speedgrid, spe
     """The angular momentum needs the major radius of an axisymmetric field."""
     with pytest.raises(ValueError, match="axisymmetric"):
         angular_momentum_drift(field, speedgrid, pitchgrid, species2)
+
+
+_FLUXES = ("<particle_flux>", "<heat_flux>", "<angular_momentum_flux>")
+
+
+def _fluxes(sol, kind=""):
+    """Fluxes of particles, heat and angular momentum, (3, ns)."""
+    return jnp.array([sol.get(key.replace("<", "<" + kind)) for key in _FLUXES])
+
+
+def _dense_solutions(field, pitchgrid, speedgrid, species, rotation, single_rhs=True):
+    """Solutions of the DKE by a dense solve.
+
+    One for the drive by the gradients of the species and the rotation shear, or one
+    for each unit drive.
+    """
+    A = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        0.0,
+        p1="4z",
+        coulomb_log=16.0,
+        rotation=rotation,
+    )
+    B = DKESources(field, pitchgrid, speedgrid, species)
+    C = DKEConstraint(field, pitchgrid, speedgrid, species, True)
+    args = (field, pitchgrid, speedgrid, species)
+    rhs = dke_rhs(*args, 0.0, single_rhs=single_rhs, rotating=A.rotating)
+    rhs = jnp.atleast_2d(rhs)
+    full = jnp.concatenate([rhs, jnp.zeros((rhs.shape[0], B.in_size()))], axis=1)
+    f = jnp.linalg.solve(BorderedOperator(A, B, C).as_matrix(), full.T).T
+    F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
+    zero = jnp.array(0.0)
+    sols = [
+        DKESolution(F0, fi, ri, *args, zero, zero, [], A.rotating)
+        for fi, ri in zip(f, rhs)
+    ]
+    return sols
+
+
+def _dense_solution(field, pitchgrid, speedgrid, species, rotation):
+    """Solution of the DKE by a dense solve."""
+    return _dense_solutions(field, pitchgrid, speedgrid, species, rotation)[0]
+
+
+def _maxwellian_solution(field, species, rotation):
+    """Solution without perturbation, for the outputs that do not depend on it."""
+    pitchgrid, speedgrid = UniformPitchAngleGrid(9), MaxwellSpeedGrid(3)
+    rotating = None
+    if rotation is not None:
+        rotating = RotatingEquilibrium(field, species, rotation)
+    F0 = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
+    f1 = jnp.zeros((len(species), speedgrid.nx, pitchgrid.nalpha, field.ntheta, 1))
+    zero = jnp.array(0.0)
+    return DKESolution(
+        F0, f1, f1, field, pitchgrid, speedgrid, species, zero, zero, [], rotating
+    )
+
+
+def _transport_matrix(omega, nx):
+    """Fluxes (Γ_s, Q_s/T_s, Σ_s Π_s/T_s) per unit of the forces (A1_s, A2_s, dω/dρ)."""
+    field = miller_field(13)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(17), MaxwellSpeedGrid(nx)
+    species = rotating_species()
+    sols = _dense_solutions(
+        field, pitchgrid, speedgrid, species, Rotation(omega), single_rhs=False
+    )
+    T = jnp.array([sp.temperature for sp in species]) * elementary_charge
+    L = []
+    for sol in sols:
+        G, Q, P = _fluxes(sol)
+        L.append(jnp.concatenate([G, Q / T, jnp.sum(P / T)[None]]))
+    # the drives are ordered by species and then by force (A1, A2, A3)
+    ns = len(species)
+    forces = [3 * s + k for k in range(2) for s in range(ns)] + [3 * ns]
+    return np.array(L).T[:, forces]
+
+
+def test_rotating_onsager_symmetry():
+    """Onsager symmetry and ambipolarity of the transport matrix.
+
+    Sugama & Horton 1997, eqs 24-25: on an up-down symmetric surface the transport
+    matrix is symmetric. The matrix of the gradients and the viscosity are even in ω,
+    the coupling of the gradients to the rotation shear is odd in ω.
+    """
+    omega = mach_omega(0.5)
+    Z = np.array([1.0, 6.0, -1.0])
+    # The discrete matrix approaches this with the number of speeds: the particle flux
+    # of deuterium is the small remainder left by momentum conservation.
+    asymmetry, ambipolarity = [], []
+    for nx in (4, 6):
+        L = _transport_matrix(omega, nx)
+        scale = np.sqrt(np.abs(np.diag(L)))
+        asymmetry.append(np.abs((L - L.T) / (scale[:, None] * scale)).max())
+        ambipolarity.append(np.abs(Z @ L[:3]).max() / np.abs(Z[:, None] * L[:3]).max())
+    assert asymmetry[1] < 0.03 and asymmetry[1] < asymmetry[0] / 3
+    # for every force
+    assert ambipolarity[1] < 0.01 and ambipolarity[1] < ambipolarity[0] / 3
+    # fluxes down the gradients: positive entropy production
+    assert np.all(np.diag(L) < 0)
+    # the coupling is not small
+    assert np.abs(L[:6, 6]).max() > 0.05 * np.sqrt(np.abs(L[0, 0] * L[6, 6]))
+    # to the accuracy of the dense solve
+    Lm = _transport_matrix(-omega, 6)
+    np.testing.assert_allclose(Lm[:6, :6], L[:6, :6], rtol=1e-5)
+    np.testing.assert_allclose(Lm[:6, 6], -L[:6, 6], rtol=1e-5)
+    np.testing.assert_allclose(Lm[6, :6], -L[6, :6], rtol=1e-5)
+    np.testing.assert_allclose(Lm[6, 6], L[6, 6], rtol=1e-5)
+
+
+def test_rotating_field_directions():
+    """Fluxes with the field, the current and the rotation reversed.
+
+    The fluxes of particles and energy do not depend on the directions of the field
+    and of the rotation, the flux of angular momentum follows the rotation and its
+    shear.
+    """
+    omega, shear = mach_omega(0.5), -2 * mach_omega(0.5)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(17), MaxwellSpeedGrid(4)
+
+    def fluxes(ipccw, btccw, sign):
+        field = miller_field(13, ipccw=ipccw, btccw=btccw)
+        rotation = Rotation(sign * omega, sign * shear)
+        return _fluxes(
+            _dense_solution(field, pitchgrid, speedgrid, rotating_species(), rotation)
+        )
+
+    ref = fluxes(-1, -1, 1)
+    for ipccw, btccw, sign in [(1, -1, 1), (-1, 1, 1), (1, 1, 1), (-1, -1, -1)]:
+        G, Q, P = fluxes(ipccw, btccw, sign)
+        np.testing.assert_allclose(G, ref[0], rtol=1e-6)
+        np.testing.assert_allclose(Q, ref[1], rtol=1e-6)
+        np.testing.assert_allclose(P, sign * ref[2], rtol=1e-6)
+
+
+def test_rotating_outputs():
+    """Outputs of the solution with and without rotation."""
+    field = miller_field(9)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(11), MaxwellSpeedGrid(3)
+    species = rotating_species()
+    args = (field, pitchgrid, speedgrid, species)
+    keys = ["<particle_flux>", "<heat_flux>", "<energy_flux>", "<V||B>", "<J||B>"]
+    keys += ["J||", "n", "Phi_1", "n0"]
+
+    # no rotation is a plasma at rest
+    sol0 = _dense_solution(*args, None)
+    solr = _dense_solution(*args, Rotation(0.0, 0.0))
+    for key in keys:
+        ref = sol0.get(key)
+        np.testing.assert_allclose(
+            solr.get(key),
+            ref,
+            rtol=1e-8,
+            atol=1e-8 * float(jnp.abs(ref).max()),
+            err_msg=key,
+        )
+    np.testing.assert_allclose(sol0.get("<energy_flux>"), sol0.get("<heat_flux>"))
+    np.testing.assert_allclose(sol0.get("Phi_0"), 0)
+    np.testing.assert_allclose(_fluxes(sol0, "nondissipative_"), 0)
+
+    omega = mach_omega(0.8)
+    sol = _dense_solution(*args, Rotation(omega, -omega))
+    eq = sol.rotating
+    assert eq is not None
+    n = jnp.array([sp.density for sp in species])[:, None, None]
+    np.testing.assert_allclose(sol.get("Phi_0"), eq.Phi)
+    np.testing.assert_allclose(sol.get("n0"), n * eq.density)
+    # the current is that of the local densities
+    q = jnp.array([sp.species.charge for sp in species])[:, None, None]
+    np.testing.assert_allclose(
+        sol.get("J||"), (q * n * eq.density * sol.get("V||")).sum(axis=0), rtol=1e-12
+    )
+    # energy flux of the lab frame
+    G, Q, P = _fluxes(sol)
+    np.testing.assert_allclose(
+        sol.get("<energy_flux>", frame="lab") - sol.get("<energy_flux>"),
+        omega * P,
+        rtol=1e-10,
+    )
+    assert np.all(np.abs(sol.get("<energy_flux>") - Q) > 1e-3 * np.abs(Q))
+    with pytest.raises(ValueError, match="frame"):
+        sol.get("<energy_flux>", frame="plasma")
+    for key in ["V^theta", "<classical_particle_flux>"]:
+        with pytest.raises(NotImplementedError, match="rotation"):
+            sol.get(key)
+
+
+def _tilted_field(ntheta, s_zmag=0.3, btccw=-1):
+    """Surface without up-down symmetry: its center rises with the minor radius."""
+    return miller_field(ntheta, kappa=1.5, delta=0.2, s_zmag=s_zmag, btccw=btccw)
+
+
+def test_nondissipative_fluxes():
+    """Fluxes that do not depend on the solution of the DKE."""
+    omega = mach_omega(0.5)
+    species = rotating_species()
+
+    def fluxes(field, rotation, species=species):
+        return _fluxes(
+            _maxwellian_solution(field, species, rotation), "nondissipative_"
+        )
+
+    H = fluxes(_tilted_field(21), Rotation(omega, -2 * omega))
+    scale = jnp.abs(H).max(axis=1, keepdims=True)
+    assert np.all(scale > 0)
+    # they vanish with up-down symmetry, and without rotation
+    symmetric = fluxes(miller_field(13), Rotation(omega, -2 * omega))
+    np.testing.assert_allclose(symmetric / scale, 0, atol=1e-10)
+    assert np.all(fluxes(_tilted_field(13), None) == 0)
+    # moments of the Maxwellian: spectral convergence in theta
+    coarse = fluxes(_tilted_field(15), Rotation(omega, -2 * omega))
+    np.testing.assert_allclose(coarse, H, rtol=1e-4)
+
+    # no rotation shear: no fluxes of particles and energy
+    rigid = fluxes(_tilted_field(21), Rotation(omega))
+    assert np.all(rigid[:2] == 0)
+    assert np.abs(rigid[2]).max() > 0.1 * scale[2]
+    # no gradients and no rotation: no flux of angular momentum
+    flat = [
+        LocalMaxwellian(sp.species, sp.temperature, sp.density, 0.0, 0.0)
+        for sp in species
+    ]
+    still = fluxes(_tilted_field(21), Rotation(0.0, 0.0), flat)
+    np.testing.assert_allclose(still / scale, 0, atol=1e-10)
+
+    # The surface turned upside down is the mirror image: the toroidal field
+    # reverses, the current and the rotation do not, and no flux changes.
+    mirror = fluxes(_tilted_field(21, -0.3, 1), Rotation(omega, -2 * omega))
+    np.testing.assert_allclose(mirror, H, rtol=1e-9)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "updown_circular_norot",
+        "updown_circular_reversed",
+        "updown_circular_rigid",
+        "updown_circular_shear",
+        "updown_circular_shearonly",
+        "updown_mastu_r045_btflip",
+        "updown_mastu_r045_rot",
+    ],
+)
+def test_nondissipative_fluxes_neo(reference, case):
+    """Fluxes that do not depend on the solution of the DKE against NEO.
+
+    These are moments of the Maxwellian on surfaces without up-down symmetry, so no
+    resolution is involved. NEO prints five digits. The differences are 2e-4 for the
+    circular surfaces and 8e-4 for MAST-U, whose input is not neutral.
+    """
+    assert case in reference_cases(reference, "nondissipative")
+    assert len(reference_cases(reference, "nondissipative")) == 7
+    prefix = "nondissipative_" + case + "_"
+    field, species, rotation, _ = reference_case(reference, prefix)
+    sol = _maxwellian_solution(field, species, rotation)
+    G, Q, P = _fluxes(sol, "nondissipative_")
+    fluxes = np.array([G, _energy_flux(sol, G, Q, P, "lab"), P]).T
+    ref = reference[prefix + "fluxes"]
+    assert np.abs(ref[:, 2]).max() > 0
+    # NaN: not printed by NEO (fluxes of particles and energy without rotation)
+    printed = np.isfinite(ref)
+    nonzero = printed & (ref != 0)
+    np.testing.assert_allclose(fluxes[nonzero], ref[nonzero], rtol=2e-3)
+    # no particle flux without rotation shear
+    T = np.array([sp.temperature for sp in species]) * elementary_charge
+    zero = printed & (ref == 0)
+    if zero.any():
+        assert np.all(
+            np.abs(fluxes * T[:, None])[zero] < 1e-9 * np.abs(ref[:, 1]).max()
+        )
