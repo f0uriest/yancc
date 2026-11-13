@@ -162,3 +162,45 @@ def test_from_boozer_optional_geometry():
     # and the estimates land near the supplied geometry.
     np.testing.assert_allclose(derived.R_major, booz.R_major, rtol=8e-2)
     np.testing.assert_allclose(derived.a_minor, booz.a_minor, rtol=5e-2)
+
+
+@pytest.mark.parametrize(
+    "constructor, path",
+    [
+        (Field.from_vmec, "tests/data/wout_NCSX.nc"),
+        (Field.from_booz_xform, "tests/data/boozmn_wout_NCSX.nc"),
+        (Field.from_ipp_bc, "tests/data/NCSX.bc"),
+    ],
+)
+def test_major_radius(constructor, path):
+    """R and dRdrho of the points on the surface."""
+    nt, nz, rho, h = 9, 7, 0.5, 1e-4
+    field = constructor(path, rho, nt, nz)
+    assert field.R is not None and field.dRdrho is not None
+    # the surface lies around the major radius, within the minor radius
+    assert field.R.min() > field.R_major - field.a_minor
+    assert field.R.max() < field.R_major + field.a_minor
+    inner = constructor(path, rho - h, nt, nz)
+    outer = constructor(path, rho + h, nt, nz)
+    assert inner.R is not None and outer.R is not None
+    # tolerance is the truncation error of the difference and of the radial splines
+    np.testing.assert_allclose(
+        field.dRdrho, (outer.R - inner.R) / (2 * h), rtol=1e-4, atol=1e-5
+    )
+
+    # resampling keeps them, and they are optional like the other real space geometry
+    fine = field.resample(2 * nt - 1, 2 * nz - 1)
+    assert fine.R is not None and fine.dRdrho is not None
+    np.testing.assert_allclose(fine.R[0, 0], field.R[0, 0], rtol=1e-12)
+    np.testing.assert_allclose(fine.dRdrho[0, 0], field.dRdrho[0, 0], rtol=1e-12)
+    booz = Field.from_boozer(
+        rho=field.rho,
+        Bmag=field.Bmag,
+        I=field.I,
+        G=field.G,
+        iota=field.iota,
+        Psi=field.Psi,
+        NFP=field.NFP,
+    )
+    assert booz.R is None and booz.dRdrho is None
+    assert booz.resample(2 * nt - 1, 2 * nz - 1).R is None

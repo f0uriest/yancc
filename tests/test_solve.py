@@ -980,9 +980,23 @@ def test_solve_dke_tokamak_axisymmetric():
     np.testing.assert_allclose(fluxes_axi, fluxes_res, rtol=5e-3, atol=1e-8)
 
 
-# these indices are rho=0.8, 0.9, so collisionality isn't too low
-@pytest.mark.parametrize("ir", [15, 17])
-def test_solve_dke_dshape_2species(ir):
+_DSHAPE_MULTIGRID = {"multigrid_options": {"coarse_N": 2000, "max_grids": 3}}
+_DSHAPE_TOKAMAK = {"p1": "4z", "preconditioner": "tokamak"}
+
+
+# With the default stencil these indices are rho=0.8, 0.9, so collisionality isn't too
+# low. The centered stencil with the tokamak preconditioner is also tested at rho=0.5,
+# where the ion particle flux, the least accurate at this resolution, is 3% off.
+@pytest.mark.parametrize(
+    "ir, options, rtol",
+    [
+        pytest.param(15, _DSHAPE_MULTIGRID, 2e-2, id="15"),
+        pytest.param(17, _DSHAPE_MULTIGRID, 2e-2, id="17"),
+        pytest.param(9, _DSHAPE_TOKAMAK, 4e-2, id="9-tokamak"),
+        pytest.param(17, _DSHAPE_TOKAMAK, 2e-2, id="17-tokamak"),
+    ],
+)
+def test_solve_dke_dshape_2species(ir, options, rtol):
     """Test solving DKE vs sfincs for DSHAPE tokamak."""
     if os.environ.get("CI"):
         jax.clear_caches()
@@ -1037,45 +1051,45 @@ def test_solve_dke_dshape_2species(ir):
         species,
         Erho=sfincs_data["Er"][ir] * 1000 * field.a_minor,
         verbose=2,
-        multigrid_options={"coarse_N": 2000, "max_grids": 3},
         nL=nL0,
         rtol=1e-6,
         coulomb_log=17,
+        **options,
     )
     assert info["success"]
 
     np.testing.assert_allclose(
         sol.get("FSABFlow_sfincs")[0],
         sfincs_data["FSABFlow_electron"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )
     np.testing.assert_allclose(
         sol.get("FSABFlow_sfincs")[1],
         sfincs_data["FSABFlow_ion"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )
     np.testing.assert_allclose(
         sol.get("particleFlux_vm_rN_sfincs")[0] * field.a_minor,
         sfincs_data["particleFlux_vm_rHat_electron"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )
     np.testing.assert_allclose(
         sol.get("particleFlux_vm_rN_sfincs")[1] * field.a_minor,
         sfincs_data["particleFlux_vm_rHat_ion"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )
     np.testing.assert_allclose(
         sol.get("heatFlux_vm_rN_sfincs")[0] * field.a_minor,
         sfincs_data["heatFlux_vm_rHat_electron"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )
     np.testing.assert_allclose(
         sol.get("heatFlux_vm_rN_sfincs")[1] * field.a_minor,
         sfincs_data["heatFlux_vm_rHat_ion"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )
     np.testing.assert_allclose(
         sol.get("FSABjHat_sfincs"),
         sfincs_data["FSABjHat"][ir],
-        rtol=2e-2,
+        rtol=rtol,
     )

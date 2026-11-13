@@ -5,8 +5,8 @@ Advanced Tuning
 This page documents the kwargs accepted by :func:`~yancc.solve_dke`,
 :func:`~yancc.solve_mdke` and :func:`~yancc.solve_dke_ambipolar` beyond
 the ones shown in the quickstart, the keys of the ``multigrid_options`` dictionary
-that controls the preconditioner, and the keys of the ``root_options`` dictionary that
-controls the search for ambipolar roots. These are intended for users who already have a working
+that controls the preconditioner, the preconditioner for axisymmetric fields, and the
+keys of the ``root_options`` dictionary that controls the search for ambipolar roots. These are intended for users who already have a working
 solve and want to make it faster or push it into a regime where the defaults
 no longer converge.
 
@@ -267,6 +267,49 @@ DKE-only multigrid options
    weights as the main operator but allows them to be specified
    independently.
 
+Preconditioner for axisymmetric fields
+======================================
+
+For fields with ``nzeta=1``, :func:`~yancc.solve_dke` has a second preconditioner,
+selected with ``preconditioner="tokamak"``, which replaces the multigrid cycle by two
+direct solves:
+
+1. A solve of the Galerkin projection of the DKE, with its sources and constraints,
+   on the first few Legendre modes in pitch at every poloidal point, speed and
+   species. These modes hold the null space of the collision operator and most of the
+   coupling between speeds and species.
+2. A solve on the :math:`(\alpha, \theta)` plane of each species and speed for the
+   residual of the first, keeping the advection in :math:`\theta` and
+   :math:`\alpha`, pitch angle scattering and the diagonal of the other terms.
+
+Both are built from the operator being solved, with its own stencils, where the
+multigrid preconditioner uses low order upwind stencils. It is therefore as effective
+for the centered stencils (``p1="4z"``, ``"6z"``) as for the upwind ones. The centered
+stencils converge much faster with resolution at low collisionality (see
+:doc:`performance`), but take many more iterations with the multigrid preconditioner.
+
+.. code-block:: python
+
+    sol, info = solve_dke(
+        field, pitchgrid, speedgrid, species, Erho=Erho,
+        p1="4z",
+        preconditioner="tokamak",
+        tokamak_options={"moments": 4},
+    )
+
+``moments`` *(int, default 4)*
+   Number of Legendre modes in the first solve, at least 3 and at most ``nL``. More
+   modes reduce the number of iterations, but the cost of factoring the projected
+   operator, a dense matrix of size :math:`n_s n_x n_\theta \cdot` ``moments``, grows
+   with the cube of that size.
+
+A toroidally rotating plasma (``rotation``, see :doc:`theory`) is supported by this
+preconditioner only, and ``p1`` then defaults to ``"4z"``.
+
+With this preconditioner ``multigrid_options`` and ``fluid_correction`` are not used,
+and ``mesh`` is not supported. ``M`` can still be used to pass a preconditioner from a
+previous solve, here a ``yancc._tokamak.TokamakPreconditioner``.
+
 Ambipolar root finding options
 ==============================
 
@@ -281,7 +324,8 @@ and can be passed as ``**options``, with the following differences:
 - ``k`` defaults to ``10 * num_roots``. The recycled subspace is carried across every
   solve of the search, so it pays to make it larger than for a single solve.
 - ``f1`` and ``U`` are not accepted, since the search manages the warm start between
-  solves itself. ``M``, ``B`` and ``C`` are accepted as for
+  solves itself. ``preconditioner`` and ``tokamak_options`` are not accepted either:
+  the fluxes in an axisymmetric field are ambipolar for any ``Erho``. ``M``, ``B`` and ``C`` are accepted as for
   :func:`~yancc.solve_dke`; note that a given ``M`` is used at every value of
   ``Erho``.
 
