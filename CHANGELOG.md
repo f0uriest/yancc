@@ -12,6 +12,26 @@ Unreleased
   than the default upwind stencil at low collisionality but converge slowly with the
   multigrid preconditioner.
 
+- Toroidal rotation of the plasma in axisymmetric fields, at speeds up to the order of
+  the ion thermal speed: ``solve_dke(..., preconditioner="tokamak",
+  rotation=yancc.Rotation(omega, domega_drho))``. The DKE is solved in the rotating
+  frame, with the variation of the potential and of the densities on the surface, the
+  centrifugal and Coriolis forces, the collision operator of the local densities and
+  the drive by the rotation shear. Benchmarked against NEO.
+- ``Field`` has new optional attributes ``R`` and ``dRdrho``, the major radius of its
+  nodes and its radial derivative. They are computed automatically when loading from
+  DESC, VMEC, ``booz_xform`` and IPP ``.bc`` files, and can be passed to ``Field`` and
+  ``Field.from_boozer`` directly.
+- New ``DKESolution`` outputs:
+    - ``"<angular_momentum_flux>"``: radial flux of toroidal angular momentum.
+    - ``"<energy_flux>"``: energy flux in a rotating plasma, in the rotating or the
+      lab frame.
+    - ``"<nondissipative_particle_flux>"``, ``"<nondissipative_heat_flux>"``,
+      ``"<nondissipative_angular_momentum_flux>"``: fluxes in a rotating plasma on a
+      surface without up-down symmetry that do not depend on the solution.
+    - ``"Phi_0"``, ``"n0"``: potential and densities on the surface in a rotating
+      plasma.
+
 v0.0.3
 ------
 ### New features

@@ -303,6 +303,9 @@ stencils converge much faster with resolution at low collisionality (see
    operator, a dense matrix of size :math:`n_s n_x n_\theta \cdot` ``moments``, grows
    with the cube of that size.
 
+A toroidally rotating plasma (``rotation``, see :doc:`theory`) is supported by this
+preconditioner only, and ``p1`` then defaults to ``"4z"``.
+
 With this preconditioner ``multigrid_options`` and ``fluid_correction`` are not used,
 and ``mesh`` is not supported. ``M`` can still be used to pass a preconditioner from a
 previous solve, here a ``yancc._tokamak.TokamakPreconditioner``.

@@ -981,7 +981,7 @@ def _nondissipative_fluxes(sol):
 _NONDISSIPATIVE = (
     "Part of the {} of each species that is independent of the solution f1, to be "
     "added to <{}>. Nonzero in a rotating plasma on a surface without up-down "
-    "symmetry. Not including the part driven by E||."
+    "symmetry. The part driven by the parallel electric field is not included."
 )
 
 

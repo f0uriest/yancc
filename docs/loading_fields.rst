@@ -160,6 +160,17 @@ to the surface average of :math:`|B|`.
 This is also the cleanest way to construct synthetic / test fields (e.g.
 analytic tokamak limits, single-helicity reductions).
 
+Major radius
+============
+
+A :class:`~yancc.Field` can hold the major radius ``R`` of its nodes and its
+derivative ``dRdrho`` with respect to :math:`\rho` at fixed angles. They are only
+needed for a toroidally rotating plasma (``solve_dke(..., rotation=...)``, see
+:doc:`theory`) and for the flux of toroidal angular momentum, both in axisymmetric
+fields. The constructors for DESC, VMEC, ``booz_xform`` and IPP ``.bc`` files compute
+them, and they can be passed to :class:`~yancc.Field` and
+:meth:`~yancc.Field.from_boozer` directly.
+
 Tips
 ====
 
