@@ -309,6 +309,16 @@ class _FluidSolver(eqx.Module):
             Bx.append(jax.vmap(self._to_solver)(U))
             Cx.append(jax.vmap(self._to_solver)(Vt))
             Dx.append(-jnp.ones(nb * ns))
+        elif A._C._exchange_factors is not None:
+            # With rotation the exchange term is U <W .>, with isotropic functions U
+            # and functionals W that vary on the surface, of rank 4 ns.
+            U, W = A._C._exchange_factors
+            T0, Ti0 = A._C.CF.Txi[:, 0], A._C.CF.Txi_inv[0]
+            Uf = jnp.einsum("sixa,a,ksxtz->ksitz", Psi, T0, U)
+            Wf = jnp.einsum("sixa,a,ksxtz,tz->ksitz", V, Ti0, W, A._C._surface_weights)
+            Bx.append(jax.vmap(self._to_solver)(Uf))
+            Cx.append(jax.vmap(self._to_solver)(Wf))
+            Dx.append(-jnp.ones(U.shape[0]))
         self.Bx, self.Cx = jnp.concatenate(Bx), jnp.concatenate(Cx)
         self.Z = jax.vmap(self._solve_sparse)(self.Bx)
         S = jnp.diag(jnp.concatenate(Dx)) - self.Cx @ self.Z.T

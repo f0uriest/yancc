@@ -7,6 +7,8 @@ surface (with the major radius), the species (D, C, e), the Coulomb logarithm an
 rotation as yancc takes them, and the result of NEO in SI units per unit rho.
 """
 
+import os
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -28,9 +30,11 @@ from yancc._misc import (
     dke_rhs,
     radial_drift,
 )
+from yancc._tokamak import TokamakPreconditioner
 from yancc._trajectories import DKE
 from yancc.rotation import RotatingEquilibrium, Rotation
 from yancc.solution import DKESolution, _energy_flux
+from yancc.solve import solve_dke, solve_dke_ambipolar
 from yancc.species import Deuterium, Electron, LocalMaxwellian, Species
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
 
@@ -953,3 +957,264 @@ def test_nondissipative_fluxes_neo(reference, case):
         assert np.all(
             np.abs(fluxes * T[:, None])[zero] < 1e-9 * np.abs(ref[:, 1]).max()
         )
+
+
+def _solve(field, nalpha, nx, species, rotation, coulomb_log=16.0, rtol=1e-10):
+    sol, info = solve_dke(
+        field,
+        UniformPitchAngleGrid(nalpha),
+        MaxwellSpeedGrid(nx),
+        species,
+        0.0,
+        rtol=rtol,
+        coulomb_log=coulomb_log,
+        preconditioner="tokamak",
+        rotation=rotation,
+    )
+    assert info["success"]
+    assert info["nmv"] < 60
+    return sol
+
+
+@pytest.mark.parametrize("mach, shear", [(0.5, -2.0), (1.5, 0.0)])
+def test_solve_dke_rotation(mach, shear):
+    """Solution of the DKE of a rotating plasma matches a dense solve."""
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    field = miller_field(9)
+    species = rotating_species()
+    rotation = Rotation(mach_omega(mach), shear * mach_omega(mach))
+    sol = _solve(field, 11, 4, species, rotation)
+    ref = _dense_solution(
+        field, UniformPitchAngleGrid(11), MaxwellSpeedGrid(4), species, rotation
+    )
+    for key in (*_FLUXES, "<J||B>"):
+        np.testing.assert_allclose(sol.get(key), ref.get(key), rtol=1e-6, err_msg=key)
+
+
+def test_solve_dke_rotation_zero():
+    """Without rotation the solution is that of a plasma at rest."""
+    field = miller_field(9)
+    species = rotating_species()
+    sol = _solve(field, 11, 4, species, Rotation(0.0, 0.0))
+    sol0, _ = solve_dke(
+        field,
+        UniformPitchAngleGrid(11),
+        MaxwellSpeedGrid(4),
+        species,
+        0.0,
+        p1="4z",
+        rtol=1e-10,
+        coulomb_log=16.0,
+        preconditioner="tokamak",
+    )
+    for key in ("<particle_flux>", "<heat_flux>", "<J||B>"):
+        np.testing.assert_allclose(sol.get(key), sol0.get(key), rtol=1e-7, err_msg=key)
+
+
+def test_tokamak_preconditioner_rotation():
+    """Coarse level of the preconditioner is the Galerkin inverse with rotation."""
+    field = miller_field(9)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(11), MaxwellSpeedGrid(4)
+    species = rotating_species()
+    args = (field, pitchgrid, speedgrid, species)
+    A = DKE(*args, 0.0, p1="4z", coulomb_log=16.0, rotation=Rotation(mach_omega(1.0)))
+    B = DKESources(*args)
+    C = DKEConstraint(*args, True)
+    op = BorderedOperator(A, B, C)
+    ns, moments = len(species), 4
+    fs = TokamakPreconditioner(op, moments).coarse.fluid
+
+    # the exchange of energy between the species is removed by a term of low rank,
+    # which the coarse solve has to project as well
+    keys = jax.random.split(jax.random.PRNGKey(0), 2)
+    c0 = jax.random.normal(keys[0], (ns, speedgrid.nx * moments, field.ntheta, 1))
+    h0 = jax.random.normal(keys[1], (2 * ns,))
+    v = op.mv((fs.prolong(c0), h0))
+    c1, h1 = fs.solve(fs.restrict(v[0]), v[1])
+    v1 = op.mv((fs.prolong(c1), h1))
+    r0, r1 = fs.restrict(v[0]), fs.restrict(v1[0])
+    np.testing.assert_allclose(r1, r0, rtol=0, atol=1e-10 * float(jnp.max(jnp.abs(r0))))
+    np.testing.assert_allclose(
+        v1[1], v[1], rtol=0, atol=1e-10 * float(jnp.max(jnp.abs(v[1])))
+    )
+
+
+def test_solve_dke_rotation_errors(pitchgrid, speedgrid):
+    """Rotation needs the preconditioner for axisymmetric fields."""
+    args = (miller_field(9), pitchgrid, speedgrid, rotating_species())
+    with pytest.raises(ValueError, match="rotation requires"):
+        solve_dke(*args, 0.0, rotation=Rotation(1e4))
+    with pytest.raises(ValueError, match="rotation"):
+        solve_dke_ambipolar(*args, 1, rotation=Rotation(1e4))
+
+
+def test_solve_dke_rotation_derivatives():
+    """Derivatives with respect to the rotation, its shear and a temperature."""
+    # these are super low res, just to test jax logic, not physical correctness
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    field = miller_field(9)
+    species = rotating_species()
+    p0 = jnp.array([mach_omega(0.6), -mach_omega(0.9), 2e3])
+
+    def fluxes(p):
+        nC = species[1].density
+        carbon = LocalMaxwellian(Carbon, p[2], nC, -3 * p[2], -nC)
+        sol, _ = solve_dke(
+            field,
+            UniformPitchAngleGrid(11),
+            MaxwellSpeedGrid(3),
+            [species[0], carbon, species[2]],
+            0.0,
+            rtol=1e-12,
+            coulomb_log=16.0,
+            preconditioner="tokamak",
+            rotation=Rotation(p[0], p[1]),
+        )
+        return jnp.concatenate([_fluxes(sol).flatten(), sol.get("<J||B>")[None]])
+
+    out = jnp.abs(fluxes(p0))
+    scale = jnp.append(jnp.repeat(out[:9].reshape(3, 3).max(axis=1), 3), out[9])
+
+    def foo(e):
+        # relative changes of the parameters and of the fluxes of each kind
+        return fluxes(p0 * (1 + e)) / scale
+
+    e0, h = jnp.zeros(3), 1e-5
+    Jfd = jnp.array(
+        [(foo(e0.at[i].add(h)) - foo(e0.at[i].add(-h))) / (2 * h) for i in range(3)]
+    ).T
+    Jf = jax.jacfwd(foo)(e0)
+    Jr = jax.jacrev(foo)(e0)
+    # every parameter matters
+    assert np.abs(Jf).max(axis=0).min() > 1e-3
+    np.testing.assert_allclose(Jr, Jf, atol=1e-8)
+    np.testing.assert_allclose(Jf, Jfd, atol=1e-5)
+
+
+def test_nondissipative_fluxes_ambipolar():
+    """Particle fluxes on a surface without up-down symmetry are ambipolar only with
+    the fluxes that do not depend on the solution (Sugama & Horton 1997, eq 28).
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    omega = mach_omega(0.5)
+    species = rotating_species()
+    rotation = Rotation(omega, -2 * omega)
+    charge = np.array([1, 6, -1])
+
+    def ambipolarity(G):
+        return np.abs(np.sum(charge * G)) / np.sum(np.abs(charge * G))
+
+    sol = _solve(_tilted_field(21), 33, 6, species, rotation)
+    G = sol.get("<particle_flux>")
+    H = sol.get("<nondissipative_particle_flux>")
+    # The fluxes of the DKE alone are far from ambipolar here. The rest is the
+    # discretization error.
+    assert ambipolarity(G) > 0.5
+    assert ambipolarity(G + H) < 0.02
+    low = _solve(_tilted_field(13), 17, 4, species, rotation)
+    assert ambipolarity(
+        low.get("<particle_flux>") + low.get("<nondissipative_particle_flux>")
+    ) > 3 * ambipolarity(G + H)
+
+    # the surface turned upside down is the mirror image
+    mirror = _solve(_tilted_field(21, -0.3, 1), 33, 6, species, rotation)
+    for key in ("<particle_flux>", "<angular_momentum_flux>"):
+        np.testing.assert_allclose(mirror.get(key), sol.get(key), rtol=1e-6)
+
+
+_NAN = float("nan")
+# Largest relative differences to NEO of the fluxes [species (D, C, e), (particles,
+# energy, angular momentum)], about twice the differences found with these grids (6
+# speeds, 65 pitch angles and the 41 poloidal nodes of the reference field). NaN is
+# not asserted: the electron particle flux, the small remainder of the ion fluxes, and
+# fluxes near a zero crossing.
+_NEO_CASES = {
+    # MAST-U H-mode (carbon Mach number above 1) at mid radius
+    "mastu_r045_rot": (
+        (6, 65),
+        [[0.07, 0.03, 0.03], [0.08, 0.05, 0.06], [_NAN, 0.06, _NAN]],
+        [[0.07, 0.03, 0.03], [_NAN, _NAN, _NAN], [_NAN, 0.06, _NAN]],
+    ),
+    # towards the edge, where the shape matters
+    "mastu_r065_rot": (
+        (6, 65),
+        [[0.02, 0.01, 0.05], [0.01, _NAN, 0.01], [0.015, 0.01, _NAN]],
+        None,
+    ),
+    "mastu_r085_rot": (
+        (6, 65),
+        [[0.02, 0.01, 0.02], [0.03, 0.02, 0.03], [_NAN, 0.01, _NAN]],
+        None,
+    ),
+    # signs: rotation reversed, field and current reversed, shear without rotation
+    "mastu_r045_reversed": (
+        (6, 65),
+        [[0.08, 0.05, 0.04], [0.09, 0.06, 0.07], [_NAN, _NAN, _NAN]],
+        None,
+    ),
+    "mastu_r045_bothflip": (
+        (6, 65),
+        [[0.08, 0.05, 0.04], [0.09, 0.06, 0.07], [_NAN, _NAN, _NAN]],
+        None,
+    ),
+    "mastu_r045_shearonly": (
+        (6, 65),
+        [[_NAN, _NAN, 0.04], [_NAN, _NAN, 0.05], [_NAN, _NAN, _NAN]],
+        None,
+    ),
+    # strong rotation (carbon Mach number 2.4) without and with shear at high
+    # collisionality (33 poloidal nodes), where the particle fluxes need 10 speeds
+    "collisional_rigid3": (
+        (10, 49),
+        [[0.03, 0.01, 0.02], [0.05, 0.08, 0.05], [0.03, 0.01, _NAN]],
+        None,
+    ),
+    "collisional_shear": (
+        (10, 49),
+        [[0.03, 0.01, 0.02], [0.05, 0.08, 0.05], [0.03, 0.01, _NAN]],
+        None,
+    ),
+    # surface without up-down symmetry: the fluxes of the DKE, which are far from
+    # ambipolar, and the total
+    "updown_mastu_r045_rot": (
+        (6, 65),
+        [[0.04, 0.03, 0.01], [_NAN, _NAN, _NAN], [_NAN, _NAN, _NAN]],
+        [[0.09, 0.04, 0.05], [0.10, 0.05, 0.08], [_NAN, _NAN, _NAN]],
+    ),
+}
+
+
+@pytest.mark.parametrize("case", _NEO_CASES.keys())
+def test_solve_dke_rotation_neo(reference, case):
+    """Fluxes in a rotating plasma against NEO.
+
+    Compared are the fluxes of the DKE with the energy flux of the lab frame, and the
+    total with the fluxes that do not depend on the solution and the energy flux of
+    the rotating frame.
+    """
+    if os.environ.get("CI"):
+        jax.clear_caches()
+    assert sorted(_NEO_CASES) == reference_cases(reference, "fluxes")
+    (nx, nalpha), limits, total_limits = _NEO_CASES[case]
+    prefix = "fluxes_" + case + "_"
+    field, species, rotation, coulomb_log = reference_case(reference, prefix)
+    sol = _solve(field, nalpha, nx, species, rotation, coulomb_log, rtol=1e-8)
+
+    def deviation(G, Q, P, frame, key):
+        fluxes = np.array([G, _energy_flux(sol, G, Q, P, frame), P]).T
+        return fluxes / reference[prefix + key] - 1
+
+    G, Q, P = _fluxes(sol)
+    dev = deviation(G, Q, P, "lab", "fluxes")
+    limits = np.array(limits)
+    check = np.isfinite(limits)
+    assert np.all(np.abs(dev)[check] < limits[check]), dev
+    if total_limits is not None:
+        H = _fluxes(sol, "nondissipative_")
+        dev = deviation(G + H[0], Q + H[1], P + H[2], "rotating", "total_fluxes")
+        limits = np.array(total_limits)
+        check = np.isfinite(limits)
+        assert np.all(np.abs(dev)[check] < limits[check]), dev
