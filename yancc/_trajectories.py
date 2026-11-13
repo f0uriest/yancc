@@ -21,6 +21,7 @@ from ._linalg import (
 from ._sharding import _shard_sx_leaves
 from ._utils import _parse_axorder_shape_3d, _parse_axorder_shape_4d, _to_axorder
 from .field import Field
+from .rotation import RotatingEquilibrium, Rotation
 from .species import LocalMaxwellian
 from .velocity_grids import (
     MaxwellSpeedGrid,
@@ -715,6 +716,8 @@ def sfincs_w_pitch(
     pitchgrid: UniformPitchAngleGrid,
     Erho: Float[Array, ""],
     v: Float[Array, "ns nx"],
+    vth: Float[Array, " ns"] | None = None,
+    rotating: RotatingEquilibrium | None = None,
 ) -> Float[Array, "ns nx na nt nz"]:
     """Wind in xi/pitch direction for SFINCS DKE."""
     xi = pitchgrid.xi[None, None, :, None, None]
@@ -724,7 +727,15 @@ def sfincs_w_pitch(
     w2 = (
         xi * (1 - xi**2) / (2 * field.Bmag**3) * (-Erho) * field.BxgradrhodotgradB
     ) / sina
-    return w1 + w2
+    if rotating is None:
+        return w1 + w2
+    # parallel force of the potential energy in the rotating frame,
+    # m dv||/dt = -T b.grad(lambda)
+    assert vth is not None
+    vth = vth[:, None, None, None, None]
+    bdotgradlam = field.B_sup_t / field.Bmag * rotating.dlamdt[:, None, None]
+    w3 = -bdotgradlam * vth**2 / (2 * v) * sina
+    return w1 + w2 + w3
 
 
 def sfincs_w_speed(
@@ -732,12 +743,21 @@ def sfincs_w_speed(
     pitchgrid: UniformPitchAngleGrid,
     Erho: Float[Array, ""],
     x: Float[Array, "ns nx"],
+    vth: Float[Array, " ns"] | None = None,
+    rotating: RotatingEquilibrium | None = None,
 ) -> Float[Array, "ns nx na nt nz"]:
     """Wind in speed/x direction for SFINCS DKE."""
     xi = pitchgrid.xi[None, None, :, None, None]
     x = x[:, :, None, None, None]
     w = (1 + xi**2) * x / (2 * field.Bmag**3) * field.BxgradrhodotgradB * (-Erho)
-    return w
+    if rotating is None:
+        return w
+    # parallel force of the potential energy in the rotating frame,
+    # m dv||/dt = -T b.grad(lambda)
+    assert vth is not None
+    vth = vth[:, None, None, None, None]
+    bdotgradlam = field.B_sup_t / field.Bmag * rotating.dlamdt[:, None, None]
+    return w - bdotgradlam * vth / 2 * xi
 
 
 class DKETheta(AbstractDKEOperator):
@@ -1185,6 +1205,8 @@ class DKEPitch(AbstractDKEOperator):
         not fully.
     p2 : int
         Order of approximation for second derivatives.
+    rotating : RotatingEquilibrium, optional
+        Lowest order state of a toroidally rotating plasma.
     """
 
     field: Field
@@ -1212,6 +1234,7 @@ class DKEPitch(AbstractDKEOperator):
         p1: str = "4d",
         p2: int = 4,
         gauge: Bool[ArrayLike, ""] = False,
+        rotating: RotatingEquilibrium | None = None,
     ):
         assert pitchgrid.nalpha > fd_coeffs[1][p1].size // 2
         assert pitchgrid.nalpha > fd_coeffs[2][p2].size // 2
@@ -1229,7 +1252,12 @@ class DKEPitch(AbstractDKEOperator):
         self._bd = jax.jacfwd(fdbwd)(f1, p1, h=h, bc="symmetric")
         vth = jnp.array([s.v_thermal for s in species])
         w = sfincs_w_pitch(
-            field, pitchgrid, self.Erho, speedgrid.x[None, :] * vth[:, None]
+            field,
+            pitchgrid,
+            self.Erho,
+            speedgrid.x[None, :] * vth[:, None],
+            vth,
+            rotating,
         )
         self._w = w
         # upwind sign mask, stored in the convolved-axis-last layout used in mv
@@ -1382,6 +1410,8 @@ class DKESpeed(AbstractDKEOperator):
         Species being considered
     Erho : float
         Radial electric field, Erho = -∂Φ /∂ρ, in Volts
+    rotating : RotatingEquilibrium, optional
+        Lowest order state of a toroidally rotating plasma.
     """
 
     field: Field
@@ -1401,6 +1431,7 @@ class DKESpeed(AbstractDKEOperator):
         species: list[LocalMaxwellian],
         Erho: Float[ArrayLike, ""],
         gauge: Bool[ArrayLike, ""] = False,
+        rotating: RotatingEquilibrium | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -1414,6 +1445,8 @@ class DKESpeed(AbstractDKEOperator):
             pitchgrid,
             self.Erho,
             speedgrid.x[None, :] * jnp.ones(len(species))[:, None],
+            jnp.array([s.v_thermal for s in species]),
+            rotating,
         )
         self._w = w
         idxx = speedgrid.gauge_idx
@@ -1574,6 +1607,10 @@ class DKE(AbstractDKEOperator):
         Order of approximation for first derivatives.
     p2 : int
         Order of approximation for second derivatives.
+    rotation : Rotation, optional
+        Toroidal rotation of the plasma. Requires an axisymmetric field with ``R`` and
+        ``dRdrho``. The densities and density gradients of the species are then those
+        at theta=0, and velocities are those in the rotating frame.
 
     """
 
@@ -1588,6 +1625,7 @@ class DKE(AbstractDKEOperator):
     p2: int = eqx.field(static=True)
     gauge: Bool[Array, ""]
     operator_weights: jax.Array
+    rotating: RotatingEquilibrium | None
     _opx: DKESpeed
     _opa: DKEPitch
     _opt: DKETheta
@@ -1608,6 +1646,7 @@ class DKE(AbstractDKEOperator):
         gauge: Bool[ArrayLike, ""] = False,
         operator_weights: jax.Array | None = None,
         coulomb_log=None,
+        rotation: Rotation | None = None,
     ):
         self.field = field
         self.pitchgrid = pitchgrid
@@ -1619,6 +1658,10 @@ class DKE(AbstractDKEOperator):
         if background is None:
             background = []
         self.background = background
+        rotating = None
+        if rotation is not None:
+            rotating = RotatingEquilibrium(field, species, rotation, background)
+        self.rotating = rotating
         self.Erho = jnp.array(Erho)
         self.p1 = p1
         self.p2 = p2
@@ -1630,8 +1673,12 @@ class DKE(AbstractDKEOperator):
             )
         self.operator_weights = jnp.asarray(operator_weights)
 
-        self._opx = DKESpeed(field, pitchgrid, speedgrid, species, Erho, gauge)
-        self._opa = DKEPitch(field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge)
+        self._opx = DKESpeed(
+            field, pitchgrid, speedgrid, species, Erho, gauge, rotating
+        )
+        self._opa = DKEPitch(
+            field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge, rotating
+        )
         self._opt = DKETheta(field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge)
         self._opz = DKEZeta(field, pitchgrid, speedgrid, species, Erho, p1, p2, gauge)
         self._C = FokkerPlanckLandau(
@@ -1645,6 +1692,7 @@ class DKE(AbstractDKEOperator):
             gauge,
             operator_weights=self.operator_weights[4:7],
             coulomb_log=coulomb_log,
+            rotating=rotating,
         )
 
     def _shard(self, mesh):

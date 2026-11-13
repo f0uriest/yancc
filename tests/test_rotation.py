@@ -20,6 +20,7 @@ from yancc._collisions import (
     PitchAngleScattering,
 )
 from yancc._linalg import banded_to_dense
+from yancc._trajectories import DKE
 from yancc.rotation import RotatingEquilibrium, Rotation
 from yancc.species import Deuterium, Electron, LocalMaxwellian, Species
 from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
@@ -485,3 +486,101 @@ def test_rotating_collisions_exchange(collisions):
     Ax = np.asarray(C.as_matrix())
     energy = Mo[1::2] @ Ax @ U[:, 1::2]
     assert np.all(np.abs(energy) > 1e-6 * (np.abs(Mo[1::2]) @ np.abs(Ax @ U[:, 1::2])))
+
+
+def test_rotation_zero(collisions):
+    """Without rotation the operator is that of a plasma at rest."""
+    field = miller_field(9)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(11), MaxwellSpeedGrid(4)
+    species = rotating_species()
+    for sp, background in [(species, []), (species[::2], species[1:2])]:
+        args = (field, pitchgrid, speedgrid, sp, 0.0, background)
+        A0 = DKE(*args, p1="4z", coulomb_log=16.0)
+        Ar = DKE(*args, p1="4z", coulomb_log=16.0, rotation=Rotation(0.0, 0.0))
+        assert A0.rotating is None
+        f = jnp.cos(jnp.arange(1.0, A0.in_size() + 1))
+        out0 = A0.mv(f)
+        np.testing.assert_allclose(
+            Ar.mv(f), out0, rtol=1e-12, atol=1e-12 * float(jnp.abs(out0).max())
+        )
+
+
+def test_rotating_dke_diagonals(collisions):
+    """Diagonals of the DKE with the forces of the rotating frame."""
+    field, pitchgrid, speedgrid, species, _ = collisions
+    A = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        1e3,
+        p1="2d",
+        operator_weights=jnp.linspace(1, 5, 8),
+        coulomb_log=16.0,
+        rotation=Rotation(mach_omega(1.0)),
+    )
+    sizes = _sizes(field, pitchgrid, speedgrid, species)
+    # the forces change the advection in speed and pitch
+    A0 = DKE(field, pitchgrid, speedgrid, species, 1e3, p1="2d")
+    for op, op0 in [(A._opx, A0._opx), (A._opa, A0._opa)]:
+        _check_diagonals(op, sizes)
+        change = np.abs(op.as_matrix() - op0.as_matrix()).max()
+        assert change > 0.1 * np.abs(op.as_matrix()).max()
+    # the surface averaged exchange of the collision operator is not in the blocks
+    Am = np.asarray(A.as_matrix())
+    scale = np.abs(Am).max()
+    np.testing.assert_allclose(np.diag(Am), A.diagonal(), atol=1e-4 * scale)
+    for axorder in ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"]:
+        B = extract_blocks(to_axorder(Am, sizes, axorder), sizes[axorder[-1]])
+        np.testing.assert_allclose(
+            B, A.block_diagonal(axorder=axorder), atol=1e-2 * scale, err_msg=axorder
+        )
+
+
+def _collisionless(ntheta):
+    """Collisionless DKE of a rotating plasma, with its Maxwellians and invariants.
+
+    Returns the operator, the Maxwellians F of the local density, the energy over the
+    temperature, I v||/B + ω R² and the square of the angular momentum over m², all
+    (ns, nx, na, nt, nz), and the size v_th F/(q R) of the streaming term, (ns,).
+    """
+    field = miller_field(ntheta)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(33), MaxwellSpeedGrid(5)
+    species = rotating_species()
+    A = DKE(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        0.0,
+        p1="4z",
+        operator_weights=jnp.array([1.0, 1, 1, 1, 0, 0, 0, 0]),
+        rotation=Rotation(mach_omega(0.7)),
+    )
+    eq = A.rotating
+    assert eq is not None and field.R is not None
+    vth = jnp.array([sp.v_thermal for sp in species])[:, None, None, None, None]
+    v = speedgrid.x[:, None, None, None] * vth
+    xi = pitchgrid.xi[:, None, None]
+    F = jnp.array([sp(speedgrid.x * sp.v_thermal) for sp in species])
+    F = F[:, :, None, None, None] * eq.density[:, None, None] * jnp.ones_like(xi)
+    energy = speedgrid.x[:, None, None, None] ** 2 + eq.lam[:, None, None]
+    B, I, R = field.Bmag, field.B_sub_z, field.R
+    g1 = I * v * xi / B + eq.omega * R**2
+    g2 = g1**2 + v**2 * (1 - xi**2) * (R**2 * B**2 - I**2) / (2 * B**2)
+    scale = jnp.array([sp.v_thermal * sp(0.0) / (2 * 3.0) for sp in species])
+    return A, F, energy, g1, g2, scale[:, None, None, None, None]
+
+
+def test_rotating_maxwellian_is_stationary():
+    """Maxwellians in the energy of the rotating frame are collisionless solutions."""
+    errors = []
+    for ntheta in (17, 33):
+        A, F, energy, _, _, scale = _collisionless(ntheta)
+        LF = A.mv(F.flatten()).reshape(F.shape)
+        LEF = A.mv((energy * F).flatten()).reshape(F.shape)
+        errors.append([float(jnp.abs(g / scale).max()) for g in (LF, LEF)])
+    errors = np.array(errors)
+    assert np.all(errors[1] < 2e-3)
+    # converging with the poloidal resolution
+    assert np.all(errors[1] < errors[0] / 4)
