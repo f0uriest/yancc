@@ -20,6 +20,12 @@ from yancc._collisions import (
     PitchAngleScattering,
 )
 from yancc._linalg import banded_to_dense
+from yancc._misc import (
+    _dke_thermodynamic_forces,
+    angular_momentum_drift,
+    dke_rhs,
+    radial_drift,
+)
 from yancc._trajectories import DKE
 from yancc.rotation import RotatingEquilibrium, Rotation
 from yancc.species import Deuterium, Electron, LocalMaxwellian, Species
@@ -584,3 +590,91 @@ def test_rotating_maxwellian_is_stationary():
     assert np.all(errors[1] < 2e-3)
     # converging with the poloidal resolution
     assert np.all(errors[1] < errors[0] / 4)
+
+
+def test_rotating_drifts():
+    """Drifts against the collisionless operator.
+
+    They are the rates of change of the canonical angular momentum and of its square
+    along the collisionless trajectories (Sugama & Horton 1997, eq 11).
+    """
+    errors = []
+    for ntheta in (17, 33):
+        A, F, _, g1, g2, scale = _collisionless(ntheta)
+        field = A.field
+        args = (field, A.speedgrid, A.pitchgrid, A.species, A.rotating)
+        drift, momentum = radial_drift(*args), angular_momentum_drift(*args)
+        m = jnp.array([sp.species.mass for sp in A.species])[:, None, None, None, None]
+        q = jnp.array([sp.species.charge for sp in A.species])[
+            :, None, None, None, None
+        ]
+        dpsidrho = field.sqrtg[0, 0] * field.B_sup_t[0, 0]
+        dg1 = A.mv((F * g1).flatten()).reshape(F.shape) * m / q / dpsidrho
+        dg2 = A.mv((F * g2).flatten()).reshape(F.shape) * m**2 / q / (2 * dpsidrho)
+        # in units of a typical value of each drift
+        errors.append(
+            [
+                float(
+                    jnp.abs(
+                        (dg - F * d)
+                        / jnp.abs(d).max(axis=(1, 2, 3, 4), keepdims=True)
+                        / scale
+                    ).max()
+                )
+                for dg, d in ((dg1, drift), (dg2, momentum))
+            ]
+        )
+    errors = np.array(errors)
+    assert np.all(errors[1] < 2e-3)
+    assert np.all(errors[1] < errors[0] / 4)
+
+
+def test_rotating_drive():
+    """Drive of the DKE in a rotating plasma."""
+    field = miller_field(13)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(17), MaxwellSpeedGrid(4)
+    species = rotating_species()
+    args = (field, pitchgrid, speedgrid)
+    omega = mach_omega(0.6)
+    eq = RotatingEquilibrium(field, species, Rotation(omega, -2 * omega))
+    ns = len(species)
+
+    # the combined drive is the sum of the unit drives times the forces
+    unit = dke_rhs(*args, species, 10.0, single_rhs=False, rotating=eq)
+    size = ns * speedgrid.nx * pitchgrid.nalpha * field.ntheta
+    assert unit.shape == (3 * ns + 1, size)
+    combined = dke_rhs(*args, species, 10.0, 0.02, rotating=eq)
+    # ordered by species and then by force, followed by the rotation shear
+    forces = _dke_thermodynamic_forces(species, field, 10.0, 0.02, eq)
+    coeffs = jnp.append(forces.T.flatten(), eq.domega_drho)
+    np.testing.assert_allclose(
+        coeffs @ unit, combined, rtol=1e-12, atol=1e-12 * np.abs(combined).max()
+    )
+    assert np.abs(unit[-1]).max() > 0
+
+    # without rotation it is the drive of a plasma at rest
+    rest = RotatingEquilibrium(field, species, Rotation(0.0, 0.0))
+    np.testing.assert_allclose(
+        dke_rhs(*args, species, 10.0, 0.02, rotating=rest),
+        dke_rhs(*args, species, 10.0, 0.02),
+        rtol=1e-13,
+    )
+
+    # rigid rotation with densities and temperatures that are constant along the
+    # field lines and have no gradient across them: no drive
+    eq = RotatingEquilibrium(field, species, Rotation(omega))
+    flat = [
+        LocalMaxwellian(sp.species, sp.temperature, sp.density, 0.0, -sp.density * dlnN)
+        for sp, dlnN in zip(species, eq.dlnNdrho)
+    ]
+    rhs = dke_rhs(*args, flat, 0.0, rotating=eq)
+    rhs0 = dke_rhs(*args, species, 0.0, rotating=eq)
+    assert float(jnp.abs(rhs).max()) <= 1e-12 * float(jnp.abs(rhs0).max())
+    # the density at the outboard midplane rises with the major radius there
+    assert np.all(eq.dlnNdrho < 0)
+
+
+def test_angular_momentum_requires_major_radius(field, pitchgrid, speedgrid, species2):
+    """The angular momentum needs the major radius of an axisymmetric field."""
+    with pytest.raises(ValueError, match="axisymmetric"):
+        angular_momentum_drift(field, speedgrid, pitchgrid, species2)
