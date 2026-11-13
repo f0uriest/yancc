@@ -14,8 +14,17 @@ import pytest
 from scipy.constants import elementary_charge, proton_mass
 
 import yancc
+from yancc._collisions import (
+    EnergyScattering,
+    FokkerPlanckLandau,
+    PitchAngleScattering,
+)
+from yancc._linalg import banded_to_dense
 from yancc.rotation import RotatingEquilibrium, Rotation
 from yancc.species import Deuterium, Electron, LocalMaxwellian, Species
+from yancc.velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+
+from .test_trajectories import extract_blocks, to_axorder
 
 Carbon = Species(12, 6)
 Tungsten = Species(184, 40)
@@ -309,3 +318,170 @@ def test_rotating_equilibrium_neo(reference, case, neutral):
         assert 1e-5 < defect < 1e-3
         assert dPhi < 5 * defect
         assert dn < 15 * defect
+
+
+@pytest.fixture(scope="module")
+def collisions():
+    """Small grids and the equilibrium of a strongly rotating plasma."""
+    field = miller_field(5)
+    pitchgrid, speedgrid = UniformPitchAngleGrid(7), MaxwellSpeedGrid(3)
+    species = rotating_species()
+    rotating = RotatingEquilibrium(field, species, Rotation(mach_omega(1.0)))
+    return field, pitchgrid, speedgrid, species, rotating
+
+
+def _sizes(field, pitchgrid, speedgrid, species):
+    return {
+        "s": len(species),
+        "x": speedgrid.nx,
+        "a": pitchgrid.nalpha,
+        "t": field.ntheta,
+        "z": field.nzeta,
+    }
+
+
+def _check_diagonals(op, sizes, atol_diag=1e-12, atol=1e-12):
+    """Diagonal, block diagonals and row sums of op against its matrix."""
+    A = np.asarray(op.as_matrix())
+    scale = np.abs(A).max()
+    np.testing.assert_allclose(np.diag(A), op.diagonal(), atol=atol_diag * scale)
+    for axorder in ["sxatz", "sxazt", "sxtza", "satzx", "xatzs"]:
+        n = sizes[axorder[-1]]
+        B = extract_blocks(to_axorder(A, sizes, axorder), n)
+        np.testing.assert_allclose(
+            B, op.block_diagonal(axorder=axorder), atol=atol * scale, err_msg=axorder
+        )
+        bw = n // 2
+        D = banded_to_dense(bw, bw, op.block_diagonal("banded", bw, axorder))
+        np.testing.assert_allclose(B, D, atol=atol * scale, err_msg=axorder)
+    np.testing.assert_allclose(
+        op.abs_row_sum(), np.abs(A).sum(axis=1), rtol=1e-9, atol=1e-12 * scale
+    )
+
+
+@pytest.mark.parametrize("energy_exchange", [True, False])
+def test_rotating_collision_diagonals(collisions, energy_exchange):
+    """Diagonals of the collision operators with densities that vary on the surface."""
+    field, pitchgrid, speedgrid, species, rotating = collisions
+    C = FokkerPlanckLandau(
+        field,
+        pitchgrid,
+        speedgrid,
+        species,
+        operator_weights=jnp.array([1.0, 2.0, 3.0]),
+        energy_exchange=energy_exchange,
+        coulomb_log=16.0,
+        rotating=rotating,
+    )
+    sizes = _sizes(field, pitchgrid, speedgrid, species)
+    for op in [C.CL, C.CE, C.CF]:
+        _check_diagonals(op, sizes)
+    if energy_exchange:
+        _check_diagonals(C, sizes)
+    else:
+        # The diagonal and blocks are those of the local terms, while the matrix also
+        # holds the surface averaged exchange, which couples every point of the
+        # surface. The row sums include it.
+        _check_diagonals(C, sizes, atol_diag=1e-4, atol=1e-2)
+
+
+def test_rotating_collisions_local_density(collisions):
+    """At each point the operator is that of a plasma with the densities there."""
+    field, pitchgrid, speedgrid, species, rotating = collisions
+    args = (field, pitchgrid, speedgrid)
+    kwargs = {"energy_exchange": True, "coulomb_log": 16.0}
+    C = FokkerPlanckLandau(*args, species, rotating=rotating, **kwargs)
+    n = np.prod(C.as_matrix().shape[:1]) // field.ntheta
+    A = np.asarray(C.as_matrix()).reshape(n, field.ntheta, n, field.ntheta)
+    for t in (1, 3):
+        local = [
+            LocalMaxwellian(
+                sp.species, sp.temperature, sp.density * rotating.density[i, t, 0], 0, 0
+            )
+            for i, sp in enumerate(species)
+        ]
+        At = np.asarray(FokkerPlanckLandau(*args, local, **kwargs).as_matrix())
+        At = At.reshape(n, field.ntheta, n, field.ntheta)
+        # denser on the outboard side, and no coupling between the points
+        assert rotating.density[1, t, 0] < 0.9
+        np.testing.assert_allclose(
+            A[:, t, :, t], At[:, t, :, t], rtol=1e-10, atol=1e-12 * np.abs(At).max()
+        )
+        assert np.all(A[:, t, :, t - 1] == 0)
+
+
+def test_rotating_collisions_background(collisions):
+    """Background species take part in the equilibrium and scatter by their density."""
+    field, pitchgrid, speedgrid, species, rotating = collisions
+    args = (field, pitchgrid, speedgrid)
+    kinetic, background = [species[0], species[2]], [species[1]]
+    eq = RotatingEquilibrium(field, kinetic, Rotation(rotating.omega), background)
+    np.testing.assert_allclose(eq.density, rotating.density[::2], rtol=1e-12)
+    np.testing.assert_allclose(eq.background_density, rotating.density[1:2], rtol=1e-12)
+    n = speedgrid.nx * pitchgrid.nalpha * field.ntheta
+    for op in [PitchAngleScattering, EnergyScattering]:
+        # these do not couple the species
+        A = np.asarray(op(*args, species, rotating=rotating).as_matrix())
+        Ab = np.asarray(op(*args, kinetic, background, rotating=eq).as_matrix())
+        A = A.reshape(3, n, 3, n)[::2, :, ::2].reshape(Ab.shape)
+        np.testing.assert_allclose(Ab, A, rtol=1e-10, atol=1e-12 * np.abs(A).max())
+
+
+def test_rotating_collisions_exchange(collisions):
+    """Surface averaged density and energy of each species are conserved, and the
+    Maxwellians of the rotating plasma are null.
+
+    As test_collision_species_energy_projection, with the energy x² + λ and the
+    densities that vary on the surface.
+    """
+    field, pitchgrid, speedgrid, species, rotating = collisions
+    args = (field, pitchgrid, speedgrid, species)
+    ns, nx, na = len(species), speedgrid.nx, pitchgrid.nalpha
+    nt, nz = field.ntheta, field.nzeta
+    x = np.asarray(speedgrid.x)
+    F = np.array([np.asarray(sp(speedgrid.x * sp.v_thermal)) for sp in species])
+    wv = (x**2 * np.asarray(speedgrid.wx))[:, None] * np.asarray(pitchgrid.wxi)[None]
+    wr = np.asarray(field.sqrtg * field.wtheta[:, None] * field.wzeta[None, :])
+    wr = wr / wr.sum()
+    density, lam = np.asarray(rotating.density), np.asarray(rotating.lam)
+
+    # perturbations of the density and the temperature of each species, and the
+    # surface averaged density and energy moments of each species
+    U, Mo = [], []
+    for s in range(ns):
+        for p in (np.ones((nx, nt, nz)), x[:, None, None] ** 2 + lam[s]):
+            u = np.zeros((ns, nx, na, nt, nz))
+            u[s] = (p * F[s][:, None, None] * density[s])[:, None]
+            U.append(u.flatten())
+            m = np.zeros((ns, nx, na, nt, nz))
+            m[s] = wv[:, :, None, None] * p[:, None] * wr
+            Mo.append(m.flatten())
+    U, Mo = np.array(U).T, np.array(Mo)
+
+    C = FokkerPlanckLandau(*args, coulomb_log=16.0, rotating=rotating)
+    A = np.asarray(C.as_matrix())
+    right = A @ U
+    left = Mo @ (A - np.asarray(C.CL.as_matrix()))
+    np.testing.assert_allclose(right, 0, atol=1e-12 * (np.abs(A) @ np.abs(U)).max())
+    np.testing.assert_allclose(left, 0, atol=1e-12 * (np.abs(Mo) @ np.abs(A)).max())
+
+    # The functions that carry the correction of the energy hold no particles at any
+    # point, so that it moves no particles, and with them no angular momentum, along
+    # the surface.
+    assert C._exchange_factors is not None
+    carriers = np.asarray(C._exchange_factors[0][ns : 2 * ns])
+    wx = x**2 * np.asarray(speedgrid.wx)
+    np.testing.assert_allclose(
+        np.einsum("x,ksxtz->kstz", wx, carriers),
+        0,
+        atol=1e-12 * np.einsum("x,ksxtz->kstz", wx, np.abs(carriers)).max(),
+    )
+
+    # with the exchange a temperature perturbation moves energy between the species
+    C = FokkerPlanckLandau(
+        *args, energy_exchange=True, coulomb_log=16.0, rotating=rotating
+    )
+    assert C._exchange_factors is None
+    Ax = np.asarray(C.as_matrix())
+    energy = Mo[1::2] @ Ax @ U[:, 1::2]
+    assert np.all(np.abs(energy) > 1e-6 * (np.abs(Mo[1::2]) @ np.abs(Ax @ U[:, 1::2])))

@@ -140,6 +140,11 @@ class RotatingEquilibrium(eqx.Module):
             + self.omega**2 * R0 * field.dRdrho[0, 0]
         )
 
+    @property
+    def field_density(self) -> Float[Array, "nsb nt nz"]:
+        """Normalized density of the species and then of the background species."""
+        return jnp.concatenate([self.density, self.background_density])
+
 
 def _quasineutral_potential(Z, n, T, centrifugal):
     """Potential at which the charge density equals that at the reference point.
