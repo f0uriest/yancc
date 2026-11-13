@@ -72,6 +72,12 @@ class Field(eqx.Module):
         Contravariant radial metric element g^rr = grad(rho)·grad(rho), in units of
         1/m^2. Only needed for outputs that depend on the real space geometry of
         the surface, such as classical transport.
+    R : jax.Array, shape(ntheta, nzeta), optional
+        Major radius of the points on the surface, in m. Only needed for a rotating
+        plasma and for the flux of toroidal angular momentum.
+    dRdrho : jax.Array, shape(ntheta, nzeta), optional
+        Derivative of R with respect to rho at fixed theta, zeta. Only needed for a
+        rotating plasma.
     """
 
     rho: Float[Array, ""]
@@ -90,6 +96,8 @@ class Field(eqx.Module):
     dBdt: Float[Array, "ntheta nzeta"]
     dBdz: Float[Array, "ntheta nzeta"]
     g_sup_rr: Float[Array, "ntheta nzeta"] | None
+    R: Float[Array, "ntheta nzeta"] | None
+    dRdrho: Float[Array, "ntheta nzeta"] | None
     Bmag_fsa: Float[Array, ""]
     B2mag_fsa: Float[Array, ""]
     psi_r: Float[Array, ""]
@@ -125,6 +133,8 @@ class Field(eqx.Module):
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
         g_sup_rr: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        R: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        dRdrho: Float[ArrayLike, "ntheta nzeta"] | None = None,
         source: _FieldSource = _FieldSource.manual,
     ):
         self.source = source
@@ -145,6 +155,8 @@ class Field(eqx.Module):
         self.dBdt = jnp.asarray(dBdt)
         self.dBdz = jnp.asarray(dBdz)
         self.g_sup_rr = None if g_sup_rr is None else jnp.asarray(g_sup_rr)
+        self.R = None if R is None else jnp.asarray(R)
+        self.dRdrho = None if dRdrho is None else jnp.asarray(dRdrho)
         if B0 is None:
             B0 = self.Bmag.mean()
         self.B0 = jnp.asarray(B0)
@@ -237,6 +249,8 @@ class Field(eqx.Module):
             "|B|_z",
             "sqrt(g)",
             "|grad(rho)|",
+            "R",
+            "R_r",
             "iota",
         ]
         desc_data = eq.compute(keys, grid=grid, data=seed, override_grid=False)
@@ -251,6 +265,8 @@ class Field(eqx.Module):
             "dBdz": desc_data["|B|_z"],
             "sqrtg": desc_data["sqrt(g)"],
             "g_sup_rr": desc_data["|grad(rho)|"] ** 2,
+            "R": desc_data["R"],
+            "dRdrho": desc_data["R_r"],
         }
 
         data = {
@@ -326,6 +342,10 @@ class Field(eqx.Module):
         bsubu_mnc = interpax.interp1d(s, s_half, bsubu_mnc[1:, :], extrap=True)
         bsubv_mnc = interpax.interp1d(s, s_half, bsubv_mnc[1:, :], extrap=True)
         iota = interpax.interp1d(s, s_full, iota, extrap=True)
+        # dR/drho = 2 rho dR/ds
+        r_mnc_r = (
+            2 * rho * interpax.interp1d(s, s_full, r_mnc, derivative=1, extrap=True)
+        )
         r_mnc = interpax.interp1d(s, s_full, r_mnc, extrap=True)
         z_mns = interpax.interp1d(s, s_full, z_mns, extrap=True)
 
@@ -368,6 +388,8 @@ class Field(eqx.Module):
         data = {}
         data["sqrtg"] = sqrtg * 2 * rho
         data["g_sup_rr"] = e_t_x_e_z_sq / data["sqrtg"] ** 2
+        data["R"] = R
+        data["dRdrho"] = _vmec_eval(t, z, r_mnc_r, 0, xm_geo, xn_geo)
         data["Bmag"] = Bmag
         data["dBdt"] = dBdt
         data["dBdz"] = dBdz
@@ -447,6 +469,12 @@ class Field(eqx.Module):
 
         # jlist = 2 + indices of half grid where boozer transform was computed
         b_mnc = interpax.interp1d(s, s_half[jlist - 2], b_mnc, extrap=True)
+        # dR/drho = 2 rho dR/ds
+        r_mnc_r = (
+            2
+            * rho
+            * interpax.interp1d(s, s_half[jlist - 2], r_mnc, derivative=1, extrap=True)
+        )
         r_mnc = interpax.interp1d(s, s_half[jlist - 2], r_mnc, extrap=True)
         z_mns = interpax.interp1d(s, s_half[jlist - 2], z_mns, extrap=True)
         p_mns = interpax.interp1d(s, s_half[jlist - 2], p_mns, extrap=True)
@@ -499,6 +527,8 @@ class Field(eqx.Module):
             dBdz=dBdz,
             B0=B0,
             g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
+            R=R,
+            dRdrho=_vmec_eval(t, z, r_mnc_r, 0, xm, -xn),
             source=_FieldSource.booz_xform,
         )
 
@@ -539,6 +569,13 @@ class Field(eqx.Module):
         I = interpax.interp1d(s, s_grid, data["I"], extrap=True)
         G = interpax.interp1d(s, s_grid, data["G"], extrap=True)
         iota = interpax.interp1d(s, s_grid, data["iota"], extrap=True)
+        # dR/drho = 2 rho dR/ds
+        r_mnc_r = (
+            2
+            * rho
+            * interpax.interp1d(s, s_grid, data["Rmn"], derivative=1, extrap=True)
+        )
+        r_mnc_r = r_mnc_r.flatten()
         r_mnc = interpax.interp1d(s, s_grid, data["Rmn"], extrap=True).flatten()
         z_mns = interpax.interp1d(s, s_grid, data["Zmn"], extrap=True).flatten()
         nu_mns = interpax.interp1d(s, s_grid, data["numn"], extrap=True).flatten()
@@ -591,6 +628,8 @@ class Field(eqx.Module):
             dBdz=dBdz,
             B0=B0,
             g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
+            R=R,
+            dRdrho=_vmec_eval(t, z, r_mnc_r, 0, xm, -xn),
             source=_FieldSource.ipp_bc,
         )
 
@@ -611,6 +650,8 @@ class Field(eqx.Module):
         dBdz: Float[ArrayLike, "ntheta nzeta"] | None = None,
         B0: Float[ArrayLike, ""] | None = None,
         g_sup_rr: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        R: Float[ArrayLike, "ntheta nzeta"] | None = None,
+        dRdrho: Float[ArrayLike, "ntheta nzeta"] | None = None,
         source: _FieldSource = _FieldSource.boozer,
     ) -> "Field":
         """Construct a field in Boozer coordinates.
@@ -641,6 +682,10 @@ class Field(eqx.Module):
         g_sup_rr : jax.Array, shape(ntheta, nzeta), optional
             Contravariant radial metric element g^rr = grad(rho)·grad(rho), in units of
             1/m^2.
+        R : jax.Array, shape(ntheta, nzeta), optional
+            Major radius of the points on the surface, in m.
+        dRdrho : jax.Array, shape(ntheta, nzeta), optional
+            Derivative of R with respect to rho at fixed Boozer angles.
         """
         data = {}
         data["sqrtg"] = _boozer_sqrtg(rho, Bmag, I, G, iota, Psi)
@@ -658,6 +703,8 @@ class Field(eqx.Module):
         data["R_major"] = R_major
         data["a_minor"] = a_minor
         data["g_sup_rr"] = g_sup_rr
+        data["R"] = R
+        data["dRdrho"] = dRdrho
         return cls(rho=rho, **data, NFP=NFP, source=source)
 
     @functools.partial(jnp.vectorize, signature="(m,n)->()", excluded=[0])
@@ -699,6 +746,10 @@ class Field(eqx.Module):
         out = {}
         if self.g_sup_rr is not None:
             keys.append("g_sup_rr")
+        if self.R is not None:
+            keys.append("R")
+        if self.dRdrho is not None:
+            keys.append("dRdrho")
         for key in keys:
             out[key] = interpax.fft_interp2d(getattr(self, key), ntheta, nzeta)
         return Field(
