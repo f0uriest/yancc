@@ -1453,12 +1453,7 @@ class DKESpeed(AbstractDKEOperator):
     @jax.named_scope("DKESpeed.diagonal")
     def diagonal(self) -> Float[Array, " nf"]:
         """Diagonal of the operator as a 1d array."""
-        w = sfincs_w_speed(
-            self.field,
-            self.pitchgrid,
-            self.Erho,
-            self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
-        )
+        w = self._w
         df = jnp.diag(self.speedgrid.Dx_pseudospectral)[None, :, None, None, None]
         df = w * df
         idxa = self.pitchgrid.nalpha // 2
@@ -1476,12 +1471,7 @@ class DKESpeed(AbstractDKEOperator):
     @jax.named_scope("DKESpeed.abs_row_sum")
     def abs_row_sum(self) -> Float[Array, " nf"]:
         """L1 norm of each row, sum_j |A_ij|, as a 1d array."""
-        w = sfincs_w_speed(
-            self.field,
-            self.pitchgrid,
-            self.Erho,
-            self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
-        )
+        w = self._w
         df = jnp.abs(self.speedgrid.Dx_pseudospectral).sum(axis=1)[
             None, :, None, None, None
         ]
@@ -1537,12 +1527,7 @@ class DKESpeed(AbstractDKEOperator):
             len(self.species),
             axorder,
         )
-        w = sfincs_w_speed(
-            self.field,
-            self.pitchgrid,
-            self.Erho,
-            self.speedgrid.x[None, :] * jnp.ones(len(self.species))[:, None],
-        )
+        w = self._w
         df = self.speedgrid.Dx_pseudospectral[None, :, None, None, None, :]
         w1 = w[:, :, :, :, :, None]
         df = w1 * df
