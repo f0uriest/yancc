@@ -522,3 +522,30 @@ def test_cr_block_tridiag_solve():
             ..., 0
         ]
         np.testing.assert_allclose(x, ref, rtol=1e-8, atol=1e-10)
+
+
+def test_block_tridiag_solve():
+    """The block LU of a block tridiagonal matrix solves A x = b."""
+    m, blk = 6, 4
+    rng = np.random.default_rng(6)
+    D = rng.normal(size=(m, blk, blk)) + 4 * np.eye(blk)
+    L = rng.normal(size=(m, blk, blk))
+    U = rng.normal(size=(m, blk, blk))
+    # badly scaled rows, which the factorization equilibrates
+    scale = 10.0 ** rng.uniform(-4, 4, size=(m, blk, 1))
+    D, L, U = scale * D, scale * L, scale * U
+    A = np.zeros((m, blk, m, blk))
+    for k in range(m):
+        A[k, :, k] = D[k]
+        # L[0] and U[m-1] are outside the matrix and must be ignored
+        if k > 0:
+            A[k, :, k - 1] = L[k]
+        if k < m - 1:
+            A[k, :, k + 1] = U[k]
+    A = A.reshape(m * blk, m * blk)
+    b = rng.normal(size=(m, blk))
+
+    fac = yancc._linalg.block_tridiag_factor(*map(jnp.asarray, (D, L, U)))
+    x = yancc._linalg.block_tridiag_solve(fac, jnp.asarray(b))
+    ref = np.linalg.solve(A, b.reshape(-1)).reshape(m, blk)
+    np.testing.assert_allclose(x, ref, rtol=1e-10, atol=1e-12)
