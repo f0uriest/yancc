@@ -46,6 +46,37 @@ Surface resolution
 ``nzeta`` covers a single field period :math:`[0, 2\pi / \mathrm{NFP})`,
 not the full torus. The number of field periods is read from the file.
 
+Surface angles
+--------------
+
+The field is sampled at ``field.theta`` and ``field.zeta``, uniform grids
+starting at zero. The coordinates :math:`(\rho, \theta, \zeta)` are right
+handed. The constructors that read a file keep the toroidal angle of the file,
+and use its poloidal angle when the angles of the file are right handed. When
+they are left handed, the poloidal angle is reversed,
+:math:`\theta = -\theta_\mathrm{file}`. The orientation is found from the
+geometry of the surface, and the direction of the field is kept as given in
+the file.
+
+* ``from_desc``: the DESC poloidal and toroidal angles, which are right handed.
+* ``from_vmec``: the VMEC angles. These are usually left handed
+  (``signgs = -1``), so that :math:`\theta = -\theta_\mathrm{VMEC}`.
+* ``from_booz_xform`` and ``from_ipp_bc``: the Boozer angles of the file. Files
+  computed from VMEC equilibria are usually left handed, so that
+  :math:`\theta = -\theta_\mathrm{Boozer}`.
+* ``from_boozer``: the Boozer angles given, used as they are.
+
+Any other function on the surface that is passed to yancc has to be sampled
+at ``field.theta`` and ``field.zeta`` in these angles. In particular a
+function of the VMEC angles, for example output from another code that uses
+them such as SFINCS, must be reflected in :math:`\theta` to be used with a
+field from ``from_vmec`` of a usual (left handed) VMEC equilibrium. For
+values ``f_vmec`` of shape ``(ntheta, nzeta)`` on the same uniform grid this is
+
+.. code-block:: python
+
+    f_yancc = np.roll(np.flip(f_vmec, axis=0), 1, axis=0)
+
 Axisymmetric (tokamak) fields
 -----------------------------
 
