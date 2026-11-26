@@ -981,19 +981,20 @@ def test_solve_dke_tokamak_axisymmetric():
 
 
 _DSHAPE_MULTIGRID = {"multigrid_options": {"coarse_N": 2000, "max_grids": 3}}
-_DSHAPE_TOKAMAK = {"p1": "4z", "preconditioner": "tokamak"}
+_DSHAPE_AXISYMMETRIC = {"p1": "4z", "preconditioner": "axisymmetric"}
 
 
 # With the default stencil these indices are rho=0.8, 0.9, so collisionality isn't too
-# low. The centered stencil with the tokamak preconditioner is also tested at rho=0.5,
-# where the ion particle flux, the least accurate at this resolution, is 3% off.
+# low. The centered stencil with the axisymmetric preconditioner is also tested at
+# rho=0.5, where the ion particle flux, the least accurate at this resolution, is 3%
+# off.
 @pytest.mark.parametrize(
     "ir, options, rtol",
     [
         pytest.param(15, _DSHAPE_MULTIGRID, 2e-2, id="15"),
         pytest.param(17, _DSHAPE_MULTIGRID, 2e-2, id="17"),
-        pytest.param(9, _DSHAPE_TOKAMAK, 4e-2, id="9-tokamak"),
-        pytest.param(17, _DSHAPE_TOKAMAK, 2e-2, id="17-tokamak"),
+        pytest.param(9, _DSHAPE_AXISYMMETRIC, 4e-2, id="9-axisymmetric"),
+        pytest.param(17, _DSHAPE_AXISYMMETRIC, 2e-2, id="17-axisymmetric"),
     ],
 )
 def test_solve_dke_dshape_2species(ir, options, rtol):

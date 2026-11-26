@@ -5,11 +5,10 @@ Unreleased
 ----------
 ### New features
 - New preconditioner for axisymmetric fields, ``solve_dke(...,
-  preconditioner="tokamak")``: a direct solve on the first Legendre modes in pitch,
+  preconditioner="axisymmetric")``: a direct solve on the first Legendre modes in pitch,
   followed by direct solves on the pitch/theta plane of each species and speed. It
   takes a similar, small number of iterations at any collisionality and for any
-  stencil, including the centered ones (``p1="4z"``), which are much more accurate
-  than the default upwind stencil at low collisionality but converge slowly with the
+  stencil, including the centered ones (``p1="4z"``), which converge slowly with the
   multigrid preconditioner.
 
 v0.0.3

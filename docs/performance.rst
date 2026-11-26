@@ -74,11 +74,12 @@ your acceptable tolerance, then back off one step. Sweep one axis at a time:
 Axisymmetric fields
 -------------------
 
-In an axisymmetric field (``nzeta=1``) at low collisionality, the centered stencil for
-the first derivatives, ``p1="4z"``, converges much faster with resolution than the
-default upwind stencil ``p1="4d"``. For the two species DSHAPE tokamak case of the
-tests at :math:`\rho=0.5`, the largest differences from SFINCS in the particle
-fluxes, heat fluxes, flows and bootstrap current are:
+The upwind stencil for the first derivatives, ``p1="4d"``, is the default and the
+general recommendation. For the moments in an axisymmetric field (``nzeta=1``) the
+centered stencil ``p1="4z"`` is recommended instead: it reaches the same accuracy on a
+coarser grid, and the difference grows as the collisionality drops. For the two
+species DSHAPE tokamak case of the tests at :math:`\rho=0.5`, the largest differences
+from SFINCS in the particle fluxes, heat fluxes, flows and bootstrap current are:
 
 ==================================  ==========  ==========
 ``ntheta``, ``nalpha``, ``nx``      ``"4d"``    ``"4z"``
@@ -91,16 +92,29 @@ fluxes, heat fluxes, flows and bootstrap current are:
 The largest is that of the ion particle flux in each case. For the other quantities
 they are 27%, 17% and 2.2% with ``"4d"`` and 4.2%, 1.7% and 0.2% with ``"4z"``.
 
+The centered stencil has no numerical dissipation, which limits where it applies:
+
+- It needs an odd number of points in ``theta``, as the field loaders require (see
+  :doc:`loading_fields`). With an even number the operator has a checkerboard null
+  mode and is singular.
+- A feature of the distribution function that the grid does not resolve, such as the
+  boundary layer between trapped and passing particles, which gets thinner as the
+  collisionality drops, shows up as oscillations at the grid scale, where the upwind
+  stencil smears it out. The comparison above is of moments only. Check that the
+  quantities of interest are converged in ``nalpha`` and ``ntheta``, and prefer the
+  upwind stencil if the distribution function itself is needed.
+
 The multigrid preconditioner takes many iterations for the centered stencils (413
 applications of the operator for ``rtol=1e-6`` on the second of these grids, where the
-upwind stencil takes 60), so they are best used with ``preconditioner="tokamak"`` (see
-:doc:`tuning`), which takes 11 to 15 for either stencil on these grids:
+upwind stencil takes 60), so they are best used with
+``preconditioner="axisymmetric"`` (see :doc:`tuning`), which takes 11 to 15 for either
+stencil on these grids:
 
 .. code-block:: python
 
     sol, info = solve_dke(
         field, pitchgrid, speedgrid, species, Erho=Erho,
-        p1="4z", preconditioner="tokamak",
+        p1="4z", preconditioner="axisymmetric",
     )
 
 How cost scales
