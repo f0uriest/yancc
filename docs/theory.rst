@@ -221,7 +221,7 @@ speed over the major radius (sonic rotation) [6]_ [7]_. With
 
     sol, info = solve_dke(
         field, pitchgrid, speedgrid, species, Erho=Erho,
-        preconditioner="tokamak",
+        preconditioner="axisymmetric",
         rotation=yancc.Rotation(omega, domega_drho),
     )
 
@@ -338,8 +338,8 @@ fluxes that do not depend on the solution of the DKE, the outputs
 ambipolar [7]_.
 
 **Numerics.** Rotation is supported by the preconditioner for axisymmetric fields only
-(``preconditioner="tokamak"``, see :doc:`tuning`). The default stencil ``p1`` is then
-the centered ``"4z"``: the upwind stencils converge slowly with resolution in a
+(``preconditioner="axisymmetric"``, see :doc:`tuning`). The default stencil ``p1`` is
+then the centered ``"4z"``: the upwind stencils converge slowly with resolution in a
 collisional rotating plasma. The outputs for the perpendicular flows and the classical
 fluxes are not available with rotation.
 

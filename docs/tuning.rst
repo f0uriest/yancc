@@ -271,8 +271,8 @@ Preconditioner for axisymmetric fields
 ======================================
 
 For fields with ``nzeta=1``, :func:`~yancc.solve_dke` has a second preconditioner,
-selected with ``preconditioner="tokamak"``, which replaces the multigrid cycle by two
-direct solves:
+selected with ``preconditioner="axisymmetric"``, which replaces the multigrid cycle by
+two direct solves:
 
 1. A solve of the Galerkin projection of the DKE, with its sources and constraints,
    on the first few Legendre modes in pitch at every poloidal point, speed and
@@ -284,17 +284,17 @@ direct solves:
 
 Both are built from the operator being solved, with its own stencils, where the
 multigrid preconditioner uses low order upwind stencils. It is therefore as effective
-for the centered stencils (``p1="4z"``, ``"6z"``) as for the upwind ones. The centered
-stencils converge much faster with resolution at low collisionality (see
-:doc:`performance`), but take many more iterations with the multigrid preconditioner.
+for the centered stencils (``p1="4z"``, ``"6z"``) as for the upwind ones, while the
+multigrid preconditioner takes many more iterations for the centered stencils. See
+:doc:`performance` for when a centered stencil is worth considering in an axisymmetric
+field, and for its caveats.
 
 .. code-block:: python
 
     sol, info = solve_dke(
         field, pitchgrid, speedgrid, species, Erho=Erho,
-        p1="4z",
-        preconditioner="tokamak",
-        tokamak_options={"moments": 4},
+        preconditioner="axisymmetric",
+        axisymmetric_options={"moments": 4},
     )
 
 ``moments`` *(int, default 4)*
@@ -307,8 +307,9 @@ A toroidally rotating plasma (``rotation``, see :doc:`theory`) is supported by t
 preconditioner only, and ``p1`` then defaults to ``"4z"``.
 
 With this preconditioner ``multigrid_options`` and ``fluid_correction`` are not used,
-and ``mesh`` is not supported. ``M`` can still be used to pass a preconditioner from a
-previous solve, here a ``yancc._tokamak.TokamakPreconditioner``.
+and ``mesh`` is not supported. A preconditioner passed as ``M`` must have been built
+for this option. One built for the multigrid preconditioner is rejected, as is one
+built for this option when ``preconditioner="multigrid"``.
 
 Ambipolar root finding options
 ==============================
@@ -324,8 +325,9 @@ and can be passed as ``**options``, with the following differences:
 - ``k`` defaults to ``10 * num_roots``. The recycled subspace is carried across every
   solve of the search, so it pays to make it larger than for a single solve.
 - ``f1`` and ``U`` are not accepted, since the search manages the warm start between
-  solves itself. ``preconditioner`` and ``tokamak_options`` are not accepted either:
-  the fluxes in an axisymmetric field are ambipolar for any ``Erho``. ``M``, ``B`` and ``C`` are accepted as for
+  solves itself. ``preconditioner`` and ``axisymmetric_options`` are not accepted
+  either: the fluxes in an axisymmetric field are ambipolar for any ``Erho``. ``M``,
+  ``B`` and ``C`` are accepted as for
   :func:`~yancc.solve_dke`; note that a given ``M`` is used at every value of
   ``Erho``.
 

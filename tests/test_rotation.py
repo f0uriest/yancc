@@ -16,6 +16,7 @@ import pytest
 from scipy.constants import elementary_charge, proton_mass
 
 import yancc
+from yancc._axisymmetric import AxisymmetricPreconditioner
 from yancc._collisions import (
     EnergyScattering,
     FokkerPlanckLandau,
@@ -30,7 +31,6 @@ from yancc._misc import (
     dke_rhs,
     radial_drift,
 )
-from yancc._tokamak import TokamakPreconditioner
 from yancc._trajectories import DKE
 from yancc.rotation import RotatingEquilibrium, Rotation
 from yancc.solution import DKESolution, _energy_flux
@@ -968,7 +968,7 @@ def _solve(field, nalpha, nx, species, rotation, coulomb_log=16.0, rtol=1e-10):
         0.0,
         rtol=rtol,
         coulomb_log=coulomb_log,
-        preconditioner="tokamak",
+        preconditioner="axisymmetric",
         rotation=rotation,
     )
     assert info["success"]
@@ -1006,13 +1006,13 @@ def test_solve_dke_rotation_zero():
         p1="4z",
         rtol=1e-10,
         coulomb_log=16.0,
-        preconditioner="tokamak",
+        preconditioner="axisymmetric",
     )
     for key in ("<particle_flux>", "<heat_flux>", "<J||B>"):
         np.testing.assert_allclose(sol.get(key), sol0.get(key), rtol=1e-7, err_msg=key)
 
 
-def test_tokamak_preconditioner_rotation():
+def test_axisymmetric_preconditioner_rotation():
     """Coarse level of the preconditioner is the Galerkin inverse with rotation."""
     field = miller_field(9)
     pitchgrid, speedgrid = UniformPitchAngleGrid(11), MaxwellSpeedGrid(4)
@@ -1023,7 +1023,7 @@ def test_tokamak_preconditioner_rotation():
     C = DKEConstraint(*args, True)
     op = BorderedOperator(A, B, C)
     ns, moments = len(species), 4
-    fs = TokamakPreconditioner(op, moments).coarse.fluid
+    fs = AxisymmetricPreconditioner(op, moments).coarse.fluid
 
     # the exchange of energy between the species is removed by a term of low rank,
     # which the coarse solve has to project as well
@@ -1069,7 +1069,7 @@ def test_solve_dke_rotation_derivatives():
             0.0,
             rtol=1e-12,
             coulomb_log=16.0,
-            preconditioner="tokamak",
+            preconditioner="axisymmetric",
             rotation=Rotation(p[0], p[1]),
         )
         return jnp.concatenate([_fluxes(sol).flatten(), sol.get("<J||B>")[None]])

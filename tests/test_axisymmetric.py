@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 import yancc
+from yancc._axisymmetric import AxisymmetricPreconditioner, _PitchThetaSolver
 from yancc._linalg import BorderedOperator
 from yancc._misc import DKEConstraint, DKESources, dke_rhs
-from yancc._tokamak import TokamakPreconditioner, _PitchThetaSolver
 from yancc._trajectories import DKE
 from yancc.field import Field
-from yancc.solve import solve_dke, solve_dke_ambipolar
+from yancc.solve import _preconditioner_is_linear, solve_dke, solve_dke_ambipolar
 
 from .test_solve import _jvp_1_arg
 
@@ -62,14 +62,14 @@ def test_pitch_theta_solver(tokamak, pitchgrid, speedgrid, species2, p1):
 
 
 @pytest.mark.parametrize("p1", ["4d", "4z"])
-def test_tokamak_preconditioner(tokamak, pitchgrid, speedgrid, species2, p1):
+def test_axisymmetric_preconditioner(tokamak, pitchgrid, speedgrid, species2, p1):
     """Coarse level is the Galerkin inverse, transposes are consistent."""
     A = DKE(tokamak, pitchgrid, speedgrid, species2, 1e3, p1=p1, gauge=False)
     B = DKESources(tokamak, pitchgrid, speedgrid, species2)
     C = DKEConstraint(tokamak, pitchgrid, speedgrid, species2, True)
     op = BorderedOperator(A, B, C)
     ns, nx, moments = len(species2), speedgrid.nx, 4
-    M = TokamakPreconditioner(op, moments)
+    M = AxisymmetricPreconditioner(op, moments)
 
     # moments of the shapes are the identity
     fs = M.coarse.fluid
@@ -108,7 +108,9 @@ def test_tokamak_preconditioner(tokamak, pitchgrid, speedgrid, species2, p1):
     np.testing.assert_allclose(dot(M.mv(r), s), dot(r, M.T.mv(s)), rtol=1e-8)
 
 
-def test_tokamak_preconditioner_errors(field, tokamak, pitchgrid, speedgrid, species2):
+def test_axisymmetric_preconditioner_errors(
+    field, tokamak, pitchgrid, speedgrid, species2
+):
     """Fields with nzeta > 1 and bad options are rejected."""
 
     def operator(field):
@@ -118,9 +120,9 @@ def test_tokamak_preconditioner_errors(field, tokamak, pitchgrid, speedgrid, spe
         return BorderedOperator(A, B, C)
 
     with pytest.raises(ValueError, match="nzeta=1"):
-        TokamakPreconditioner(operator(field))
+        AxisymmetricPreconditioner(operator(field))
     with pytest.raises(ValueError, match="moments"):
-        TokamakPreconditioner(operator(tokamak), moments=2)
+        AxisymmetricPreconditioner(operator(tokamak), moments=2)
     with pytest.raises(ValueError, match="preconditioner"):
         solve_dke(
             tokamak,
@@ -131,7 +133,9 @@ def test_tokamak_preconditioner_errors(field, tokamak, pitchgrid, speedgrid, spe
             preconditioner="lu",  # pyright: ignore[reportArgumentType]
         )
     with pytest.raises(ValueError, match="nzeta=1"):
-        solve_dke(field, pitchgrid, speedgrid, species2, 1e3, preconditioner="tokamak")
+        solve_dke(
+            field, pitchgrid, speedgrid, species2, 1e3, preconditioner="axisymmetric"
+        )
     with pytest.raises(ValueError, match="moments"):
         solve_dke(
             tokamak,
@@ -139,18 +143,33 @@ def test_tokamak_preconditioner_errors(field, tokamak, pitchgrid, speedgrid, spe
             speedgrid,
             species2,
             1e3,
-            preconditioner="tokamak",
-            tokamak_options={"moments": 9},
+            preconditioner="axisymmetric",
+            axisymmetric_options={"moments": 9},
+        )
+    # a preconditioner of the wrong kind would be bordered wrongly
+    M = AxisymmetricPreconditioner(operator(tokamak))
+    assert _preconditioner_is_linear(M)
+    with pytest.raises(TypeError, match="axisymmetric"):
+        solve_dke(tokamak, pitchgrid, speedgrid, species2, 1e3, M=M)
+    with pytest.raises(TypeError, match="axisymmetric"):
+        solve_dke(
+            tokamak,
+            pitchgrid,
+            speedgrid,
+            species2,
+            1e3,
+            preconditioner="axisymmetric",
+            M=M.planes,
         )
     with pytest.raises(ValueError, match="preconditioner"):
         solve_dke_ambipolar(
-            tokamak, pitchgrid, speedgrid, species2, 1, preconditioner="tokamak"
+            tokamak, pitchgrid, speedgrid, species2, 1, preconditioner="axisymmetric"
         )
 
 
 @pytest.mark.parametrize("p1", ["4d", "4z"])
-def test_solve_dke_tokamak(tokamak, pitchgrid, speedgrid, species2, p1):
-    """Solution with the tokamak preconditioner matches a dense solve."""
+def test_solve_dke_axisymmetric(tokamak, pitchgrid, speedgrid, species2, p1):
+    """Solution with the axisymmetric preconditioner matches a dense solve."""
     if os.environ.get("CI"):
         jax.clear_caches()
     sol, info = solve_dke(
@@ -162,7 +181,7 @@ def test_solve_dke_tokamak(tokamak, pitchgrid, speedgrid, species2, p1):
         p1=p1,
         rtol=1e-10,
         verbose=2,
-        preconditioner="tokamak",
+        preconditioner="axisymmetric",
     )
     assert info["success"]
     assert info["nmv"] < 30
@@ -185,8 +204,8 @@ def test_solve_dke_tokamak(tokamak, pitchgrid, speedgrid, species2, p1):
         np.testing.assert_allclose(_fluxes(sol), _fluxes(sol_mg), rtol=1e-6)
 
 
-def test_solve_dke_tokamak_derivatives(tokamak, pitchgrid, speedgrid):
-    """Forward and reverse mode derivatives through the tokamak preconditioner."""
+def test_solve_dke_axisymmetric_derivatives(tokamak, pitchgrid, speedgrid):
+    """Forward and reverse mode derivatives through the axisymmetric preconditioner."""
     # these are super low res, just to test jax logic, not physical correctness
     if os.environ.get("CI"):
         jax.clear_caches()
@@ -202,7 +221,7 @@ def test_solve_dke_tokamak_derivatives(tokamak, pitchgrid, speedgrid):
             Er,
             p1="4z",
             rtol=1e-12,
-            preconditioner="tokamak",
+            preconditioner="axisymmetric",
         )
         return _fluxes(sol)
 

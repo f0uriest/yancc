@@ -124,7 +124,7 @@ class _PitchThetaSolver(eqx.Module):
         return x.reshape(f.shape)
 
 
-class TokamakPreconditioner(lx.AbstractLinearOperator):
+class AxisymmetricPreconditioner(lx.AbstractLinearOperator):
     """Two level preconditioner for the bordered DKE in an axisymmetric field.
 
     The coarse level is the Galerkin projection of the bordered operator on the first
@@ -154,7 +154,9 @@ class TokamakPreconditioner(lx.AbstractLinearOperator):
         A = operator.A
         assert isinstance(A, DKE)
         if A.field.nzeta != 1:
-            raise ValueError("TokamakPreconditioner requires a field with nzeta=1.")
+            raise ValueError(
+                "AxisymmetricPreconditioner requires a field with nzeta=1."
+            )
         nL = A._C.CF.Txi.shape[1]
         if not 3 <= moments <= nL:
             raise ValueError(f"moments must be between 3 and nL={nL}, got {moments}.")
@@ -211,10 +213,10 @@ class TokamakPreconditioner(lx.AbstractLinearOperator):
         return TransposedLinearOperator(self)
 
 
-@lx.is_symmetric.register(TokamakPreconditioner)
-@lx.is_diagonal.register(TokamakPreconditioner)
-@lx.is_tridiagonal.register(TokamakPreconditioner)
-@lx.is_positive_semidefinite.register(TokamakPreconditioner)
-@lx.is_negative_semidefinite.register(TokamakPreconditioner)
+@lx.is_symmetric.register(AxisymmetricPreconditioner)
+@lx.is_diagonal.register(AxisymmetricPreconditioner)
+@lx.is_tridiagonal.register(AxisymmetricPreconditioner)
+@lx.is_positive_semidefinite.register(AxisymmetricPreconditioner)
+@lx.is_negative_semidefinite.register(AxisymmetricPreconditioner)
 def _(operator):
     return False
