@@ -415,8 +415,10 @@ class Field(eqx.Module):
         # cross-section area A, as a = sqrt(A/pi), R = V/(2 pi A), matching the
         # definitions used by VMEC and DESC.
         # Using the RZ cross-section area defined as A = 1/(2 pi) int 1/R dV
-        vol = gvec.evaluate(state, "pos", "Jac", "V", "Phi_edge", rho="int", theta="int", zeta="int")
-        R = np.sqrt(vol.pos.sel(xyz="x")**2 + vol.pos.sel(xyz="y")**2)
+        vol = gvec.evaluate(
+            state, "pos", "Jac", "V", "Phi_edge", rho="int", theta="int", zeta="int"
+        )
+        R = np.sqrt(vol.pos.sel(xyz="x") ** 2 + vol.pos.sel(xyz="y") ** 2)
         area = gvec.volume_integral(vol.Jac / R).item() / (2 * np.pi)
         a_minor = np.sqrt(area / np.pi)
         R_major = vol.V.item() / (2 * np.pi * area)
