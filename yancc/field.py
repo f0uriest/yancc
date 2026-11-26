@@ -33,9 +33,9 @@ _FIELD_SOURCE_NAMES: tuple[str, ...] = tuple(_FieldSource._index_to_message)
 class Field(eqx.Module):
     """Magnetic field on a flux surface.
 
-    Field is given as 2D arrays uniformly spaced in arbitrary
-    poloidal and toroidal angles. The radial coordinate is assumed to be
-    rho = sqrt(normalized toroidal flux)
+    Field is given as 2D arrays uniformly spaced in poloidal and toroidal angles,
+    which must be right handed with zeta increasing counter-clockwise about the Z axis.
+    The radial coordinate is assumed to be rho = sqrt(normalized toroidal flux)
 
     Parameters
     ----------
@@ -200,6 +200,9 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from DESC equilibrium.
 
+        The angles of the Field are the DESC angles, which are right handed with zeta
+        increasing counter-clockwise about the Z axis.
+
         Parameters
         ----------
         eq : desc.equilibrium.Equilibrium
@@ -281,12 +284,14 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from VMEC equilibrium.
 
-        The angles of the Field are right handed. zeta is the VMEC toroidal angle,
-        and when the VMEC angles are left handed (the usual case, signgs = -1) the
-        poloidal angle runs opposite to the VMEC one, theta = -theta_VMEC, so that
-        point ``i`` of the theta grid is at theta_VMEC = -theta[i] (mod 2π). Functions
-        on the surface given in VMEC angles, such as output from another code that uses
-        them, then have to be reflected in theta to be used with this Field.
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the file. zeta is the VMEC
+        toroidal angle, which is the cylindrical angle. When the VMEC angles are left
+        handed (the usual case, signgs = -1) the poloidal angle runs opposite to the
+        VMEC one, theta = -theta_VMEC, so that point ``i`` of the theta grid is at
+        theta_VMEC = -theta[i] (mod 2π). Functions on the surface given in VMEC angles,
+        such as output from another code that uses them, then have to be reflected in
+        theta to be used with this Field.
 
         Parameters
         ----------
@@ -417,6 +422,12 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from GVEC equilibrium.
 
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the GVEC equilibrium. The GVEC
+        angles are right handed, and when the GVEC toroidal angle runs opposite to the
+        cylindrical angle both angles are reversed, (theta, zeta) = (-theta_GVEC,
+        -zeta_GVEC). Otherwise the GVEC angles are used as they are.
+
         Parameters
         ----------
         state : gvec.State or path-like
@@ -494,9 +505,11 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from BOOZ_XFORM file.
 
-        The angles of the Field are right handed. zeta is the toroidal Boozer angle of
-        the file, and when the Boozer angles of the file are left handed the poloidal
-        angle runs opposite to the one in the file, theta = -theta_file.
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the file. zeta is the Boozer
+        toroidal angle of the file, which increases with the cylindrical angle, and when
+        the Boozer angles of the file are left handed the poloidal angle runs opposite
+        to the one in the file, theta = -theta_file.
 
         Parameters
         ----------
@@ -595,9 +608,11 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from IPP format bc file.
 
-        The angles of the Field are right handed. zeta is the toroidal Boozer angle of
-        the file, and when the Boozer angles of the file are left handed the poloidal
-        angle runs opposite to the one in the file, theta = -theta_file.
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the file. zeta is the Boozer
+        toroidal angle of the file, which increases with the cylindrical angle, and when
+        the Boozer angles of the file are left handed the poloidal angle runs opposite
+        to the one in the file, theta = -theta_file.
 
         Parameters
         ----------
@@ -681,6 +696,9 @@ class Field(eqx.Module):
         source: _FieldSource = _FieldSource.boozer,
     ) -> "Field":
         """Construct a field in Boozer coordinates.
+
+        The Boozer angles must be right handed with zeta increasing counter-clockwise
+        about the Z axis, as for the other constructors.
 
         Parameters
         ----------

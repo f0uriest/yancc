@@ -51,21 +51,34 @@ Surface angles
 --------------
 
 The field is sampled at ``field.theta`` and ``field.zeta``, uniform grids
-starting at zero. The coordinates :math:`(\rho, \theta, \zeta)` are right
-handed. The constructors that read a file keep the toroidal angle of the file,
-and use its poloidal angle when the angles of the file are right handed. When
-they are left handed, the poloidal angle is reversed,
-:math:`\theta = -\theta_\mathrm{file}`. The orientation is found from the
-geometry of the surface, and the direction of the field is kept as given in
-the file.
+starting at zero. Every constructor that reads an equilibrium gives the same
+orientation of the angles:
 
-* ``from_desc``: the DESC poloidal and toroidal angles, which are right handed.
-* ``from_vmec``: the VMEC angles. These are usually left handed
-  (``signgs = -1``), so that :math:`\theta = -\theta_\mathrm{VMEC}`.
-* ``from_booz_xform`` and ``from_ipp_bc``: the Boozer angles of the file. Files
-  computed from VMEC equilibria are usually left handed, so that
+* :math:`\zeta` increases counter-clockwise about the :math:`Z` axis, in the
+  same direction as the cylindrical angle :math:`\phi`.
+* :math:`(\rho, \theta, \zeta)` is right handed, so the Jacobian ``field.sqrtg``
+  is positive.
+
+The orientation is found from the geometry of the surface and the angles of
+the source are reversed where needed. The field itself is never changed: its
+direction is the one in the source, expressed in these angles. In terms of the
+angles of each source:
+
+* ``from_desc``: the DESC angles, which already have this orientation.
+* ``from_vmec``: :math:`\zeta` is the VMEC toroidal angle, which is
+  :math:`\phi`. VMEC angles are usually left handed (``signgs = -1``), in
+  which case :math:`\theta = -\theta_\mathrm{VMEC}`.
+* ``from_booz_xform`` and ``from_ipp_bc``: :math:`\zeta` is the Boozer toroidal
+  angle, which increases with :math:`\phi`. Files computed from VMEC
+  equilibria are usually left handed, in which case
   :math:`\theta = -\theta_\mathrm{Boozer}`.
-* ``from_boozer``: the Boozer angles given, used as they are.
+* ``from_gvec``: GVEC angles are right handed, but the GVEC toroidal angle can
+  run opposite to :math:`\phi`. In that case both angles are reversed,
+  :math:`(\theta, \zeta) = (-\theta_\mathrm{GVEC}, -\zeta_\mathrm{GVEC})`.
+
+``from_boozer`` and the ``Field`` constructor take values on the surface
+without its geometry, so they cannot check the orientation. Their inputs must
+be given in angles with this orientation.
 
 Any other function on the surface that is passed to yancc has to be sampled
 at ``field.theta`` and ``field.zeta`` in these angles. In particular a
