@@ -2,8 +2,9 @@
 
 from jax import config
 
-from . import _version, field, solution, solve, species, velocity_grids
+from . import _version, field, rotation, solution, solve, species, velocity_grids
 from .field import Field
+from .rotation import Rotation
 from .solution import DKESolution, MDKESolution
 from .solve import solve_dke, solve_dke_ambipolar, solve_mdke
 from .species import (
@@ -47,6 +48,7 @@ __all__ = [
     "Field",
     "MaxwellSpeedGrid",
     "UniformPitchAngleGrid",
+    "Rotation",
     # species
     "Species",
     "LocalMaxwellian",
@@ -74,6 +76,7 @@ __all__ = [
     "MDKESolution",
     # public modules
     "field",
+    "rotation",
     "solution",
     "solve",
     "species",

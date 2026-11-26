@@ -9,8 +9,15 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.constants import elementary_charge, epsilon_0, proton_mass
 
-from ._misc import _d3v, _dr, radial_magnetic_drift
+from ._misc import (
+    _d3v,
+    _dke_thermodynamic_forces,
+    _dr,
+    angular_momentum_drift,
+    radial_drift,
+)
 from .field import Field
+from .rotation import RotatingEquilibrium
 from .species import (
     _JOULE_PER_EV,
     LocalMaxwellian,
@@ -140,7 +147,8 @@ class DKESolution(eqx.Module):
     Attributes
     ----------
     F0 : jax.Array, shape (ns, nx, 1, 1, 1)
-        Maxwellian background distribution, broadcastable against ``f1``.
+        Maxwellian background distribution, broadcastable against ``f1``. With
+        rotation it is that of the local density, shape (ns, nx, 1, nt, nz).
     f1 : jax.Array, shape (ns, nx, na, nt, nz)
         Perturbation solved for by the DKE.
     rhs : jax.Array, shape (ns, nx, na, nt, nz)
@@ -160,6 +168,10 @@ class DKESolution(eqx.Module):
     background : list[LocalMaxwellian]
         Additional background species to include in the collision operator without
         solving for df.
+    rotating : RotatingEquilibrium, optional
+        Lowest order state of a toroidally rotating plasma. Velocities are then those
+        in the rotating frame, and the fluxes are those of the radial drift including
+        the ExB, centrifugal and Coriolis drifts.
     f : jax.Array, shape (ns, nx, na, nt, nz)
         Full distribution function ``F0 + f1``. Computed on access.
     f1_krylov : tuple of jax.Array
@@ -178,6 +190,7 @@ class DKESolution(eqx.Module):
     Erho: jax.Array
     EparB: jax.Array
     background: list[LocalMaxwellian]
+    rotating: RotatingEquilibrium | None
     _particle_source: jax.Array
     _heat_source: jax.Array
 
@@ -193,6 +206,7 @@ class DKESolution(eqx.Module):
         Erho: jax.Array,
         EparB: jax.Array,
         background: list[LocalMaxwellian],
+        rotating: RotatingEquilibrium | None = None,
     ):
         ns = len(species)
         shape = (ns, speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
@@ -217,6 +231,9 @@ class DKESolution(eqx.Module):
             heat_source = sources[:, 1]
 
         self.F0 = jnp.asarray(F0).reshape(ns, speedgrid.nx, 1, 1, 1)
+        if rotating is not None:
+            self.F0 = self.F0 * rotating.density[:, None, None]
+        self.rotating = rotating
         self.f1 = f1
         self.rhs = rhs.flatten()[:N].reshape(shape)
         self._particle_source = particle_source
@@ -405,7 +422,8 @@ def _mdke_Dij_dkes(sol, **kwargs):
     label="\\Gamma = \\langle \\int d^3v f_s \\mathbf{v}_m \\cdot "
     "\\nabla \\rho \\rangle",
     units="m^{-3} \\cdot s^{-1}",
-    description="Particle flux for each species",
+    description="Particle flux for each species. With rotation, the flux of the "
+    "radial drift in the rotating frame, here and in the other fluxes.",
     dim=("ns",),
 )
 def _dke_particle_flux(sol, **kwargs):
@@ -413,11 +431,11 @@ def _dke_particle_flux(sol, **kwargs):
     dr = _dr(sol.field)[None, None, None]
     dr = dr / dr.sum()
 
-    radial_drift = radial_magnetic_drift(
-        sol.field, sol.speedgrid, sol.pitchgrid, sol.species
+    drift = radial_drift(
+        sol.field, sol.speedgrid, sol.pitchgrid, sol.species, sol.rotating
     )
 
-    particle_flux = sol.f * radial_drift * d3v * dr
+    particle_flux = sol.f * drift * d3v * dr
     particle_flux = particle_flux.sum(axis=(-4, -3, -2, -1))
     return particle_flux
 
@@ -427,7 +445,9 @@ def _dke_particle_flux(sol, **kwargs):
     label="Q = \\langle \\int d^3v 1/2 m v^2 f_s \\mathbf{v}_m "
     "\\cdot \\nabla \\rho \\rangle",
     units="kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}",
-    description="Heat flux for each species",
+    description="Heat flux for each species. With rotation, the energy carried is "
+    "the kinetic energy in the rotating frame plus the potential energy relative "
+    "to theta=0.",
     dim=("ns",),
 )
 def _dke_heat_flux(sol, **kwargs):
@@ -439,10 +459,15 @@ def _dke_heat_flux(sol, **kwargs):
     dr = _dr(sol.field)[None, None, None]
     dr = dr / dr.sum()
 
-    radial_drift = radial_magnetic_drift(
-        sol.field, sol.speedgrid, sol.pitchgrid, sol.species
+    drift = radial_drift(
+        sol.field, sol.speedgrid, sol.pitchgrid, sol.species, sol.rotating
     )
-    heat_flux = 1 / 2 * sol.f * ms * v**2 * radial_drift * d3v * dr
+    energy = ms * v**2 / 2
+    if sol.rotating is not None:
+        # potential energy in the rotating frame, relative to θ=0
+        Ts = jnp.array([sp.temperature for sp in sol.species]) * _JOULE_PER_EV
+        energy = energy + (Ts[:, None, None] * sol.rotating.lam)[:, None, None]
+    heat_flux = sol.f * energy * drift * d3v * dr
     heat_flux = heat_flux.sum(axis=(-4, -3, -2, -1))
     return heat_flux
 
@@ -465,10 +490,10 @@ def _dke_momentum_flux(sol, **kwargs):
     dr = _dr(sol.field)[None, None, None]
     dr = dr / dr.sum()
 
-    radial_drift = radial_magnetic_drift(
-        sol.field, sol.speedgrid, sol.pitchgrid, sol.species
+    drift = radial_drift(
+        sol.field, sol.speedgrid, sol.pitchgrid, sol.species, sol.rotating
     )
-    momentum_flux = ms * vpar * sol.field.Bmag * sol.f * radial_drift * d3v * dr
+    momentum_flux = ms * vpar * sol.field.Bmag * sol.f * drift * d3v * dr
     momentum_flux = momentum_flux.sum(axis=(-4, -3, -2, -1))
     return momentum_flux
 
@@ -482,7 +507,7 @@ def _dke_momentum_flux(sol, **kwargs):
 )
 def _dke_Vpar(sol, **kwargs):
     vth = jnp.array([sp.v_thermal for sp in sol.species])[:, None, None, None, None]
-    ns = jnp.array([sp.density for sp in sol.species])[:, None, None, None, None]
+    ns = _density(sol)[:, None, None]
     xi = sol.pitchgrid.xi[None, None, :, None, None]
     x = sol.speedgrid.x[None, :, None, None, None]
     vpar = x * vth * xi
@@ -511,12 +536,22 @@ def _dke_VparB(sol, **kwargs):
     return BVpar
 
 
+def _density(sol):
+    """Lowest order density of each species, shape (ns, 1, 1) or (ns, nt, nz)."""
+    ns = jnp.array([sp.density for sp in sol.species])[:, None, None]
+    if sol.rotating is not None:
+        ns = ns * sol.rotating.density
+    return ns
+
+
 def _perpendicular_rotation(sol):
     """Coefficient of B x grad(rho) / B^2 in the perpendicular flow, shape (ns, nt, nz).
 
     The perpendicular (diamagnetic and ExB) flow is
     V_perp = B x grad(rho) / B^2 * (1/(q n) dp/drho + dPhi/drho).
     """
+    if sol.rotating is not None:
+        raise NotImplementedError("Perpendicular flows are not available with rotation")
     # The density is a pseudo-density times the Boltzmann factor in Phi_1. The
     # radial derivative of Phi_1 enters both the Boltzmann factor and the ExB
     # drift, and cancels between them.
@@ -590,6 +625,9 @@ def _dke_V_zeta(sol, **kwargs):
     dim=(),
 )
 def _dke_bootstrap_current(sol, **kwargs):
+    if sol.rotating is not None:
+        # the densities vary on the surface
+        return sol.field.flux_surface_average(sol.field.Bmag * sol.get("J||"))
     ns = jnp.array([sp.density for sp in sol.species])
     qs = jnp.array([sp.species.charge for sp in sol.species])
     BVpar = sol.get("<V||B>")
@@ -621,7 +659,7 @@ def _dke_radial_current(sol, **kwargs):
     dim=("nt", "nz"),
 )
 def _dke_parallel_current(sol, **kwargs):
-    ns = jnp.array([sp.density for sp in sol.species])[:, None, None]
+    ns = _density(sol)
     qs = jnp.array([sp.species.charge for sp in sol.species])[:, None, None]
     Vpar = sol.get("V||")
     Jpar = qs * ns * Vpar
@@ -713,9 +751,13 @@ def _dke_Phi1(sol, **kwargs):
     qs = jnp.array([sp.species.charge for sp in sol.species])[:, None, None]
     charge = (qs * sol.get("n1")).sum(axis=0)
     charge = charge - sol.field.flux_surface_average(charge)
+    all_species = list(sol.species) + list(sol.background)
+    density = jnp.ones((len(all_species), 1, 1))
+    if sol.rotating is not None:
+        density = sol.rotating.field_density
     shielding = sum(
-        sp.species.charge**2 * sp.density / (sp.temperature * _JOULE_PER_EV)
-        for sp in list(sol.species) + list(sol.background)
+        sp.species.charge**2 * sp.density * n / (sp.temperature * _JOULE_PER_EV)
+        for sp, n in zip(all_species, density)
     )
     return charge / shielding
 
@@ -734,6 +776,8 @@ def _classical_fluxes(sol, coulomb_log=None):
     # Maxwellians alone, so the friction is independent of the drift kinetic
     # solution. That function lies exactly in the span of the first two Laguerre
     # polynomials, so the Braginskii matrix elements give the friction exactly.
+    if sol.rotating is not None:
+        raise NotImplementedError("Classical fluxes are not available with rotation")
     if sol.field.g_sup_rr is None:
         raise ValueError(
             "Classical fluxes require Field.g_sup_rr, which is not available "
@@ -820,6 +864,187 @@ def _dke_classical_particle_flux(sol, coulomb_log=None, **kwargs):
 )
 def _dke_classical_heat_flux(sol, coulomb_log=None, **kwargs):
     return _classical_fluxes(sol, coulomb_log)[1]
+
+
+@_register_dke_output(
+    name="<angular_momentum_flux>",
+    label="\\Pi = \\langle \\int d^3v f_s m_s R V_\\zeta \\mathbf{v}_d "
+    "\\cdot \\nabla \\rho \\rangle",
+    units="kg \\cdot m^{-1} \\cdot s^{-2}",
+    description="Flux of toroidal angular momentum for each species, conjugate to "
+    "the rotation shear. Requires an axisymmetric field with R.",
+    dim=("ns",),
+)
+def _dke_angular_momentum_flux(sol, **kwargs):
+    d3v = _d3v(sol.speedgrid, sol.pitchgrid, sol.species)[..., None, None]
+    dr = _dr(sol.field)[None, None, None]
+    dr = dr / dr.sum()
+    momentum = angular_momentum_drift(
+        sol.field, sol.speedgrid, sol.pitchgrid, sol.species, sol.rotating
+    )
+    return (sol.f * momentum * d3v * dr).sum(axis=(-4, -3, -2, -1))
+
+
+def _energy_flux(sol, particle_flux, heat_flux, angular_momentum_flux, frame):
+    if frame not in ("rotating", "lab"):
+        raise ValueError(f"frame must be 'rotating' or 'lab', got '{frame}'")
+    if sol.rotating is None:
+        return heat_flux
+    ms = jnp.array([sp.species.mass for sp in sol.species])
+    qs = jnp.array([sp.species.charge for sp in sol.species])
+    omega = sol.rotating.omega
+    # potential energy at θ=0
+    Phi = sol.field.flux_surface_average(sol.rotating.Phi)
+    energy = -qs * Phi - ms * omega**2 * sol.field.R[0, 0] ** 2 / 2
+    energy_flux = heat_flux + energy * particle_flux
+    if frame == "lab":
+        energy_flux = energy_flux + omega * angular_momentum_flux
+    return energy_flux
+
+
+@_register_dke_output(
+    name="<energy_flux>",
+    label="\\langle \\int d^3v f_s [1/2 m_s v^2 + q_s (\\Phi_0 - \\langle "
+    "\\Phi_0 \\rangle) - 1/2 m_s \\omega^2 R^2] \\mathbf{v}_d \\cdot "
+    "\\nabla \\rho \\rangle",
+    units="kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}",
+    description="Energy flux for each species in a rotating plasma, with the "
+    "potential energy measured from the flux surface average of the potential "
+    "and the axis of rotation. ``frame='lab'`` gives the flux of the kinetic "
+    "energy in the lab frame instead of the rotating frame, which adds omega "
+    "times the angular momentum flux. Equal to <heat_flux> without rotation.",
+    dim=("ns",),
+)
+def _dke_energy_flux(sol, frame="rotating", **kwargs):
+    momentum = sol.get("<angular_momentum_flux>") if frame == "lab" else 0.0
+    return _energy_flux(
+        sol, sol.get("<particle_flux>"), sol.get("<heat_flux>"), momentum, frame
+    )
+
+
+def _nondissipative_fluxes(sol):
+    """Fluxes of particles, heat and angular momentum that are independent of f1.
+
+    The drive by the rotation shear is -(ω'/T) F dπ/dt = -L[F G] with G = (ω'/T) G₂,
+    G₂ = m²/(2 q ψ') [(I v||/B + ω R²)² + μ R² B_p²/(m B)], and L the collisionless
+    operator, so f1 contains -F G. The physical fluxes are moments of the collision
+    operator, which annihilates F G only to lowest order, and written as moments of
+    f1 they are those of the solution plus the moments of the Maxwellian
+
+    Γ = (ω'/T) <∫d³v F G₂ dρ/dt>, Q = (ω'/T) <∫d³v F G₂ (m v²/2 + T λ) dρ/dt>,
+    Π = -<∫d³v F [A₁ + (x² + λ) A₂] G₂ dρ/dt>
+
+    These vanish on an up-down symmetric surface.
+    """
+    ns = len(sol.species)
+    if sol.rotating is None:
+        return jnp.zeros((3, ns))
+    field, rot = sol.field, sol.rotating
+    # the velocity integrals are polynomials times the Maxwellian, done exactly with
+    # Gauss-Hermite in v|| and Gauss-Laguerre in v_perp²
+    s, ws = np.polynomial.hermite.hermgauss(8)
+    y, wy = np.polynomial.laguerre.laggauss(5)
+    s, ws = s[:, None, None, None], ws[:, None, None, None]
+    y, wy = y[None, :, None, None], wy[None, :, None, None]
+
+    def flux(sp, lam, dlamdt, density, A1, A2):
+        m, q, vth = sp.species.mass, sp.species.charge, sp.v_thermal
+        T = sp.temperature * _JOULE_PER_EV
+        B, I, R = field.Bmag, field.B_sub_z, field.R
+        u, w2 = vth * s, vth**2 * y
+        drift = -m / q * (2 * u**2 + w2) / (2 * B**3) * field.BxgradrhodotgradB + (
+            -I * T / q * dlamdt / B + 2 * m / q * rot.omega * u * R * field._dfdt(R)
+        ) / (field.sqrtg * B)
+        G2 = (
+            m**2
+            / (2 * q * field.sqrtg * field.B_sup_t)
+            * ((I * u / B + rot.omega * R**2) ** 2 + w2 * (R**2 - I**2 / B**2) / 2)
+        )
+        x2 = s**2 + y
+        weight = sp.density * density / jnp.sqrt(jnp.pi) * ws * wy
+        g = field.flux_surface_average((weight * G2 * drift).sum(axis=(0, 1)))
+        gx = field.flux_surface_average(
+            (weight * (x2 + lam) * G2 * drift).sum(axis=(0, 1))
+        )
+        return jnp.array(
+            [rot.domega_drho / T * g, rot.domega_drho * gx, -(A1 * g + A2 * gx)]
+        )
+
+    forces = _dke_thermodynamic_forces(sol.species, field, sol.Erho, 0.0, rot)
+    fluxes = [
+        flux(sp, rot.lam[i], rot.dlamdt[i], rot.density[i], forces[0, i], forces[1, i])
+        for i, sp in enumerate(sol.species)
+    ]
+    return jnp.array(fluxes).T
+
+
+_NONDISSIPATIVE = (
+    "Part of the {} of each species that is independent of the solution f1, to be "
+    "added to <{}>. Nonzero in a rotating plasma on a surface without up-down "
+    "symmetry. The part driven by the parallel electric field is not included."
+)
+
+
+@_register_dke_output(
+    name="<nondissipative_particle_flux>",
+    label="\\Gamma^H",
+    units="m^{-3} \\cdot s^{-1}",
+    description=_NONDISSIPATIVE.format("particle flux", "particle_flux"),
+    dim=("ns",),
+)
+def _dke_nondissipative_particle_flux(sol, **kwargs):
+    return _nondissipative_fluxes(sol)[0]
+
+
+@_register_dke_output(
+    name="<nondissipative_heat_flux>",
+    label="Q^H",
+    units="kg \\cdot m^{-1} \\cdot s^{-3} = W \\cdot m^{-3}",
+    description=_NONDISSIPATIVE.format("heat flux", "heat_flux"),
+    dim=("ns",),
+)
+def _dke_nondissipative_heat_flux(sol, **kwargs):
+    return _nondissipative_fluxes(sol)[1]
+
+
+@_register_dke_output(
+    name="<nondissipative_angular_momentum_flux>",
+    label="\\Pi^H",
+    units="kg \\cdot m^{-1} \\cdot s^{-2}",
+    description=_NONDISSIPATIVE.format(
+        "angular momentum flux", "angular_momentum_flux"
+    ),
+    dim=("ns",),
+)
+def _dke_nondissipative_angular_momentum_flux(sol, **kwargs):
+    return _nondissipative_fluxes(sol)[2]
+
+
+@_register_dke_output(
+    name="Phi_0",
+    label="\\Phi_0",
+    units="V",
+    description="Variation of the lowest order electrostatic potential on the "
+    "surface of a rotating plasma, zero at theta=0.",
+    dim=("nt", "nz"),
+)
+def _dke_Phi0(sol, **kwargs):
+    if sol.rotating is None:
+        return jnp.zeros((sol.field.ntheta, sol.field.nzeta))
+    return sol.rotating.Phi
+
+
+@_register_dke_output(
+    name="n0",
+    label="n_{s0}",
+    units="m^{-3}",
+    description="Lowest order density on surface for each species, which varies "
+    "on the surface in a rotating plasma.",
+    dim=("ns", "nt", "nz"),
+)
+def _dke_n0(sol, **kwargs):
+    shape = (len(sol.species), sol.field.ntheta, sol.field.nzeta)
+    return jnp.broadcast_to(_density(sol), shape)
 
 
 @_register_dke_output(

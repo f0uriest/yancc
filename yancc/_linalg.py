@@ -1328,6 +1328,24 @@ def cr_block_tridiag_solve(factors, b, *, trans=False) -> jax.Array:
     return _cr_forward_solve(levels, root_inv, s * b)
 
 
+def _block_thomas_factor(D, L, U):
+    """Block LU factors of a non-periodic block tridiagonal matrix.
+
+    D, L, U have shape (m, b, b), with L[0] and U[m-1] zero. Returns the LU factors of
+    the pivot blocks and the blocks C[k] = pivot[k]^-1 U[k] for _block_thomas_solve.
+    """
+    b = D.shape[-1]
+
+    def eliminate(c_prev, xs):
+        d, l, u = xs
+        lu = jax.scipy.linalg.lu_factor(d - l @ c_prev)
+        c = jax.scipy.linalg.lu_solve(lu, u)
+        return c, (lu, c)
+
+    _, (lus, C) = jax.lax.scan(eliminate, jnp.zeros((b, b), D.dtype), (D, L, U))
+    return lus, C
+
+
 def _block_thomas_solve(lus, L, C, r):
     """Solve a non-periodic block tridiagonal system from its block LU factors.
 
@@ -1352,6 +1370,53 @@ def _block_thomas_solve(lus, L, C, r):
 
     y = jax.lax.fori_loop(0, m, forward, r)
     return jax.lax.fori_loop(0, m, backward, y)
+
+
+@jax.jit
+def block_tridiag_factor(D, L, U):
+    """Block LU factorization of a block tridiagonal matrix.
+
+    Rows are equilibrated before factoring. Each diagonal block is factored with
+    partial pivoting, but there is no pivoting between blocks.
+
+    Parameters
+    ----------
+    D, L, U : jax.Array, shape (m, b, b)
+        Diagonal, sub- and super-diagonal blocks, so that block row k of the matrix
+        applied to x is ``L[k] x[k-1] + D[k] x[k] + U[k] x[k+1]``. ``L[0]`` and
+        ``U[m-1]`` are ignored.
+
+    Returns
+    -------
+    factors : tuple
+        Factors for block_tridiag_solve.
+    """
+    m = D.shape[0]
+    L = L.at[0].set(0.0)
+    U = U.at[m - 1].set(0.0)
+    s = _cr_row_scale(D[None], L[None], U[None])[0]
+    D, L, U = D * s[..., None], L * s[..., None], U * s[..., None]
+
+    lus, C = _block_thomas_factor(D, L, U)
+    return lus, L, C, s
+
+
+def block_tridiag_solve(factors, r):
+    """Solve a block tridiagonal system.
+
+    Parameters
+    ----------
+    factors : tuple
+        Output of block_tridiag_factor.
+    r : jax.Array, shape (m, b)
+        Right hand side.
+
+    Returns
+    -------
+    x : jax.Array, shape (m, b)
+    """
+    lus, L, C, s = factors
+    return _block_thomas_solve(lus, L, C, s * r)
 
 
 @jax.jit
@@ -1384,13 +1449,7 @@ def block_tridiag_periodic_factor(D, L, U):
     Lt = L[:n].at[0].set(0.0)
     Ut = U[:n].at[n - 1].set(0.0)
 
-    def eliminate(c_prev, xs):
-        d, l, u = xs
-        lu = jax.scipy.linalg.lu_factor(d - l @ c_prev)
-        c = jax.scipy.linalg.lu_solve(lu, u)
-        return c, (lu, c)
-
-    _, (lus, C) = jax.lax.scan(eliminate, jnp.zeros((b, b), D.dtype), (D[:n], Lt, Ut))
+    lus, C = _block_thomas_factor(D[:n], Lt, Ut)
     Y = _block_thomas_solve(lus, Lt, C, E)
     S = D[n] - U[n] @ Y[0] - L[n] @ Y[n - 1]
     return lus, Lt, C, Y, jax.scipy.linalg.lu_factor(S), U[n], L[n], s

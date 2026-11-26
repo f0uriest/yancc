@@ -23,6 +23,7 @@ Fields and Velocity Grids
     yancc.Field                 -- Magnetic field on a flux surface.
     yancc.MaxwellSpeedGrid      -- Collocation grid for speed coordinate based on Maxwell polynomials.
     yancc.UniformPitchAngleGrid -- Finite difference grid with uniform spacing for pitch angle coordinate.
+    yancc.Rotation              -- Toroidal rotation of the plasma in an axisymmetric field.
 
 Species
 -------
