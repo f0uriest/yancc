@@ -8,14 +8,14 @@ import pytest
 from yancc.field import Field
 
 
-def _compare_fields_scalars(field1, field2):
-    np.testing.assert_allclose(field1.iota, field2.iota, rtol=1e-5)
-    np.testing.assert_allclose(field1.Bmag_fsa, field2.Bmag_fsa, rtol=1e-5)
-    np.testing.assert_allclose(field1.B2mag_fsa, field2.B2mag_fsa, rtol=1e-5)
+def _compare_fields_scalars(field1, field2, rtol=1e-5):
+    np.testing.assert_allclose(field1.iota, field2.iota, rtol=rtol)
+    np.testing.assert_allclose(field1.Bmag_fsa, field2.Bmag_fsa, rtol=rtol)
+    np.testing.assert_allclose(field1.B2mag_fsa, field2.B2mag_fsa, rtol=rtol)
     np.testing.assert_allclose(field1.a_minor, field2.a_minor, rtol=5e-2)
     np.testing.assert_allclose(field1.R_major, field2.R_major, rtol=5e-2)
     np.testing.assert_allclose(field1.psi_r, field2.psi_r, rtol=5e-2)
-    np.testing.assert_allclose(field1.sqrtg.mean(), field2.sqrtg.mean(), rtol=1e-5)
+    np.testing.assert_allclose(field1.sqrtg.mean(), field2.sqrtg.mean(), rtol=rtol)
     np.testing.assert_allclose(field1.B0, field2.B0, rtol=1e-2)
     np.testing.assert_allclose(
         field1.flux_surface_average(field1.g_sup_rr / field1.Bmag**2),
@@ -43,6 +43,7 @@ def test_field_types():
     # desc imports its submodules lazily, so import one that needs jax to check
     # that the installed desc is compatible
     pytest.importorskip("desc.equilibrium")
+    pytest.importorskip("gvec")
     import desc.io  # pyright: ignore[reportMissingImports]
 
     eq = desc.io.load("tests/data/NCSX_output.h5")[-1]
@@ -58,35 +59,28 @@ def test_field_types():
             Field.from_vmec("tests/data/wout_NCSX.nc", r, nt, nz),
             Field.from_booz_xform("tests/data/boozmn_wout_NCSX.nc", r, nt, nz),
             Field.from_ipp_bc("tests/data/NCSX.bc", r, nt, nz),
+            Field.from_gvec("tests/data/gvec_NCSX", r, nt, nz),
         )
 
     fields = jax.jit(jax.vmap(make_fields))(jnp.array([rho, 0.7]))
-    field1, field2, field3, field4 = jax.tree.map(lambda x: x[0], fields)
+    field1, field2, field3, field4, field5 = jax.tree.map(lambda x: x[0], fields)
 
-    np.testing.assert_allclose(
-        field1.B_sub_t * field1.B_sup_t + field1.B_sub_z * field1.B_sup_z,
-        field1.Bmag**2,
-        rtol=1e-5,
-    )
-    np.testing.assert_allclose(
-        field2.B_sub_t * field2.B_sup_t + field2.B_sub_z * field2.B_sup_z,
-        field2.Bmag**2,
-        rtol=1e-5,
-    )
-    np.testing.assert_allclose(
-        field3.B_sub_t * field3.B_sup_t + field3.B_sub_z * field3.B_sup_z,
-        field3.Bmag**2,
-        rtol=1e-5,
-    )
-    np.testing.assert_allclose(
-        field4.B_sub_t * field4.B_sup_t + field4.B_sub_z * field4.B_sup_z,
-        field4.Bmag**2,
-        rtol=1e-5,
-    )
+    for field in (field1, field2, field3, field4, field5):
+        np.testing.assert_allclose(
+            field.B_sub_t * field.B_sup_t + field.B_sub_z * field.B_sup_z,
+            field.Bmag**2,
+            rtol=1e-5,
+        )
 
     _compare_fields_scalars(field1, field2)
     _compare_fields_scalars(field1, field3)
     _compare_fields_scalars(field1, field4)
+    # the GVEC equilibrium is solved independently from the same boundary and
+    # profiles, in a generalized frame whose toroidal angle is not the cylindrical
+    # angle, so only surface quantities can be compared, to the accuracy to which
+    # the two equilibrium solutions agree
+    _compare_fields_scalars(field1, field5, rtol=1e-3)
+    np.testing.assert_allclose(field5.Psi, field2.Psi, rtol=1e-8)
     # these are ostensibly in the same coordinates, so we can compare local qtys
     _compare_fields_local(field1, field2)
     _compare_fields_local(field3, field4)
