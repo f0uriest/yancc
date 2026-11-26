@@ -414,13 +414,14 @@ class Field(eqx.Module):
         # Minor and major radius from the volume and the toroidally averaged
         # cross-section area A, as a = sqrt(A/pi), R = V/(2 pi A), matching the
         # definitions used by VMEC and DESC.
-        vol = gvec.evaluate(state, "Jac_l", "V", rho="int", theta="int", zeta="int")
-        area = float(gvec.radial_integral(gvec.poloidal_integral(vol.Jac_l)).mean())
+        # Using the RZ cross-section area defined as A = 1/(2 pi) int 1/R dV
+        vol = gvec.evaluate(state, "pos", "Jac", "V", "Phi_edge", rho="int", theta="int", zeta="int")
+        R = np.sqrt(vol.pos.sel(xyz="x")**2 + vol.pos.sel(xyz="y")**2)
+        area = gvec.volume_integral(vol.Jac / R).item() / (2 * np.pi)
         a_minor = np.sqrt(area / np.pi)
-        R_major = float(vol.V) / (2 * np.pi * area)
+        R_major = vol.V.item() / (2 * np.pi * area)
         # GVEC's toroidal flux profile is the flux divided by 2pi
-        Phi_edge = float(state.evaluate_profile("Phi", np.array([1.0]))[0])
-
+        Phi_edge = vol.Phi_edge.item()
         # GVEC's toroidal angle need not follow the cylindrical angle phi. Orient it
         # so that phi increases with zeta on average, as in the other constructors.
         # Reversing zeta alone would make the coordinates left handed, so theta is
