@@ -3,7 +3,7 @@ Loading Magnetic Fields
 ============================
 
 Every yancc solve starts with a :class:`~yancc.Field` representing
-:math:`B(\theta, \zeta)` on a single flux surface. The class has five
+:math:`B(\theta, \zeta)` on a single flux surface. The class has six
 constructors covering the equilibrium formats yancc supports:
 
 ================================================== ================================================================
@@ -11,6 +11,7 @@ Constructor                                        Source
 ================================================== ================================================================
 :meth:`~yancc.Field.from_desc`                     In-memory ``desc.equilibrium.Equilibrium`` object
 :meth:`~yancc.Field.from_vmec`                     VMEC ``wout`` netCDF file
+:meth:`~yancc.Field.from_gvec`                     ``gvec.State`` object or GVEC run directory
 :meth:`~yancc.Field.from_booz_xform`               BOOZ_XFORM ``boozmn`` netCDF file
 :meth:`~yancc.Field.from_ipp_bc`                   IPP ``.bc`` (Boozer coordinate) file
 :meth:`~yancc.Field.from_boozer`                   Raw Boozer-coordinate data, no file
@@ -63,8 +64,8 @@ Stellarator symmetry
 
 ``from_vmec`` and ``from_booz_xform`` accept only stellarator-symmetric
 equilibria; they raise on load if asymmetric modes are present.
-Asymmetric equilibria must be loaded through ``from_desc`` or constructed
-manually with ``from_boozer``.
+Asymmetric equilibria must be loaded through ``from_desc`` or ``from_gvec``, or
+constructed manually with ``from_boozer``.
 
 By format
 =========
@@ -93,6 +94,26 @@ VMEC ``wout`` (``from_vmec``)
     field = Field.from_vmec("wout_NCSX.nc", rho=0.5, ntheta=17, nzeta=37)
 
 Reads from a VMEC netCDF ``wout`` file. Stellarator-symmetric only.
+
+GVEC (``from_gvec``)
+--------------------
+
+.. code-block:: python
+
+    import gvec
+    from yancc import Field
+
+    state = gvec.find_state("path/to/gvec/run")
+    field = Field.from_gvec(state, rho=0.5, ntheta=17, nzeta=37)
+
+``state`` is either a ``gvec.State`` or the path to a GVEC run directory, in
+which case the latest state in that directory is used. Requires the ``gvec``
+package (``pip install gvec``). The field is evaluated in GVEC's own
+:math:`(\theta, \zeta)` coordinates, with both angles reversed if needed so that
+:math:`\zeta` increases with the cylindrical angle :math:`\phi`. ``rho`` is the
+square root of normalized toroidal flux regardless of the toroidal flux profile
+used in the GVEC run.
+Non-stellarator symmetric and stellarator symmetric equilibria are both supported.
 
 BOOZ_XFORM ``boozmn`` (``from_booz_xform``)
 -------------------------------------------
