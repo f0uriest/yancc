@@ -3,6 +3,11 @@ Changelog
 
 v0.0.4
 ------
+### New features
+- New ``Field.from_gvec`` constructor to load a flux surface from a GVEC equilibrium,
+  given either a ``gvec.State`` or a GVEC run directory.
+
+
 ### Bug fixes
 - ``Field.from_vmec``, ``Field.from_booz_xform`` and ``Field.from_ipp_bc`` now find the
   orientation of the angles in the file from the geometry of the surface, and keep the
