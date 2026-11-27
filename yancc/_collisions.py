@@ -10,7 +10,7 @@ import orthax
 import quadax
 from jaxtyping import Array, ArrayLike, Bool, Float
 
-from ._finite_diff import fd2, fd_coeffs, fdfwd
+from ._finite_diff import build_lorentz_matrix, fd_coeffs
 from ._linalg import (
     AbstractDKEOperator,
     banded_to_dense,
@@ -25,8 +25,8 @@ from ._utils import (
 from .field import Field
 from .species import LocalMaxwellian, _gamma_ab, _nuD_ab, _nupar_ab, _species_pairs
 from .velocity_grids import (
+    AbstractPitchAngleGrid,
     MaxwellSpeedGrid,
-    UniformPitchAngleGrid,
     _AbstractSpeedGrid,
     _LegendrePitchAngleGrid,
 )
@@ -39,7 +39,7 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     nuhat : float
         Monoenergetic collisionality, nu/v in units of 1/m
@@ -55,7 +55,7 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     nuhat: Float[Array, ""]
     p1: str = eqx.field(static=True)
     p2: int = eqx.field(static=True)
@@ -66,7 +66,7 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         nuhat: Float[ArrayLike, ""],
         p1: str = "4d",
         p2: int = 4,
@@ -80,21 +80,12 @@ class MDKEPitchAngleScattering(AbstractDKEOperator):
         self.p1 = p1
         self.p2 = p2
         self.gauge = jnp.array(gauge)
-        h = jnp.pi / pitchgrid.nalpha
-        f1 = jnp.ones(pitchgrid.nalpha)
-        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
-        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
-        sina = jnp.sqrt(1 - pitchgrid.xi**2)
-        cosa = -pitchgrid.xi
-        w1 = -(self.nuhat / 2 * cosa / sina)
-        w2 = -self.nuhat / 2
-        # w1, w2 only depend on pitch (na), not state size, so fold into a
-        # single (na, na) operator.
-        D = w1[:, None] * D1 + w2 * D2
+        D = -self.nuhat / 2 * build_lorentz_matrix(pitchgrid.alpha, p2)
         # Pitch angle scattering annihilates isotropic functions. With deflection
         # frequencies many orders of magnitude above the other terms, rounding in the
         # row sums would act as a large spurious isotropic sink, so they are made zero.
         self._D = D - jnp.diag(D.sum(axis=1))
+        h = jnp.pi / pitchgrid.nalpha
         self._scale = self.nuhat / h**2
 
     @eqx.filter_jit
@@ -612,7 +603,7 @@ class PitchAngleScattering(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -625,7 +616,7 @@ class PitchAngleScattering(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -638,7 +629,7 @@ class PitchAngleScattering(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         background: list[LocalMaxwellian] | None = None,
@@ -662,14 +653,9 @@ class PitchAngleScattering(AbstractDKEOperator):
 
         self.nus = _species_pairs(nu_ab, species, species + background).sum(axis=1)
         h = jnp.pi / pitchgrid.nalpha
-        f1 = jnp.ones(pitchgrid.nalpha)
-        D1 = jax.jacfwd(fdfwd)(f1, str(p2) + "z", h=h, bc="symmetric")
-        D2 = jax.jacfwd(fd2)(f1, p2, h=h, bc="symmetric")
-        sina = jnp.sqrt(1 - pitchgrid.xi**2)
-        cosa = -pitchgrid.xi
-        # cos/sin only depends on pitchgrid; fold into a single (na, na) op.
+        # Lorentz operator only depends on pitchgrid; fold into a single (na, na) op.
         # The species/x-dependent prefactor (-nus/2) is applied in mv.
-        D = (cosa / sina)[:, None] * D1 + D2
+        D = build_lorentz_matrix(pitchgrid.alpha, p2)
         # Pitch angle scattering annihilates isotropic functions. With deflection
         # frequencies many orders of magnitude above the other terms, rounding in the
         # row sums would act as a large spurious isotropic sink, so they are made zero.
@@ -835,7 +821,7 @@ class EnergyScattering(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field data.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
@@ -846,7 +832,7 @@ class EnergyScattering(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -860,7 +846,7 @@ class EnergyScattering(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         background: list[LocalMaxwellian] | None = None,
@@ -1380,7 +1366,7 @@ class FieldPartCD(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1391,7 +1377,7 @@ class FieldPartCD(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -1511,7 +1497,7 @@ class FieldPartCG(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1525,7 +1511,7 @@ class FieldPartCG(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -1653,7 +1639,7 @@ class FieldPartCH(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
@@ -1668,7 +1654,7 @@ class FieldPartCH(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -1805,7 +1791,7 @@ class FieldParticleScattering(AbstractDKEOperator):
 
     field: Field
     speedgrid: MaxwellSpeedGrid
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     species: list[LocalMaxwellian]
     potentials: RosenbluthPotentials
     gauge: Bool[Array, ""]
@@ -1819,7 +1805,7 @@ class FieldParticleScattering(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         potentials: RosenbluthPotentials,
@@ -2031,7 +2017,7 @@ class FokkerPlanckLandau(AbstractDKEOperator):
     ----------
     field : Field
         Magnetic field information
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Grid of coordinates in pitch angle.
     speedgrid : MaxwellSpeedGrid
         Grid of coordinates in speed.
@@ -2053,7 +2039,7 @@ class FokkerPlanckLandau(AbstractDKEOperator):
     """
 
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: MaxwellSpeedGrid
     species: list[LocalMaxwellian]
     background: list[LocalMaxwellian]
@@ -2070,7 +2056,7 @@ class FokkerPlanckLandau(AbstractDKEOperator):
     def __init__(
         self,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: MaxwellSpeedGrid,
         species: list[LocalMaxwellian],
         background: list[LocalMaxwellian] | None = None,

@@ -29,7 +29,14 @@ from .species import (
     Species,
     Tritium,
 )
-from .velocity_grids import MaxwellSpeedGrid, UniformPitchAngleGrid
+from .velocity_grids import (
+    AbstractPitchAngleGrid,
+    DKEGaussianPitchAngleGrid,
+    MaxwellSpeedGrid,
+    MDKEGaussianPitchAngleGrid,
+    NonUniformPitchAngleGrid,
+    UniformPitchAngleGrid,
+)
 
 # lots of big and small numbers that will over/underflow in 32bit so
 # we set this here to ensure we don't get nans elsewhere.
@@ -46,7 +53,11 @@ __all__ = [
     # fields and velocity grids
     "Field",
     "MaxwellSpeedGrid",
+    "AbstractPitchAngleGrid",
     "UniformPitchAngleGrid",
+    "NonUniformPitchAngleGrid",
+    "MDKEGaussianPitchAngleGrid",
+    "DKEGaussianPitchAngleGrid",
     # species
     "Species",
     "LocalMaxwellian",

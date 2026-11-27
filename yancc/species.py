@@ -446,9 +446,20 @@ def _poloidal_mach(
     x : float
         Normalized speed being considered. x=v/vth
     """
+    v = jnp.asarray(x) * species.v_thermal
+    return _poloidal_mach_hat(field, jnp.asarray(Erho) / v)
+
+
+def _poloidal_mach_hat(field: Field, erhohat: ArrayLike) -> jax.Array:
+    """Poloidal Mach number from the monoenergetic field erhohat = Erho / v."""
     # <b·∇θ> = <B^θ /|B|>, the exact flux-surface-averaged poloidal transit rate
     bdotgradtheta = field.flux_surface_average(field.B_sup_t / field.Bmag)
-    return _Estar(species, field, Erho, x) / (field.a_minor * jnp.abs(bdotgradtheta))
+    return (
+        jnp.asarray(erhohat)
+        / field.a_minor**2
+        / field.Bmag_fsa
+        / jnp.abs(bdotgradtheta)
+    )
 
 
 def _nustar(

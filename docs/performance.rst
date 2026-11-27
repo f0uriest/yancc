@@ -15,8 +15,9 @@ A yancc solve has four resolution parameters:
 - ``nx`` — collocation nodes in the speed coordinate :math:`x = v / v_{th}`.
   Set on :class:`~yancc.MaxwellSpeedGrid`. Used by the full
   DKE only; the MDKE is monoenergetic and has no speed grid.
-- ``nalpha`` — points along the pitch-angle :math:`\alpha \in [0, \pi]`. Set
-  on :class:`~yancc.UniformPitchAngleGrid`.
+- ``nalpha`` — points along the pitch-angle :math:`\alpha \in [0, \pi]`. Set on the
+  pitch-angle grid (:class:`~yancc.UniformPitchAngleGrid` or a
+  non-uniform variant — see :ref:`choosing-a-pitch-angle-grid` below).
 - ``ntheta`` — points along the poloidal angle :math:`\theta \in [0, 2\pi]`
   on the flux surface. Set when constructing :class:`~yancc.Field`.
 - ``nzeta`` — points along the toroidal angle :math:`\zeta \in [0, 2\pi/NFP]`
@@ -45,6 +46,45 @@ What each grid actually resolves
   few points: ``nx = 5–8`` is the usual range and ``nx = 6`` is a sensible
   starting point. Larger values may be needed for multiple species at high
   collisionality.
+
+.. _choosing-a-pitch-angle-grid:
+
+Choosing a pitch-angle grid
+---------------------------
+
+``na`` is set on the pitch-angle grid object, and yancc offers a few choices
+of how those points are *distributed* in :math:`\alpha`:
+
+- :class:`~yancc.UniformPitchAngleGrid` spaces points uniformly
+  in :math:`\alpha`. This is the simplest choice and a good default.
+- :class:`~yancc.NonUniformPitchAngleGrid` is the general base
+  class: pass it your own smooth, positive node density as a function of
+  :math:`\xi = v_\parallel / v` to place nodes wherever your problem needs
+  resolution.
+- :class:`~yancc.DKEGaussianPitchAngleGrid` chooses the packing for you in
+  :func:`~yancc.solve.solve_dke`: pass it the same ``field``, ``species``,
+  ``Erho`` (and ``background``) you give the solver. It clusters points in the
+  boundary layers of all species, narrower at lower collisionality, and relaxes
+  toward uniform spacing as the radial electric field grows. At low
+  collisionality it typically reaches a given accuracy in the fluxes and flows
+  with substantially fewer points than a uniform grid.
+- :class:`~yancc.MDKEGaussianPitchAngleGrid` does the same for monoenergetic
+  calculations: pass it the same ``field``, ``erhohat`` and ``nuhat`` you give
+  :func:`~yancc.solve.solve_mdke`.
+
+All of these accept ``nalpha`` the same way and are interchangeable as the
+``pitchgrid`` argument to :func:`~yancc.solve.solve_dke` and
+:func:`~yancc.solve.solve_mdke`, so you can swap grids without changing the
+rest of a convergence study:
+
+.. code-block:: python
+
+    from yancc import MDKEGaussianPitchAngleGrid
+
+    def D11(na):
+        pitchgrid = MDKEGaussianPitchAngleGrid(na, field, erhohat, nuhat)
+        sol, _ = solve_mdke(field, pitchgrid, erhohat, nuhat)
+        return sol.get("Dij")[0, 0]
 
 Doing a convergence study
 -------------------------

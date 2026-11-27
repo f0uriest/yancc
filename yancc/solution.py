@@ -17,7 +17,7 @@ from .species import (
     _coulomb_logarithm,
     _species_pairs,
 )
-from .velocity_grids import UniformPitchAngleGrid, _AbstractSpeedGrid
+from .velocity_grids import AbstractPitchAngleGrid, _AbstractSpeedGrid
 
 _MDKE_OUTPUTS = {}
 _DKE_OUTPUTS = {}
@@ -147,7 +147,7 @@ class DKESolution(eqx.Module):
         Drive terms for DKE
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     speedgrid : AbstractSpeedGrid
         Grid of coordinates in speed.
@@ -172,7 +172,7 @@ class DKESolution(eqx.Module):
     f1: jax.Array
     rhs: jax.Array
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     speedgrid: _AbstractSpeedGrid
     species: list[LocalMaxwellian]
     Erho: jax.Array
@@ -187,7 +187,7 @@ class DKESolution(eqx.Module):
         f1: jax.Array,
         rhs: jax.Array,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         speedgrid: _AbstractSpeedGrid,
         species: list[LocalMaxwellian],
         Erho: jax.Array,
@@ -296,7 +296,7 @@ class MDKESolution(eqx.Module):
         Drive terms for MDKE
     field : Field
         Magnetic field information.
-    pitchgrid : UniformPitchAngleGrid
+    pitchgrid : AbstractPitchAngleGrid
         Pitch angle grid data.
     erhohat : float
         Monoenergetic electric field, Erho/v = -∂Φ /∂ρ /v in units of V*s/m.
@@ -307,7 +307,7 @@ class MDKESolution(eqx.Module):
     f: jax.Array
     rhs: jax.Array
     field: Field
-    pitchgrid: UniformPitchAngleGrid
+    pitchgrid: AbstractPitchAngleGrid
     nuhat: jax.Array
     erhohat: jax.Array
 
@@ -316,7 +316,7 @@ class MDKESolution(eqx.Module):
         f: jax.Array,
         rhs: jax.Array,
         field: Field,
-        pitchgrid: UniformPitchAngleGrid,
+        pitchgrid: AbstractPitchAngleGrid,
         nuhat: jax.Array,
         erhohat: jax.Array,
     ):
