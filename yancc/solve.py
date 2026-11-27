@@ -13,6 +13,7 @@ from jax.sharding import Mesh
 from jaxtyping import Float
 from scipy.constants import elementary_charge, proton_mass
 
+from ._axisymmetric import AxisymmetricPreconditioner
 from ._collisions import RosenbluthPotentials
 from ._finite_diff import DEFAULT_P1A, DEFAULT_P2A
 from ._fluid import FluidOperator
@@ -54,13 +55,16 @@ def _freeze_preconditioner(M):
 
 
 def _preconditioner_is_linear(M) -> bool:
-    """True if a multigrid preconditioner is a linear operator.
+    """True if a preconditioner is a linear operator.
 
     Standard pre/post-smoothing and standard coarse-grid correction are linear.
     Krylov-projected smoothers (krylov*/krylov*s) and the residual-driven
-    adaptive smoother are not. Returns False if we can't tell, in which case
+    adaptive smoother are not. The preconditioner for axisymmetric fields is two
+    direct solves, so it is linear. Returns False if we can't tell, in which case
     the caller should assume nonlinearity (i.e. use flexible GMRES).
     """
+    if isinstance(M, AxisymmetricPreconditioner):
+        return True
     smooth = getattr(M, "smooth_method", None)
     coarse = getattr(M, "coarse_method", None)
     return smooth == "standard" and coarse == "standard"
@@ -304,6 +308,8 @@ def solve_dke(  # noqa: C901
     multigrid_options: dict | None = None,
     throw: bool = False,
     mesh: Mesh | None = None,
+    preconditioner: Literal["multigrid", "axisymmetric"] = "multigrid",
+    axisymmetric_options: dict | None = None,
     **options,
 ) -> tuple[DKESolution, dict[str, jax.Array]]:
     """Solve the drift kinetic equation, giving fluxes.
@@ -348,6 +354,16 @@ def solve_dke(  # noqa: C901
         ``jax.sharding.AxisType.Auto``, with sizes dividing the number of species and
         the number of speed grid points. Speed can only be split when there is one
         device per species along the ``"species"`` axis. Default is to not split.
+    preconditioner : {"multigrid", "axisymmetric"}
+        Preconditioner for the Krylov solver. ``"multigrid"`` (default) works for any
+        field. ``"axisymmetric"`` is a two level preconditioner with direct solves for
+        axisymmetric fields (``nzeta=1``), which is also effective for the centered
+        stencils (eg ``p1="4z"``) and does not support ``mesh``.
+    axisymmetric_options : dict, optional
+        Optional parameters to control behavior of the axisymmetric preconditioner:
+
+          - ``"moments"``: number of Legendre modes in pitch kept in its coarse level,
+            at least 3. Default 4.
 
     Returns
     -------
@@ -390,6 +406,21 @@ def solve_dke(  # noqa: C901
     fluid_correction = options.pop("fluid_correction", True)
 
     assert len(options) == 0, "solve_dke got unknown option " + str(options)
+    if preconditioner not in ("multigrid", "axisymmetric"):
+        raise ValueError(
+            "preconditioner must be 'multigrid' or 'axisymmetric', got "
+            f"'{preconditioner}'"
+        )
+    axisymmetric = preconditioner == "axisymmetric"
+    if axisymmetric and mesh is not None:
+        raise ValueError("preconditioner='axisymmetric' does not support mesh")
+    axisymmetric_options = (
+        {} if axisymmetric_options is None else copy.copy(axisymmetric_options)
+    )
+    moments = axisymmetric_options.pop("moments", 4)
+    assert len(axisymmetric_options) == 0, (
+        "solve_dke got unknown axisymmetric option " + str(axisymmetric_options)
+    )
 
     if background is None:
         background = []
@@ -408,7 +439,7 @@ def solve_dke(  # noqa: C901
     if potentials is None:
         potentials = RosenbluthPotentials(speedgrid, species, nL=nL, quad=quad)
 
-    if M is None:
+    if M is None and not axisymmetric:
         M = _build_dke_preconditioner(
             field,
             pitchgrid,
@@ -423,12 +454,6 @@ def solve_dke(  # noqa: C901
             multigrid_options,
             mesh,
         )
-    # a no-op for a preconditioner already built on the mesh, otherwise moves it there
-    M = _shard_dke(_freeze_preconditioner(M), mesh)
-
-    if verbose and not skip_init_print:
-        M.print_resolution_summary()
-
     if B is None:
         B = DKESources(field, pitchgrid, speedgrid, species)
     if C is None:
@@ -451,9 +476,31 @@ def solve_dke(  # noqa: C901
 
     A, B, C = _shard_dke((A, B, C), mesh)
     operator = BorderedOperator(A, B, C)
-    preconditioner = InverseBorderedOperator(M, B, C)
+    if axisymmetric:
+        if M is None:
+            M = AxisymmetricPreconditioner(operator, moments)
+        elif not isinstance(M, AxisymmetricPreconditioner):
+            raise TypeError(
+                "With preconditioner='axisymmetric', M must be a preconditioner built "
+                f"for that option, got {type(M).__name__}"
+            )
+        # acts on the bordered system, so it is used as is
+        MR = M = _freeze_preconditioner(M)
+    else:
+        if isinstance(M, AxisymmetricPreconditioner):
+            raise TypeError(
+                "M was built for preconditioner='axisymmetric' and can only be used "
+                "with that option"
+            )
+        # a no-op for a preconditioner already built on the mesh, otherwise moves it
+        # there
+        M = _shard_dke(_freeze_preconditioner(M), mesh)
+        MR = InverseBorderedOperator(M, B, C)
 
-    if fluid_correction:
+    if verbose and not skip_init_print:
+        M.print_resolution_summary()
+
+    if fluid_correction and not axisymmetric:
         F = FluidOperator(
             operator,
             species,
@@ -465,9 +512,7 @@ def solve_dke(  # noqa: C901
             mesh=mesh,
         )
         eye = lx.IdentityLinearOperator(operator.in_structure())
-        preconditioner = _freeze_preconditioner(
-            F + preconditioner @ (eye - operator @ F)
-        )
+        MR = _freeze_preconditioner(F + MR @ (eye - operator @ F))
     flexible = not _preconditioner_is_linear(M)
 
     shape = (len(species), speedgrid.nx, pitchgrid.nalpha, field.ntheta, field.nzeta)
@@ -498,7 +543,7 @@ def solve_dke(  # noqa: C901
         operator,
         split(rhs),
         x0=split(f1),
-        MR=preconditioner,
+        MR=MR,
         m=m,
         k=k,
         rtol=jnp.asarray(rtol),
@@ -803,7 +848,9 @@ def solve_dke_ambipolar(  # noqa: C901
     multigrid_options = (
         {} if multigrid_options is None else copy.copy(multigrid_options)
     )
-    for key in ["f1", "U", "skip_init_print"]:
+    # fluxes in an axisymmetric field are ambipolar at any Erho, so there is no use
+    # for the axisymmetric preconditioner here
+    for key in ["f1", "U", "skip_init_print", "preconditioner", "axisymmetric_options"]:
         if key in options:
             raise ValueError(f"solve_dke_ambipolar does not accept option '{key}'")
     root_options = {} if root_options is None else copy.copy(root_options)

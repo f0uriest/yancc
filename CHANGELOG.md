@@ -6,7 +6,12 @@ v0.0.4
 ### New features
 - New ``Field.from_gvec`` constructor to load a flux surface from a GVEC equilibrium,
   given either a ``gvec.State`` or a GVEC run directory.
-
+- New preconditioner for axisymmetric fields, ``solve_dke(...,
+  preconditioner="axisymmetric")``: a direct solve on the first Legendre modes in
+  pitch, followed by direct solves on the pitch/theta plane of each species and speed. It
+  takes a similar, small number of iterations at any collisionality and for any
+  stencil, including the centered ones (``p1="4z"``), which converge slowly with the
+  multigrid preconditioner.
 
 ### Bug fixes
 - ``Field.from_vmec``, ``Field.from_booz_xform`` and ``Field.from_ipp_bc`` now find the

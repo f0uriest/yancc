@@ -108,7 +108,7 @@ def _line_blocks(op, axis, weight, V, Psi):
     """Fluid projection of an operator that couples points along one surface line.
 
     ``op`` is the theta (``axis="t"``) or zeta (``axis="z"``) advection term of an
-    ungauged DKE. Returns ``(ns, 3, 3, n_other, n_line, n_line)`` dense line blocks,
+    ungauged DKE. Returns ``(ns, nb, nb, n_other, n_line, n_line)`` dense line blocks,
     with rows indexed by the fluid moment and columns by the fluid shape.
     """
     # The term is w times an upwind difference along the line, the backward stencil
@@ -160,6 +160,11 @@ class _FluidSolver(eqx.Module):
     with a few pinned diagonal entries removing its null space, plus low rank terms
     (sources, constraints, pins and the surface averaged collisional exchange) handled
     through a Schur complement.
+
+    ``basis`` replaces the fluid shapes and moments of ``_fluid_basis`` by other
+    ``(ns, nb, nx, na)`` shapes and moments, with moment i of shape j equal to
+    delta_ij. ``pins`` are the indices of two shapes of each species that together
+    hold its density and energy.
     """
 
     V: jax.Array
@@ -174,23 +179,38 @@ class _FluidSolver(eqx.Module):
     nborder: int = eqx.field(static=True)
     dense: bool = eqx.field(static=True)
 
-    def __init__(self, A, B, C, species, speedgrid, pitchgrid, field, mesh=None):
+    def __init__(
+        self,
+        A,
+        B,
+        C,
+        species,
+        speedgrid,
+        pitchgrid,
+        field,
+        mesh=None,
+        basis=None,
+        pins=(0, 1),
+    ):
         ns, nx = len(species), speedgrid.nx
         na, nt, nz = pitchgrid.nalpha, field.ntheta, field.nzeta
         self.shape = (ns, nx, na, nt, nz)
         self.nborder = B.in_size()
-        self.V, self.Psi = _fluid_basis(species, speedgrid, pitchgrid)
+        if basis is None:
+            basis = _fluid_basis(species, speedgrid, pitchgrid)
+        self.V, self.Psi = basis
         V, Psi = self.V, self.Psi
+        nb = V.shape[1]
         w = A.operator_weights
 
         # projected local terms: the response to a surface constant fluid shape gives
-        # the (ns 3, ns 3) block at every point
+        # the (ns nb, ns nb) block at every point
         def probe(e):
-            c = jnp.broadcast_to(e.reshape(ns, 3, 1, 1), (ns, 3, nt, nz))
+            c = jnp.broadcast_to(e.reshape(ns, nb, 1, 1), (ns, nb, nt, nz))
             return self.restrict(_local_mv(A, self.prolong(c)))
 
         # (s, i, s', i', t, z) for column (s, i) and row (s', i')
-        Kloc = jax.vmap(probe)(jnp.eye(3 * ns)).reshape(ns, 3, ns, 3, nt, nz)
+        Kloc = jax.vmap(probe)(jnp.eye(nb * ns)).reshape(ns, nb, ns, nb, nt, nz)
         # line terms: (s, i', i, z, t, t') and (s, i', i, t, z, z')
         Kt = _line_blocks(A._opt, "t", w[2], V, Psi)
         Kz = _line_blocks(A._opz, "z", w[3], V, Psi)
@@ -202,7 +222,7 @@ class _FluidSolver(eqx.Module):
         self.groups = tuple(map(tuple, groups.tolist()))
         self.dense = groups.shape[0] == 1
         m, g = groups.shape
-        b0 = ns * 3 * nt
+        b0 = ns * nb * nt
         eye_s, eye_t = jnp.eye(ns), jnp.eye(nt)
 
         # in plane blocks (z, s', i', t, s, i, t'), without the zeta term
@@ -248,7 +268,7 @@ class _FluidSolver(eqx.Module):
 
         # pin the fluid density and energy of each species at one point, removing the
         # null space of the ungauged operator; the pins are undone in the Schur step
-        pins = np.array([s * 3 * nt + i * nt for s in range(ns) for i in (0, 1)])
+        pins = np.array([s * nb * nt + i * nt for s in range(ns) for i in pins])
         tau = jnp.max(jnp.abs(D[0, pins]), axis=-1)
         D = D.at[0, pins, pins].add(tau)
         N = m * g * b0
@@ -273,39 +293,39 @@ class _FluidSolver(eqx.Module):
         Dx = [jnp.zeros(self.nborder), -jnp.ones(len(pins))]
         if A._C._exchange is not None:
             # The exchange term maps the surface average of the fluid amplitudes through
-            # a (ns 3, ns 3) block G0 to the same amplitudes at every point, so it is
-            # G0 (1 <.>), of rank 3 ns.
+            # a (ns nb, ns nb) block G0 to the same amplitudes at every point, so it is
+            # G0 (1 <.>), of rank nb ns.
             def exchange(e):
-                c = jnp.broadcast_to(e.reshape(ns, 3, 1, 1), (ns, 3, nt, nz))
+                c = jnp.broadcast_to(e.reshape(ns, nb, 1, 1), (ns, nb, nt, nz))
                 return self.restrict(A._C._surface_exchange(self.prolong(c)))
 
-            G0 = jax.vmap(exchange)(jnp.eye(3 * ns))[..., 0, 0]
+            G0 = jax.vmap(exchange)(jnp.eye(nb * ns))[..., 0, 0]
             U = jnp.broadcast_to(
-                G0.reshape(3 * ns, ns, 3, 1, 1), (3 * ns, ns, 3, nt, nz)
+                G0.reshape(nb * ns, ns, nb, 1, 1), (nb * ns, ns, nb, nt, nz)
             )
             Vt = jnp.einsum(
-                "ij,tz->ijtz", jnp.eye(3 * ns), A._C._surface_weights
-            ).reshape(3 * ns, ns, 3, nt, nz)
+                "ij,tz->ijtz", jnp.eye(nb * ns), A._C._surface_weights
+            ).reshape(nb * ns, ns, nb, nt, nz)
             Bx.append(jax.vmap(self._to_solver)(U))
             Cx.append(jax.vmap(self._to_solver)(Vt))
-            Dx.append(-jnp.ones(3 * ns))
+            Dx.append(-jnp.ones(nb * ns))
         self.Bx, self.Cx = jnp.concatenate(Bx), jnp.concatenate(Cx)
         self.Z = jax.vmap(self._solve_sparse)(self.Bx)
         S = jnp.diag(jnp.concatenate(Dx)) - self.Cx @ self.Z.T
         self.S_lu = jax.scipy.linalg.lu_factor(S)
 
     def prolong(self, c):
-        """Fluid amplitudes (ns, 3, nt, nz) to a distribution function."""
+        """Fluid amplitudes (ns, nb, nt, nz) to a distribution function."""
         return jnp.einsum("sixa,sitz->sxatz", self.V, c).reshape(-1)
 
     def restrict(self, f):
-        """Distribution function to fluid moments (ns, 3, nt, nz)."""
+        """Distribution function to fluid moments (ns, nb, nt, nz)."""
         return jnp.einsum("sixa,sxatz->sitz", self.Psi, f.reshape(self.shape))
 
     def _to_solver(self, c):
-        """Fluid amplitudes (ns, 3, nt, nz) to solver order (group, plane, s, i, t)."""
+        """Fluid amplitudes (ns, nb, nt, nz) to solver order (group, plane, s, i, t)."""
         groups = np.array(self.groups)
-        u = jnp.moveaxis(c, -1, 0)[np.maximum(groups, 0)]  # (m, g, ns, 3, nt)
+        u = jnp.moveaxis(c, -1, 0)[np.maximum(groups, 0)]  # (m, g, ns, nb, nt)
         u = jnp.where(jnp.asarray(groups >= 0)[..., None, None, None], u, 0.0)
         return u.reshape(-1)
 
@@ -313,7 +333,7 @@ class _FluidSolver(eqx.Module):
         """Inverse of _to_solver, dropping padding."""
         ns, _, _, nt, _ = self.shape
         z = np.array(self.groups).reshape(-1)
-        c = u.reshape(-1, ns, 3, nt)[np.flatnonzero(z >= 0)]
+        c = u.reshape(-1, ns, self.V.shape[1], nt)[np.flatnonzero(z >= 0)]
         c = c[np.argsort(z[z >= 0])]
         return jnp.moveaxis(c, 0, -1)
 
@@ -356,6 +376,13 @@ class FluidOperator(lx.AbstractLinearOperator):
         Background species, used for the default weights.
     coulomb_log : float, optional
         Coulomb logarithm, used for the default weights.
+    basis : tuple of array-like, optional
+        Shapes and moments, both ``(ns, nb, nx, na)``, spanning the space of the
+        correction in place of the fluid space, with moment i of shape j equal to
+        delta_ij.
+    pins : tuple of int, optional
+        Indices of two shapes of ``basis`` that together hold the density and the
+        energy of a species.
     """
 
     fluid: _FluidSolver
@@ -373,6 +400,8 @@ class FluidOperator(lx.AbstractLinearOperator):
         background=(),
         coulomb_log=None,
         mesh=None,
+        basis=None,
+        pins=(0, 1),
     ):
         if weights is None:
             weights = jax.lax.stop_gradient(
@@ -386,14 +415,23 @@ class FluidOperator(lx.AbstractLinearOperator):
         # invertible, so the fluid projection includes them. This makes F the exact
         # Galerkin inverse of the operator the Krylov solver sees.
         self.fluid = _FluidSolver(
-            A.A, A.B, A.C, species, speedgrid, pitchgrid, field, mesh=mesh
+            A.A,
+            A.B,
+            A.C,
+            species,
+            speedgrid,
+            pitchgrid,
+            field,
+            mesh=mesh,
+            basis=basis,
+            pins=pins,
         )
 
     def mv(self, vector):
         """Matrix vector product."""
         fluid = self.fluid
         f, h = vector
-        # each species has 3 fluid amplitudes per point and 2 sources
+        # each species has its fluid amplitudes at every point and 2 sources
         wc = self.weights[:, None, None, None]
         wh = jnp.repeat(self.weights, fluid.nborder // self.weights.size)
         c, h = fluid.solve(fluid.restrict(f), h)
