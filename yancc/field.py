@@ -33,9 +33,9 @@ _FIELD_SOURCE_NAMES: tuple[str, ...] = tuple(_FieldSource._index_to_message)
 class Field(eqx.Module):
     """Magnetic field on a flux surface.
 
-    Field is given as 2D arrays uniformly spaced in arbitrary
-    poloidal and toroidal angles. The radial coordinate is assumed to be
-    rho = sqrt(normalized toroidal flux)
+    Field is given as 2D arrays uniformly spaced in poloidal and toroidal angles,
+    which must be right handed with zeta increasing counter-clockwise about the Z axis.
+    The radial coordinate is assumed to be rho = sqrt(normalized toroidal flux)
 
     Parameters
     ----------
@@ -200,6 +200,9 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from DESC equilibrium.
 
+        The angles of the Field are the DESC angles, which are right handed with zeta
+        increasing counter-clockwise about the Z axis.
+
         Parameters
         ----------
         eq : desc.equilibrium.Equilibrium
@@ -281,6 +284,15 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from VMEC equilibrium.
 
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the file. zeta is the VMEC
+        toroidal angle, which is the cylindrical angle. When the VMEC angles are left
+        handed (the usual case, signgs = -1) the poloidal angle runs opposite to the
+        VMEC one, theta = -theta_VMEC, so that point ``i`` of the theta grid is at
+        theta_VMEC = -theta[i] (mod 2π). Functions on the surface given in VMEC angles,
+        such as output from another code that uses them, then have to be reflected in
+        theta to be used with this Field.
+
         Parameters
         ----------
         wout : path-like
@@ -297,7 +309,7 @@ class Field(eqx.Module):
 
         ns = file.variables["ns"][:].filled()
         nfp = file.variables["nfp"][:].filled()
-        theta = 2 * np.pi - jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+        theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
         zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
         assert "bmns" not in file.variables, "non-symmetric vmec not supported"
 
@@ -334,12 +346,25 @@ class Field(eqx.Module):
         # the vmec toroidal angle is the cylindrical angle
         xm_geo = file.variables["xm"][:].filled()
         xn_geo = file.variables["xn"][:].filled()
-        t, z = theta[:, None], zeta[None, :]
-        R = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo)
-        R_t = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo, dt=1)
-        R_z = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo, dz=1)
-        Z_t = _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo, dt=1)
-        Z_z = _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo, dz=1)
+        z = zeta[None, :]
+
+        def geometry(t, h):
+            # derivatives with respect to theta pick up the factor h from reversing it
+            R = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo)
+            R_t = h * _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo, dt=1)
+            R_z = _vmec_eval(t, z, r_mnc, 0, xm_geo, xn_geo, dz=1)
+            Z = _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo)
+            Z_t = h * _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo, dt=1)
+            Z_z = _vmec_eval(t, z, 0, z_mns, xm_geo, xn_geo, dz=1)
+            return R, R_t, R_z, Z, Z_t, Z_z
+
+        # vmec angles can have either orientation, the poloidal angle is reversed
+        # where needed to make them right handed
+        h = _handedness(
+            *geometry(theta[:, None], 1.0), jnp.zeros_like(theta[:, None]), 1.0
+        )
+        t = _right_handed_theta(h, theta)[:, None]
+        R, R_t, R_z, Z, Z_t, Z_z = geometry(t, h)
         # covariant basis vectors in the orthonormal (R, phi, Z) basis
         e_t = jnp.stack([R_t, jnp.zeros_like(R), Z_t], axis=-1)
         e_z = jnp.stack([R_z, R, Z_z], axis=-1)
@@ -348,24 +373,26 @@ class Field(eqx.Module):
         xm = file.variables["xm_nyq"][:].filled()
         xn = file.variables["xn_nyq"][:].filled()
 
-        sqrtg = _vmec_eval(theta[:, None], zeta[None, :], g_mnc, 0, xm, xn)
-        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn)
-        B_sub_t = _vmec_eval(theta[:, None], zeta[None, :], bsubu_mnc, 0, xm, xn)
-        B_sub_z = _vmec_eval(theta[:, None], zeta[None, :], bsubv_mnc, 0, xm, xn)
-        B_sup_t = _vmec_eval(theta[:, None], zeta[None, :], bsupu_mnc, 0, xm, xn)
-        B_sup_z = _vmec_eval(theta[:, None], zeta[None, :], bsupv_mnc, 0, xm, xn)
+        sqrtg = _vmec_eval(t, z, g_mnc, 0, xm, xn)
+        Bmag = _vmec_eval(t, z, b_mnc, 0, xm, xn)
+        B_sub_t = _vmec_eval(t, z, bsubu_mnc, 0, xm, xn)
+        B_sub_z = _vmec_eval(t, z, bsubv_mnc, 0, xm, xn)
+        B_sup_t = _vmec_eval(t, z, bsupu_mnc, 0, xm, xn)
+        B_sup_z = _vmec_eval(t, z, bsupv_mnc, 0, xm, xn)
 
         B0 = jnp.abs(b_mnc).max()
-        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dt=1)
-        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc, 0, xm, xn, dz=1)
+        dBdt = _vmec_eval(t, z, b_mnc, 0, xm, xn, dt=1)
+        dBdz = _vmec_eval(t, z, b_mnc, 0, xm, xn, dz=1)
 
-        sign = file.variables["signgs"][:].filled()
-        sqrtg *= sign
-        # theta is in opposite direction
-        B_sub_t *= sign
-        B_sup_t *= sign
-        dBdt *= sign
-        iota *= sign
+        # reversing theta reverses the Jacobian, the poloidal components of B and the
+        # rotational transform
+        sqrtg *= h
+        B_sub_t *= h
+        B_sup_t *= h
+        dBdt *= h
+        iota *= h
+        # in right handed coordinates the toroidal flux has the sign of B^zeta
+        phi = jnp.sign((sqrtg * B_sup_z).mean()) * jnp.abs(phi)
 
         data = {}
         data["sqrtg"] = sqrtg * 2 * rho
@@ -394,6 +421,12 @@ class Field(eqx.Module):
         nzeta: int,
     ) -> "Field":
         """Construct Field from GVEC equilibrium.
+
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the GVEC equilibrium. The GVEC
+        angles are right handed, and when the GVEC toroidal angle runs opposite to the
+        cylindrical angle both angles are reversed, (theta, zeta) = (-theta_GVEC,
+        -zeta_GVEC). Otherwise the GVEC angles are used as they are.
 
         Parameters
         ----------
@@ -472,6 +505,12 @@ class Field(eqx.Module):
     ) -> "Field":
         """Construct Field from BOOZ_XFORM file.
 
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the file. zeta is the Boozer
+        toroidal angle of the file, which increases with the cylindrical angle, and when
+        the Boozer angles of the file are left handed the poloidal angle runs opposite
+        to the one in the file, theta = -theta_file.
+
         Parameters
         ----------
         booz : path-like
@@ -494,9 +533,6 @@ class Field(eqx.Module):
         ns = file.variables["ns_b"][:].filled()
         nfp = file.variables["nfp_b"][:].filled()
 
-        theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
-        zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
-
         s_full = np.linspace(0, 1, ns)
         hs = 1 / (ns - 1)
         s_half = s_full[:-1] + hs / 2
@@ -517,8 +553,10 @@ class Field(eqx.Module):
         xm = file.variables["ixm_b"][:].filled()
         xn = file.variables["ixn_b"][:].filled()
 
-        # need to do volume integrals to get R0 to match desc/vmec
-        V = jnp.sum(g_mnc[:, 0] * (Psi / 2 / jnp.pi * hs)) * 4 * jnp.pi**2
+        # need to do volume integrals to get R0 to match desc/vmec. The sign of the
+        # Jacobian and of the flux depend on the orientation of the angles and the
+        # direction of the field, the volume is the magnitude.
+        V = jnp.abs(jnp.sum(g_mnc[:, 0] * (Psi / 2 / jnp.pi * hs))) * 4 * jnp.pi**2
 
         R0 = ((V * aspect**2) / (2 * jnp.pi**2)) ** (1 / 3)
         a_minor = R0 / aspect
@@ -530,53 +568,32 @@ class Field(eqx.Module):
         p_mns = interpax.interp1d(s, s_half[jlist - 2], p_mns, extrap=True)
         # profiles are on half grid, but with an extra 0 at the beginning bc
         # the world is awful.
-        # sign flip for buco and iota LH -> RH coordinates
-        buco = -interpax.interp1d(s, s_half, buco[1:], extrap=True)
+        buco = interpax.interp1d(s, s_half, buco[1:], extrap=True)
         bvco = interpax.interp1d(s, s_half, bvco[1:], extrap=True)
-        iota = -interpax.interp1d(s, s_half, iota[1:], extrap=True)
-
+        iota = interpax.interp1d(s, s_half, iota[1:], extrap=True)
         B0 = jnp.abs(b_mnc).max()
         mask = jnp.abs(b_mnc) > cutoff * B0
-
-        # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
-        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
-        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
-        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
-
-        # make jacobian positive
-        sign = jnp.sign(bvco + iota * buco)
-        buco *= sign
-        bvco *= sign
-
-        # cylindrical angle phi = zeta_B - p, in the orientation used to evaluate
-        # the series here
-        t, z = theta[:, None], zeta[None, :]
-        R = _vmec_eval(t, z, r_mnc, 0, xm, -xn)
-        R_t = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dt=1)
-        R_z = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dz=1)
-        Z_t = _vmec_eval(t, z, 0, z_mns, xm, -xn, dt=1)
-        Z_z = _vmec_eval(t, z, 0, z_mns, xm, -xn, dz=1)
-        phi_t = _vmec_eval(t, z, 0, -p_mns, xm, -xn, dt=1)
-        phi_z = 1 + _vmec_eval(t, z, 0, -p_mns, xm, -xn, dz=1)
-        e_t = jnp.stack([R_t, R * phi_t, Z_t], axis=-1)
-        e_z = jnp.stack([R_z, R * phi_z, Z_z], axis=-1)
-        e_t_x_e_z_sq = jnp.sum(jnp.cross(e_t, e_z) ** 2, axis=-1)
-        sqrtg = _boozer_sqrtg(rho, Bmag, buco, bvco, iota, Psi)
-
-        return cls.from_boozer(
+        # buco, bvco and iota are B_theta, B_zeta and the rotational transform in the
+        # booz_xform angles, which can have either orientation, and the cylindrical
+        # angle is phi = zeta_B + p
+        return _boozer_field(
             rho=rho,
-            Bmag=Bmag,
+            nfp=nfp,
+            ntheta=ntheta,
+            nzeta=nzeta,
+            b_mnc=b_mnc * mask,
+            r_mnc=r_mnc,
+            z_mns=z_mns,
+            dphi_mns=p_mns,
+            xm=xm,
+            xn=xn,
             I=buco,
             G=bvco,
             iota=iota,
             Psi=Psi,
             a_minor=a_minor,
             R_major=R0,
-            NFP=nfp,
-            dBdt=dBdt,
-            dBdz=dBdz,
             B0=B0,
-            g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
             source=_FieldSource.booz_xform,
         )
 
@@ -590,6 +607,12 @@ class Field(eqx.Module):
         cutoff: Float[ArrayLike, ""] = 0.0,
     ) -> "Field":
         """Construct Field from IPP format bc file.
+
+        The angles of the Field are right handed with zeta increasing counter-clockwise
+        about the Z axis, and the field is the one in the file. zeta is the Boozer
+        toroidal angle of the file, which increases with the cylindrical angle, and when
+        the Boozer angles of the file are left handed the poloidal angle runs opposite
+        to the one in the file, theta = -theta_file.
 
         Parameters
         ----------
@@ -605,8 +628,6 @@ class Field(eqx.Module):
         s = rho**2
         data = _read_bc(path)
         nfp = data["nfp"]
-        theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
-        zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
 
         s_grid = data["s"]
 
@@ -629,46 +650,29 @@ class Field(eqx.Module):
 
         b_mnc = b_mnc.flatten()
         mask = mask.flatten()
-        # booz_xform uses (m*t - n*z) instead of vmecs (m*t + n*z)
-        Bmag = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn)
-        dBdt = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dt=1)
-        dBdz = _vmec_eval(theta[:, None], zeta[None, :], b_mnc * mask, 0, xm, -xn, dz=1)
-
-        # make jacobian positive
-        sign = jnp.sign(G + iota * I)
-        I *= sign
-        G *= sign
-
-        # nu = (phi_B - phi) * nfp / 2pi, with phi the cylindrical angle. The sign
-        # of the sine series flips with the change to right handed coordinates.
-        t, z = theta[:, None], zeta[None, :]
-        R = _vmec_eval(t, z, r_mnc, 0, xm, -xn)
-        R_t = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dt=1)
-        R_z = _vmec_eval(t, z, r_mnc, 0, xm, -xn, dz=1)
-        Z_t = _vmec_eval(t, z, 0, z_mns, xm, -xn, dt=1)
-        Z_z = _vmec_eval(t, z, 0, z_mns, xm, -xn, dz=1)
-        nu_mns = 2 * np.pi / nfp * nu_mns
-        phi_t = _vmec_eval(t, z, 0, nu_mns, xm, -xn, dt=1)
-        phi_z = 1 + _vmec_eval(t, z, 0, nu_mns, xm, -xn, dz=1)
-        e_t = jnp.stack([R_t, R * phi_t, Z_t], axis=-1)
-        e_z = jnp.stack([R_z, R * phi_z, Z_z], axis=-1)
-        e_t_x_e_z_sq = jnp.sum(jnp.cross(e_t, e_z) ** 2, axis=-1)
-        sqrtg = _boozer_sqrtg(rho, Bmag, I, G, iota, data["Psi"])
-
-        return cls.from_boozer(
+        # In the angles of the file, the poloidal and toroidal currents I, G give the
+        # covariant components of B with a minus sign, B_theta = -I and B_zeta = -G,
+        # and iota is the rotational transform (checked against from_vmec for the same
+        # equilibrium in tests/test_field.py). nu = (phi_B - phi) * nfp / 2pi, with phi
+        # the cylindrical angle.
+        return _boozer_field(
             rho=rho,
-            Bmag=Bmag,
-            I=I,
-            G=G,
+            nfp=nfp,
+            ntheta=ntheta,
+            nzeta=nzeta,
+            b_mnc=b_mnc * mask,
+            r_mnc=r_mnc,
+            z_mns=z_mns,
+            dphi_mns=-2 * np.pi / nfp * nu_mns,
+            xm=xm,
+            xn=xn,
+            I=-I,
+            G=-G,
             iota=iota,
             Psi=data["Psi"],
             a_minor=a_minor,
             R_major=R0,
-            NFP=nfp,
-            dBdt=dBdt,
-            dBdz=dBdz,
             B0=B0,
-            g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
             source=_FieldSource.ipp_bc,
         )
 
@@ -692,6 +696,9 @@ class Field(eqx.Module):
         source: _FieldSource = _FieldSource.boozer,
     ) -> "Field":
         """Construct a field in Boozer coordinates.
+
+        The Boozer angles must be right handed with zeta increasing counter-clockwise
+        about the Z axis, as for the other constructors.
 
         Parameters
         ----------
@@ -840,6 +847,110 @@ def _boozer_sqrtg(rho, Bmag, I, G, iota, Psi):
     return (G + iota * I) / Bmag**2 * Psi * rho / np.pi
 
 
+def _handedness(R, R_t, R_z, Z, Z_t, Z_z, phi_t, phi_z):
+    """Orientation of (rho, theta, zeta) on a surface, +1 if right handed, else -1.
+
+    Inputs are the cylindrical coordinates R, Z of the surface on a (theta, zeta) grid
+    and their derivatives, with phi_t, phi_z the derivatives of the cylindrical angle.
+    """
+    # e_theta x e_zeta is normal to the surface, and points outward exactly when
+    # (rho, theta, zeta) is right handed, because rho increases outward. The flux of
+    # the position vector through a closed surface is 3 times the volume it encloses,
+    # so it is positive for the outward normal. Vectors are in the right handed
+    # orthonormal (R, phi, Z) basis.
+    e_t = jnp.stack([R_t, R * phi_t, Z_t], axis=-1)
+    e_z = jnp.stack([R_z, R * phi_z, Z_z], axis=-1)
+    normal = jnp.cross(e_t, e_z)
+    return jnp.sign((R * normal[..., 0] + Z * normal[..., 2]).sum())
+
+
+def _right_handed_theta(h, theta):
+    """Angles to sample a series in theta at so that the result is right handed.
+
+    With ``h = -1`` the poloidal angle is reversed, so the grid point theta is at
+    -theta in the original angle.
+    """
+    return jnp.where(h > 0, theta, 2 * np.pi - theta)
+
+
+def _boozer_field(
+    rho,
+    nfp,
+    ntheta,
+    nzeta,
+    b_mnc,
+    r_mnc,
+    z_mns,
+    dphi_mns,
+    xm,
+    xn,
+    I,
+    G,
+    iota,
+    Psi,
+    a_minor,
+    R_major,
+    B0,
+    source,
+):
+    """Field from Boozer data in the angles of the source, made right handed.
+
+    Series are of the form sum c cos(m theta - n zeta) + s sin(m theta - n zeta) in the
+    source angles, with the cylindrical angle phi = zeta + sum dphi sin(m theta - n
+    zeta). I and G are the covariant poloidal and toroidal components of B and iota the
+    rotational transform, all in the source angles. Only the magnitude of the toroidal
+    flux Psi is used: its sign follows from the direction of the field.
+    """
+    theta = jnp.linspace(0, 2 * np.pi, ntheta, endpoint=False)
+    zeta = jnp.linspace(0, 2 * np.pi / nfp, nzeta, endpoint=False)
+    z = zeta[None, :]
+
+    def geometry(t, h):
+        # derivatives with respect to theta pick up the factor h from reversing it
+        R = _vmec_eval(t, z, r_mnc, 0, xm, xn)
+        R_t = h * _vmec_eval(t, z, r_mnc, 0, xm, xn, dt=1)
+        R_z = _vmec_eval(t, z, r_mnc, 0, xm, xn, dz=1)
+        Z = _vmec_eval(t, z, 0, z_mns, xm, xn)
+        Z_t = h * _vmec_eval(t, z, 0, z_mns, xm, xn, dt=1)
+        Z_z = _vmec_eval(t, z, 0, z_mns, xm, xn, dz=1)
+        phi_t = h * _vmec_eval(t, z, 0, dphi_mns, xm, xn, dt=1)
+        phi_z = 1 + _vmec_eval(t, z, 0, dphi_mns, xm, xn, dz=1)
+        return R, R_t, R_z, Z, Z_t, Z_z, phi_t, phi_z
+
+    h = _handedness(*geometry(theta[:, None], 1.0))
+    t = _right_handed_theta(h, theta)[:, None]
+    Bmag = _vmec_eval(t, z, b_mnc, 0, xm, xn)
+    dBdt = h * _vmec_eval(t, z, b_mnc, 0, xm, xn, dt=1)
+    dBdz = _vmec_eval(t, z, b_mnc, 0, xm, xn, dz=1)
+    R, R_t, R_z, Z, Z_t, Z_z, phi_t, phi_z = geometry(t, h)
+    # reversing theta reverses the poloidal covariant component and the rotational
+    # transform, and leaves the toroidal component unchanged
+    I = h * I
+    iota = h * iota
+    # in right handed coordinates the toroidal flux has the sign of B^zeta
+    Psi = jnp.sign(G + iota * I) * jnp.abs(Psi)
+    e_t = jnp.stack([R_t, R * phi_t, Z_t], axis=-1)
+    e_z = jnp.stack([R_z, R * phi_z, Z_z], axis=-1)
+    e_t_x_e_z_sq = jnp.sum(jnp.cross(e_t, e_z) ** 2, axis=-1)
+    sqrtg = _boozer_sqrtg(rho, Bmag, I, G, iota, Psi)
+    return Field.from_boozer(
+        rho=rho,
+        Bmag=Bmag,
+        I=I,
+        G=G,
+        iota=iota,
+        Psi=Psi,
+        a_minor=a_minor,
+        R_major=R_major,
+        NFP=nfp,
+        dBdt=dBdt,
+        dBdz=dBdz,
+        B0=B0,
+        g_sup_rr=e_t_x_e_z_sq / sqrtg**2,
+        source=source,
+    )
+
+
 def _vmec_eval(
     t: ArrayLike,
     z: ArrayLike,
@@ -909,7 +1020,7 @@ def _read_globals(lines):
     data["N"] = int(dat[1])
     data["ns"] = int(dat[2])
     data["nfp"] = int(dat[3])
-    data["Psi"] = -float(dat[4])
+    data["Psi"] = float(dat[4])
     data["a"] = float(dat[5])
     data["R"] = float(dat[6])
     data["avol"] = data["a"]
@@ -946,9 +1057,9 @@ def _parse_surface(block):
     surf_dat = np.genfromtxt(block[:3], skip_header=2)
     surf_data = {}
     surf_data["s"] = surf_dat[0]
-    surf_data["iota"] = -surf_dat[1]
+    surf_data["iota"] = surf_dat[1]
     surf_data["G"] = surf_dat[2]
-    surf_data["I"] = -surf_dat[3]
+    surf_data["I"] = surf_dat[3]
     surf_data["pprime"] = surf_dat[4]
     surf_data["dV/ds"] = surf_dat[5]
 

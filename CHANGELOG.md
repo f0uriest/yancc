@@ -1,11 +1,27 @@
 Changelog
 =========
 
-Unreleased
-----------
+v0.0.4
+------
 ### New features
 - New ``Field.from_gvec`` constructor to load a flux surface from a GVEC equilibrium,
   given either a ``gvec.State`` or a GVEC run directory.
+
+
+### Bug fixes
+- ``Field.from_vmec``, ``Field.from_booz_xform`` and ``Field.from_ipp_bc`` now find the
+  orientation of the angles in the file from the geometry of the surface, and keep the
+  direction of the magnetic field as given in the file. The poloidal angle is reversed
+  only when the angles in the file are left handed, so that the coordinates are always
+  right handed. Previously ``from_booz_xform`` and ``from_ipp_bc`` forced the field to
+  point along the toroidal angle, which reversed the field of equilibria with the
+  opposite field direction and flipped the sign of the bootstrap current and Ware pinch,
+  and ``from_vmec`` always reversed the poloidal angle, which gave inconsistent signs
+  for right handed (``signgs = 1``) VMEC files. Fields from files that were already
+  handled correctly, such as left handed VMEC equilibria, are unchanged.
+- The angles used by each ``Field`` constructor are now documented in the "Surface
+  angles" section of the loading fields page, including how to convert functions on the
+  surface given in VMEC angles.
 
 
 v0.0.3

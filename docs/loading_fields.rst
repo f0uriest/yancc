@@ -47,6 +47,50 @@ Surface resolution
 ``nzeta`` covers a single field period :math:`[0, 2\pi / \mathrm{NFP})`,
 not the full torus. The number of field periods is read from the file.
 
+Surface angles
+--------------
+
+The field is sampled at ``field.theta`` and ``field.zeta``, uniform grids
+starting at zero. Every constructor that reads an equilibrium gives the same
+orientation of the angles:
+
+* :math:`\zeta` increases counter-clockwise about the :math:`Z` axis, in the
+  same direction as the cylindrical angle :math:`\phi`.
+* :math:`(\rho, \theta, \zeta)` is right handed, so the Jacobian ``field.sqrtg``
+  is positive.
+
+The orientation is found from the geometry of the surface and the angles of
+the source are reversed where needed. The field itself is never changed: its
+direction is the one in the source, expressed in these angles. In terms of the
+angles of each source:
+
+* ``from_desc``: the DESC angles, which already have this orientation.
+* ``from_vmec``: :math:`\zeta` is the VMEC toroidal angle, which is
+  :math:`\phi`. VMEC angles are usually left handed (``signgs = -1``), in
+  which case :math:`\theta = -\theta_\mathrm{VMEC}`.
+* ``from_booz_xform`` and ``from_ipp_bc``: :math:`\zeta` is the Boozer toroidal
+  angle, which increases with :math:`\phi`. Files computed from VMEC
+  equilibria are usually left handed, in which case
+  :math:`\theta = -\theta_\mathrm{Boozer}`.
+* ``from_gvec``: GVEC angles are right handed, but the GVEC toroidal angle can
+  run opposite to :math:`\phi`. In that case both angles are reversed,
+  :math:`(\theta, \zeta) = (-\theta_\mathrm{GVEC}, -\zeta_\mathrm{GVEC})`.
+
+``from_boozer`` and the ``Field`` constructor take values on the surface
+without its geometry, so they cannot check the orientation. Their inputs must
+be given in angles with this orientation.
+
+Any other function on the surface that is passed to yancc has to be sampled
+at ``field.theta`` and ``field.zeta`` in these angles. In particular a
+function of the VMEC angles, for example output from another code that uses
+them such as SFINCS, must be reflected in :math:`\theta` to be used with a
+field from ``from_vmec`` of a usual (left handed) VMEC equilibrium. For
+values ``f_vmec`` of shape ``(ntheta, nzeta)`` on the same uniform grid this is
+
+.. code-block:: python
+
+    f_yancc = np.roll(np.flip(f_vmec, axis=0), 1, axis=0)
+
 Axisymmetric (tokamak) fields
 -----------------------------
 
