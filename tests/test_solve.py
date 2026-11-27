@@ -78,6 +78,11 @@ def test_solve_mdke_w7x_eim(idx):
     field = Field.from_booz_xform(
         config["booz_path"], np.sqrt(config["s"]), nt, nz, cutoff=1e-5
     )
+    # MONKES takes the magnitude of the Boozer Jacobian B_zeta + iota B_theta, which for
+    # a field pointing along -zeta reverses B^theta, B^zeta and the Jacobian but keeps
+    # the covariant components. Its coefficients are then those of the field in the
+    # file with the opposite radial electric field and opposite signs of D13 and D31.
+    sign = float(jnp.sign(field.G + field.iota * field.I))
     pitchgrid = UniformPitchAngleGrid(nl)
 
     erhat = data_fortran["erhat"][idx]
@@ -88,7 +93,7 @@ def test_solve_mdke_w7x_eim(idx):
         solve_mdke(
             field,
             pitchgrid,
-            erhat * field.a_minor,
+            sign * erhat * field.a_minor,
             nuhat,
             verbose=2,
             multigrid_options={"coarse_N": 1000},
@@ -99,8 +104,8 @@ def test_solve_mdke_w7x_eim(idx):
     Dij = sol.get("Dij_DKES")
 
     D11_yancc = Dij[0, 0]
-    D31_yancc = Dij[2, 0]
-    D13_yancc = Dij[0, 2]
+    D31_yancc = sign * Dij[2, 0]
+    D13_yancc = sign * Dij[0, 2]
     D33_yancc = Dij[2, 2]
     np.testing.assert_allclose(
         D11_yancc,

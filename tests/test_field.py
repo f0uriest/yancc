@@ -1,10 +1,14 @@
 """Tests for magnetic field structure."""
 
+import shutil
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from netCDF4 import Dataset
 
+import yancc.field
 from yancc.field import Field
 
 
@@ -84,6 +88,129 @@ def test_field_types():
     # these are ostensibly in the same coordinates, so we can compare local qtys
     _compare_fields_local(field1, field2)
     _compare_fields_local(field3, field4)
+
+
+def _netcdf_copy(src, dst, negate):
+    shutil.copy(src, dst)
+    with Dataset(dst, "r+") as f:
+        for name in negate:
+            f.variables[name][:] = -f.variables[name][:]
+    return dst
+
+
+def _bc_patched(negate):
+    """Replacement for the IPP bc reader that negates some of the values read."""
+    read = yancc.field._read_bc
+
+    def _read(path):
+        data = dict(read(path))
+        for key in negate:
+            data[key] = -np.asarray(data[key])
+        return data
+
+    return _read
+
+
+def _reversed_field(field):
+    """The same field with B -> -B, in the same coordinates."""
+    return Field(
+        rho=field.rho,
+        B_sup_t=-field.B_sup_t,
+        B_sup_z=-field.B_sup_z,
+        B_sub_t=-field.B_sub_t,
+        B_sub_z=-field.B_sub_z,
+        Bmag=field.Bmag,
+        sqrtg=field.sqrtg,
+        Psi=-field.Psi,
+        iota=field.iota,
+        R_major=field.R_major,
+        a_minor=field.a_minor,
+        NFP=field.NFP,
+        dBdt=field.dBdt,
+        dBdz=field.dBdz,
+        B0=field.B0,
+        g_sup_rr=field.g_sup_rr,
+    )
+
+
+def test_field_orientation(tmp_path, monkeypatch):
+    """Readers give right handed coordinates and keep the direction of the field.
+
+    Each source file is modified in two ways: reversing the field (B -> -B, which
+    negates the field components and the flux and leaves the geometry unchanged), and
+    reversing the poloidal angle of the source, which describes the same field in
+    angles of the opposite orientation. The first must give the reversed field, the
+    second the same field as the original file.
+    """
+    rho, nt, nz = 0.5, 9, 11
+    wout, booz, bc = (
+        "tests/data/wout_NCSX.nc",
+        "tests/data/boozmn_wout_NCSX.nc",
+        "tests/data/NCSX.bc",
+    )
+    # reversing the poloidal angle of a series in cos/sin(m theta - n zeta) negates the
+    # toroidal mode numbers and the sine coefficients, and the poloidal components,
+    # Jacobian and rotational transform
+    vmec_flip = ["xn", "xn_nyq", "zmns", "lmns", "bsubumnc", "bsupumnc", "gmnc"]
+    vmec_flip += ["iotaf", "iotas", "signgs"]
+    booz_flip = ["ixn_b", "zmns_b", "pmns_b", "buco_b", "iota_b", "gmn_b", "phi_b"]
+    cases = {
+        "vmec": (
+            lambda path: Field.from_vmec(path, rho, nt, nz),
+            wout,
+            lambda: _netcdf_copy(
+                wout,
+                tmp_path / "wout_reversed.nc",
+                ["bsupumnc", "bsupvmnc", "bsubumnc", "bsubvmnc", "phi"],
+            ),
+            lambda: _netcdf_copy(wout, tmp_path / "wout_flipped.nc", vmec_flip),
+        ),
+        "booz_xform": (
+            lambda path: Field.from_booz_xform(path, rho, nt, nz),
+            booz,
+            lambda: _netcdf_copy(
+                booz, tmp_path / "booz_reversed.nc", ["buco_b", "bvco_b", "phi_b"]
+            ),
+            lambda: _netcdf_copy(booz, tmp_path / "booz_flipped.nc", booz_flip),
+        ),
+        "ipp_bc": (
+            lambda path: Field.from_ipp_bc(path, rho, nt, nz),
+            bc,
+            lambda: (
+                monkeypatch.setattr(
+                    yancc.field, "_read_bc", _bc_patched(["I", "G", "Psi"])
+                )
+                or bc
+            ),
+            lambda: (
+                monkeypatch.setattr(
+                    yancc.field,
+                    "_read_bc",
+                    _bc_patched(["n", "Zmn", "numn", "I", "iota", "Psi"]),
+                )
+                or bc
+            ),
+        ),
+    }
+    keys = ["Bmag", "sqrtg", "B_sub_t", "B_sub_z", "B_sup_t", "B_sup_z", "dBdt"]
+    keys += ["dBdz", "g_sup_rr", "bdotgradB", "BxgradrhodotgradB"]
+    for name, (read, path, reverse, flip) in cases.items():
+        original = read(path)
+        assert np.all(original.sqrtg > 0), name
+        for label, make, expected in [
+            ("reversed", reverse, _reversed_field(original)),
+            ("flipped", flip, original),
+        ]:
+            field = read(make())
+            monkeypatch.undo()
+            for key in keys + ["Psi", "iota"]:
+                a, b = (
+                    np.asarray(getattr(field, key)),
+                    np.asarray(getattr(expected, key)),
+                )
+                np.testing.assert_allclose(
+                    a, b, rtol=1e-12, atol=1e-12 * np.abs(b).max(), err_msg=name + label
+                )
 
 
 def test_derived_scalars_when_omitted():
